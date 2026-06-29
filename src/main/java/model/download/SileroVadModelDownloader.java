@@ -15,8 +15,15 @@ public class SileroVadModelDownloader {
     public static final Path MODEL_PATH = Path.of("models", "silero-vad.onnx");
 
     public static void main(String[] args) throws IOException, InterruptedException {
-        download(MODEL_URI, MODEL_PATH);
+        ensureDownloaded(MODEL_URI, MODEL_PATH);
         System.out.println("Downloaded Silero VAD model: " + MODEL_PATH.toAbsolutePath().normalize());
+    }
+
+    public static void ensureDownloaded(URI uri, Path modelPath) throws IOException, InterruptedException {
+        if (Files.isRegularFile(modelPath) && Files.size(modelPath) > 0) {
+            return;
+        }
+        download(uri, modelPath);
     }
 
     public static void download(URI uri, Path modelPath) throws IOException, InterruptedException {

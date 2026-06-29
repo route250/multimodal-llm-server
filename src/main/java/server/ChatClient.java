@@ -5,7 +5,8 @@ import java.util.Optional;
 import java.util.concurrent.LinkedBlockingQueue;
 import model.download.SileroVadModelDownloader;
 import onnx.OnnxModelException;
-import stt.DummySpeechToText;
+import stt.SpeechToTextException;
+import stt.WhisperServerSpeechToText;
 import vad.silero.LazySileroVad;
 import vad.silero.VadAudioProcessor;
 
@@ -14,7 +15,7 @@ public class ChatClient {
     private final ChatGroup chatGroup;
     private final LinkedBlockingQueue<ServerEvent> events = new LinkedBlockingQueue<>();
     private final VadAudioProcessor audioProcessor = new VadAudioProcessor(
-            new LazySileroVad(modelPath()), new DummySpeechToText());
+            new LazySileroVad(modelPath()), new WhisperServerSpeechToText());
 
     public ChatClient(String id, ChatGroup chatGroup) {
         this.id = id;
@@ -47,6 +48,8 @@ public class ChatClient {
             transcript.ifPresent(value -> sendToGroup(ServerEvent.message(value)));
         } catch (IllegalArgumentException e) {
             throw new HttpRequestException(400, e.getMessage());
+        } catch (SpeechToTextException e) {
+            throw new HttpRequestException(502, e.getMessage());
         } catch (OnnxModelException e) {
             throw new HttpRequestException(500, e.getMessage());
         }

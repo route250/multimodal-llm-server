@@ -46,6 +46,18 @@
             padding: 8px 14px;
         }
 
+        .controls {
+            align-items: center;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .status {
+            color: #57606a;
+            font-size: 14px;
+        }
+
         pre {
             background: #f4f6f8;
             border: 1px solid #d8dee4;
@@ -69,13 +81,32 @@
         <textarea id="message" name="message"></textarea>
         <button type="submit">Send</button>
     </form>
+    <div class="controls">
+        <button id="mic-start" type="button">Start microphone</button>
+        <button id="mic-stop" type="button" disabled>Stop microphone</button>
+        <span id="mic-status" class="status">microphone stopped</span>
+    </div>
     <pre id="response"></pre>
 </main>
 <script>
     const sessionId = crypto.randomUUID();
     const groupInput = document.getElementById("group");
     const response = document.getElementById("response");
+    const micStart = document.getElementById("mic-start");
+    const micStop = document.getElementById("mic-stop");
+    const micStatus = document.getElementById("mic-status");
+    const pcmContentType = "audio/pcm; rate=16000; channels=1; format=s16le";
+    const targetSampleRate = 16000;
+    const sendSampleThreshold = 3200;
     let events = connect();
+    let audioContext = null;
+    let micStream = null;
+    let micSource = null;
+    let micProcessor = null;
+    let resampler = null;
+    let pendingSamples = [];
+    let pendingSampleCount = 0;
+    let postQueue = Promise.resolve();
 
     groupInput.addEventListener("change", () => {
         events.close();
@@ -94,6 +125,9 @@
         });
     });
 
+    micStart.addEventListener("click", startMicrophone);
+    micStop.addEventListener("click", stopMicrophone);
+
     function connect() {
         const source = new EventSource(`/chat/connect?group=${encodeURIComponent(groupInput.value)}&sessionId=${encodeURIComponent(sessionId)}`);
 
@@ -110,6 +144,145 @@
 
     function append(message) {
         response.textContent += `${message}\n`;
+    }
+
+    async function startMicrophone() {
+        if (audioContext) {
+            return;
+        }
+
+        micStart.disabled = true;
+        micStatus.textContent = "requesting microphone";
+        try {
+            micStream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    channelCount: 1,
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true
+                }
+            });
+            audioContext = new AudioContext();
+            resampler = createResampler(audioContext.sampleRate, targetSampleRate);
+            micSource = audioContext.createMediaStreamSource(micStream);
+            micProcessor = audioContext.createScriptProcessor(4096, 1, 1);
+            micProcessor.onaudioprocess = (event) => {
+                const input = event.inputBuffer.getChannelData(0);
+                enqueueSamples(resampler(input));
+            };
+            micSource.connect(micProcessor);
+            micProcessor.connect(audioContext.destination);
+            micStop.disabled = false;
+            micStatus.textContent = `microphone streaming ${audioContext.sampleRate}Hz to ${targetSampleRate}Hz`;
+        } catch (error) {
+            micStatus.textContent = `microphone error: ${error.message}`;
+            micStart.disabled = false;
+            stopMicrophone();
+        }
+    }
+
+    function stopMicrophone() {
+        if (micProcessor) {
+            micProcessor.disconnect();
+            micProcessor.onaudioprocess = null;
+            micProcessor = null;
+        }
+        if (micSource) {
+            micSource.disconnect();
+            micSource = null;
+        }
+        if (micStream) {
+            micStream.getTracks().forEach((track) => track.stop());
+            micStream = null;
+        }
+        if (audioContext) {
+            audioContext.close();
+            audioContext = null;
+        }
+        flushSamples();
+        resampler = null;
+        micStart.disabled = false;
+        micStop.disabled = true;
+        micStatus.textContent = "microphone stopped";
+    }
+
+    function createResampler(inputSampleRate, outputSampleRate) {
+        let previousSample = null;
+        let sourceOffset = 0;
+        const ratio = inputSampleRate / outputSampleRate;
+
+        return (input) => {
+            const source = previousSample === null ? input : prepend(previousSample, input);
+            const outputLength = Math.max(0, Math.floor((source.length - 1 - sourceOffset) / ratio));
+            const output = new Float32Array(outputLength);
+            for (let i = 0; i < outputLength; i++) {
+                const position = sourceOffset + i * ratio;
+                const index = Math.floor(position);
+                const fraction = position - index;
+                output[i] = source[index] + (source[index + 1] - source[index]) * fraction;
+            }
+            const consumedPosition = sourceOffset + outputLength * ratio;
+            sourceOffset = consumedPosition - Math.floor(consumedPosition);
+            previousSample = source[source.length - 1];
+            return output;
+        };
+    }
+
+    function prepend(sample, input) {
+        const values = new Float32Array(input.length + 1);
+        values[0] = sample;
+        values.set(input, 1);
+        return values;
+    }
+
+    function enqueueSamples(samples) {
+        if (samples.length === 0) {
+            return;
+        }
+        pendingSamples.push(samples);
+        pendingSampleCount += samples.length;
+        if (pendingSampleCount >= sendSampleThreshold) {
+            flushSamples();
+        }
+    }
+
+    function flushSamples() {
+        if (pendingSampleCount === 0) {
+            return;
+        }
+        const pcm = new ArrayBuffer(pendingSampleCount * 2);
+        const view = new DataView(pcm);
+        let offset = 0;
+        for (const samples of pendingSamples) {
+            for (const sample of samples) {
+                const clamped = Math.max(-1, Math.min(1, sample));
+                const value = clamped < 0 ? clamped * 32768 : clamped * 32767;
+                view.setInt16(offset, value, true);
+                offset += 2;
+            }
+        }
+        pendingSamples = [];
+        pendingSampleCount = 0;
+        postAudio(pcm);
+    }
+
+    function postAudio(body) {
+        postQueue = postQueue
+            .then(() => fetch(`/chat/request?group=${encodeURIComponent(groupInput.value)}&sessionId=${encodeURIComponent(sessionId)}`, {
+                method: "POST",
+                headers: {"Content-Type": pcmContentType},
+                body
+            }))
+            .then((response) => {
+                if (!response.ok) {
+                    return response.text().then((text) => {
+                        throw new Error(text || `HTTP ${response.status}`);
+                    });
+                }
+            })
+            .catch((error) => {
+                micStatus.textContent = `audio send error: ${error.message}`;
+            });
     }
 </script>
 </body>

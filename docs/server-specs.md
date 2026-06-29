@@ -223,7 +223,8 @@ Silero VAD uses an ONNX model at:
 models/silero-vad.onnx
 ```
 
-Download the model explicitly before sending audio:
+If the model file does not exist or is 0 bytes, the server downloads it during the first audio request.
+The model can also be downloaded explicitly before sending audio:
 
 ```bash
 mvn -q -DskipTests compile exec:java -Dexec.mainClass=model.download.SileroVadModelDownloader
