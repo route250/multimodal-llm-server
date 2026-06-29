@@ -97,7 +97,13 @@ public class Server implements AutoCloseable {
             return;
         }
         ChatRequest request = ChatRequest.from(contentType, body);
-        client.handle(request);
+        try {
+            client.handle(request);
+        } catch (HttpRequestException e) {
+            sendText(exchange, e.status(), "application/json; charset=utf-8",
+                    "{\"error\":\"" + jsonEscape(e.getMessage()) + "\"}\n");
+            return;
+        }
 
         String json = """
                 {"status":"accepted","groupId":"%s","sessionId":"%s","type":"%s","bytes":%d}

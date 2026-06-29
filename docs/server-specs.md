@@ -184,7 +184,7 @@ Supported request content handling:
 ```text
 text/*            Treated as text.
 application/json  Treated as text.
-audio/*           Treated as an audio chunk.
+audio/pcm         Treated as a PCM16LE 16kHz mono audio chunk when rate=16000, channels=1, format=s16le.
 other             Treated as binary.
 ```
 
@@ -192,8 +192,41 @@ Current `ChatRequest` conversion is a test implementation:
 
 ```text
 text   -> received text: ...
-audio  -> received audio chunk: N bytes (audio/...)
+audio  -> accepted by the per-client audio buffer and VAD processor.
 binary -> received binary chunk: N bytes (...)
+```
+
+Audio requests must use:
+
+```http
+Content-Type: audio/pcm; rate=16000; channels=1; format=s16le
+```
+
+Each `ChatClient` keeps a 6 second receive buffer and a 30 second STT buffer.
+The receive buffer stores PCM samples and VAD values in 512 sample units.
+VAD runs once per 512 samples, which is 32 ms at 16 kHz.
+The Silero ONNX model receives 512 audio samples plus 64 samples of context.
+
+Speech starts when the VAD value is at least `0.5`.
+When speech starts, the target range includes the previous 0.6 seconds of audio.
+Speech ends when the VAD value stays at or below `0.35` for 0.6 seconds.
+On speech end, the speech range is appended to the STT buffer using PCM sample indexes so overlapping ranges are not duplicated.
+The current STT implementation is a dummy implementation and emits:
+
+```text
+dummy stt result
+```
+
+Silero VAD uses an ONNX model at:
+
+```text
+models/silero-vad.onnx
+```
+
+Download the model explicitly before sending audio:
+
+```bash
+mvn -q -DskipTests compile exec:java -Dexec.mainClass=model.download.SileroVadModelDownloader
 ```
 
 ## Message Flow
