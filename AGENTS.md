@@ -43,7 +43,7 @@ java -cp target/classes server.MainTest 18080
 - まず JDK 標準機能で実装する。
 - 不要な依存ライブラリを追加しない。
 - HTTP ルーティングとチャットルームの責務を混ぜない。
-- `Server` は HTTP プロトコルとルーティングを担当する。
+- `MlServer` は HTTP プロトコルとルーティングを担当する。
 - `ChatGroup` はチャットルームを担当する。
 - `ChatClient` は接続中クライアントを担当する。
 - `ChatRequest` は入力内容の分類とイベント変換を担当する。
@@ -74,7 +74,7 @@ POST /chat/request?group=group-1&sessionId=user-a
 `/chat/request` は `sessionId` から接続済み `ChatClient` を取得し、その `ChatClient` にリクエストを渡します。
 
 ```text
-Server#handleChatRequest
+MlServer#handleChatRequest
   -> ChatGroup#client(sessionId)
   -> ChatClient#handle(ChatRequest)
   -> ChatClient が ChatGroup へ ServerEvent を送る

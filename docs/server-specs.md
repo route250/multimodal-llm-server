@@ -1,15 +1,15 @@
-# Server Specs
+# MlServer Specs
 
 ## Overview
 
-This server is a Java HTTP server for a multimodal chat backend.
+`MlServer` is a Java HTTP server for a multimodal chat backend.
 
 The server has two responsibilities:
 
 - Serve static frontend files from `src/main/resources/html`.
 - Provide chat endpoints for bidirectional chat flow using HTTP requests and Server-Sent Events.
 
-The implementation uses JDK standard `com.sun.net.httpserver.HttpServer`.
+`MlServer` uses JDK standard `com.sun.net.httpserver.HttpServer`.
 Each request is handled by `Executors.newVirtualThreadPerTaskExecutor()`.
 
 ## Static File Serving
@@ -36,8 +36,8 @@ Resolution rules:
 /foo.js  -> src/main/resources/html/foo.js
 ```
 
-The server reads files from the filesystem first, so changes under `src/main/resources/html` can be served without changing Java code.
-When the file is not found on the filesystem, the server tries the classpath resource under `/html/...`.
+`MlServer` reads files from the filesystem first, so changes under `src/main/resources/html` can be served without changing Java code.
+When the file is not found on the filesystem, `MlServer` tries the classpath resource under `/html/...`.
 
 Supported methods:
 
@@ -52,7 +52,7 @@ Other methods return `405 Method Not Allowed`.
 
 A chat room is a place where multiple clients, such as users and LLM agents, can connect and exchange events.
 
-The server creates three default chat groups on startup:
+`MlServer` creates three default chat groups on startup:
 
 ```text
 group-1
@@ -62,7 +62,7 @@ group-3
 
 When the `group` query parameter is omitted, `group-1` is used.
 
-If a request specifies an unknown group, the server returns:
+If a request specifies an unknown group, `MlServer` returns:
 
 ```http
 404 Not Found
@@ -192,7 +192,7 @@ Current `ChatRequest` conversion is a test implementation:
 
 ```text
 text   -> received text: ...
-audio  -> accepted by the per-client audio buffer and VAD processor.
+audio  -> queued for the per-client audio buffer and VAD processor.
 binary -> received binary chunk: N bytes (...)
 ```
 
@@ -203,6 +203,9 @@ Content-Type: audio/pcm; rate=16000; channels=1; format=s16le
 ```
 
 Each `ChatClient` keeps a 6 second receive buffer and a 30 second STT buffer.
+Audio requests return `202 Accepted` after the chunk is queued.
+PCM decoding, VAD, and STT run asynchronously in request order for each `ChatClient`.
+Async audio processing failures are sent to connected clients as SSE `system` events.
 The receive buffer stores PCM samples and VAD values in 512 sample units.
 VAD runs once per 512 samples, which is 32 ms at 16 kHz.
 The Silero ONNX model receives 512 audio samples plus 64 samples of context.
@@ -237,7 +240,7 @@ The intended server-side flow is:
 ```text
 HTTP client
   -> POST /chat/request
-  -> Server#handleChatRequest
+  -> MlServer#handleChatRequest
   -> ChatGroup#client(sessionId)
   -> ChatClient#handle(ChatRequest)
   -> ChatClient sends ServerEvent to ChatGroup
@@ -247,7 +250,7 @@ HTTP client
 ```
 
 This keeps `ChatGroup` as the room and `ChatClient` as the participant.
-`Server` is responsible for HTTP routing and protocol translation only.
+`MlServer` is responsible for HTTP routing, protocol translation, default `ChatGroup` creation, shared executor ownership, and process-wide ID generation.
 
 ## Current Limitations
 
@@ -255,6 +258,6 @@ This keeps `ChatGroup` as the room and `ChatClient` as the participant.
 - `sessionId` collision handling is not defined.
 - Reconnecting with the same `sessionId` replaces the client in `ChatGroup`.
 - Chat history is not stored.
-- Audio chunks are accepted as bytes, but no decoding or transcription is implemented.
+- Audio chunks are decoded as PCM16LE and passed through VAD/STT, but full LLM voice interaction is not implemented.
 - LLM integration is not implemented.
 - Error response schema is not yet centralized.

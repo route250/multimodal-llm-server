@@ -11,20 +11,24 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Map;
+import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
-public class Server implements AutoCloseable {
+public class MlServer implements AutoCloseable {
     private static final Path STATIC_ROOT = Paths.get("src/main/resources/html").toAbsolutePath().normalize();
     private static final String DEFAULT_GROUP_ID = "group-1";
 
     private final HttpServer httpServer;
     private final ExecutorService executor;
     private final Map<String, ChatGroup> chatGroups = new ConcurrentHashMap<>();
+    private final AtomicInteger counter = new AtomicInteger();
 
-    public Server(int port) throws IOException {
+    public MlServer(int port) throws IOException {
         createDefaultChatGroups();
         httpServer = HttpServer.create(new InetSocketAddress(port), 0);
         httpServer.createContext("/chat/request", this::handleChatRequest);
@@ -50,6 +54,22 @@ public class Server implements AutoCloseable {
     @Override
     public void close() {
         stop();
+    }
+
+    public int nextId() {
+        return this.counter.incrementAndGet();
+    }
+    public void execute(Runnable r) {
+        this.executor.execute(r);
+    }
+    public Future<?> submit(Runnable task) {
+        return this.executor.submit(task);
+    }
+    public <T> Future<T> submit(Runnable task, T result ) {
+        return this.executor.submit(task,result);
+    }
+    public <T> Future<T> submit(Callable<T> task) {
+        return this.executor.submit(task);
     }
 
     private void handleStaticFile(HttpExchange exchange) throws IOException {
@@ -150,9 +170,9 @@ public class Server implements AutoCloseable {
     }
 
     private void createDefaultChatGroups() {
-        chatGroups.put("group-1", new ChatGroup("group-1"));
-        chatGroups.put("group-2", new ChatGroup("group-2"));
-        chatGroups.put("group-3", new ChatGroup("group-3"));
+        chatGroups.put("group-1", new ChatGroup("group-1", this));
+        chatGroups.put("group-2", new ChatGroup("group-2", this));
+        chatGroups.put("group-3", new ChatGroup("group-3", this));
     }
 
     private static void sendText(HttpExchange exchange, int status, String contentType, String text) throws IOException {
@@ -178,10 +198,10 @@ public class Server implements AutoCloseable {
         }
 
         String resourcePath = classpathResourcePath(normalizedRequestPath);
-        try (var stream = Server.class.getResourceAsStream(resourcePath)) {
+        try (var stream = MlServer.class.getResourceAsStream(resourcePath)) {
             if (stream == null) {
                 String indexResourcePath = classpathResourcePath(normalizedRequestPath + "/index.html");
-                try (var indexStream = Server.class.getResourceAsStream(indexResourcePath)) {
+                try (var indexStream = MlServer.class.getResourceAsStream(indexResourcePath)) {
                     if (indexStream == null) {
                         return null;
                     }

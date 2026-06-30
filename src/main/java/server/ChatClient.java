@@ -2,6 +2,9 @@ package server;
 
 import java.nio.file.Path;
 import java.util.Optional;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
 import model.download.SileroVadModelDownloader;
 import onnx.OnnxModelException;
@@ -14,16 +17,40 @@ public class ChatClient {
     private final String id;
     private final ChatGroup chatGroup;
     private final LinkedBlockingQueue<ServerEvent> events = new LinkedBlockingQueue<>();
-    private final VadAudioProcessor audioProcessor = new VadAudioProcessor(
-            new LazySileroVad(modelPath()), new WhisperServerSpeechToText());
+    private final VadAudioProcessor audioProcessor;
+    private final Object audioTaskLock = new Object();
+    private final Object lifecycleLock = new Object();
+    private CompletableFuture<Void> audioTaskTail = CompletableFuture.completedFuture(null);
+    private boolean closed;
 
     public ChatClient(String id, ChatGroup chatGroup) {
+        this(id, chatGroup, new VadAudioProcessor(new LazySileroVad(modelPath()), new WhisperServerSpeechToText()));
+    }
+
+    ChatClient(String id, ChatGroup chatGroup, VadAudioProcessor audioProcessor) {
         this.id = id;
         this.chatGroup = chatGroup;
+        this.audioProcessor = audioProcessor;
     }
 
     public String id() {
         return id;
+    }
+
+    public int nextId() {
+        return this.chatGroup.nextId();
+    }
+    public void execute(Runnable r) {
+        this.chatGroup.execute(r);
+    }
+    public Future<?> submit(Runnable task) {
+        return this.chatGroup.submit(task);
+    }
+    public <T> Future<T> submit(Runnable task, T result ) {
+        return this.chatGroup.submit(task,result);
+    }
+    public <T> Future<T> submit(Callable<T> task) {
+        return this.chatGroup.submit(task);
     }
 
     public LinkedBlockingQueue<ServerEvent> events() {
@@ -43,15 +70,40 @@ public class ChatClient {
             throw new HttpRequestException(415,
                     "unsupported audio content type. Use: audio/pcm; rate=16000; channels=1; format=s16le");
         }
+        byte[] body = request.body().clone();
+        synchronized (audioTaskLock) {
+            audioTaskTail = audioTaskTail.handle((ignored, error) -> null)
+                    .thenRunAsync(() -> processAudio(body), this::execute);
+        }
+    }
+
+    private void processAudio(byte[] body) {
+        if (isClosed()) {
+            return;
+        }
         try {
-            Optional<String> transcript = audioProcessor.acceptPcm16Le(request.body());
-            transcript.ifPresent(value -> sendToGroup(ServerEvent.message(value)));
+            Optional<String> transcript = audioProcessor.acceptPcm16Le(body);
+            transcript.ifPresent(value -> sendToGroupIfOpen(ServerEvent.message(value)));
         } catch (IllegalArgumentException e) {
-            throw new HttpRequestException(400, e.getMessage());
+            sendAudioProcessingFailure(e);
         } catch (SpeechToTextException e) {
-            throw new HttpRequestException(502, e.getMessage());
+            sendAudioProcessingFailure(e);
         } catch (OnnxModelException e) {
-            throw new HttpRequestException(500, e.getMessage());
+            sendAudioProcessingFailure(e);
+        } catch (RuntimeException e) {
+            sendAudioProcessingFailure(e);
+        }
+    }
+
+    private void sendAudioProcessingFailure(RuntimeException e) {
+        sendToGroupIfOpen(ServerEvent.system("audio processing failed: " + e.getMessage()));
+    }
+
+    private void sendToGroupIfOpen(ServerEvent event) {
+        synchronized (lifecycleLock) {
+            if (!closed) {
+                sendToGroup(event);
+            }
         }
     }
 
@@ -61,6 +113,18 @@ public class ChatClient {
 
     public void receive(ServerEvent event) {
         events.offer(event);
+    }
+
+    public void close() {
+        synchronized (lifecycleLock) {
+            closed = true;
+        }
+    }
+
+    private boolean isClosed() {
+        synchronized (lifecycleLock) {
+            return closed;
+        }
     }
 
     private static Path modelPath() {
