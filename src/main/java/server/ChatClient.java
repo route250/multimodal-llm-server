@@ -6,12 +6,14 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
+import model.download.SmartTurnV3ModelDownloader;
 import model.download.SileroVadModelDownloader;
 import onnx.OnnxModelException;
 import stt.SpeechToTextException;
 import stt.WhisperServerSpeechToText;
+import vad.VadAudioProcessor;
 import vad.silero.LazySileroVad;
-import vad.silero.VadAudioProcessor;
+import vad.smartturn.LazySmartTurnV3;
 
 public class ChatClient {
     private final String id;
@@ -24,7 +26,11 @@ public class ChatClient {
     private boolean closed;
 
     public ChatClient(String id, ChatGroup chatGroup) {
-        this(id, chatGroup, new VadAudioProcessor(new LazySileroVad(modelPath()), new WhisperServerSpeechToText()));
+        this(id, chatGroup, new VadAudioProcessor(
+                new LazySileroVad(sileroModelPath()),
+                new LazySmartTurnV3(smartTurnModelPath()),
+                new WhisperServerSpeechToText(),
+                chatGroup::execute));
     }
 
     ChatClient(String id, ChatGroup chatGroup, VadAudioProcessor audioProcessor) {
@@ -127,7 +133,11 @@ public class ChatClient {
         }
     }
 
-    private static Path modelPath() {
+    private static Path sileroModelPath() {
         return SileroVadModelDownloader.MODEL_PATH.toAbsolutePath().normalize();
+    }
+
+    private static Path smartTurnModelPath() {
+        return SmartTurnV3ModelDownloader.MODEL_PATH.toAbsolutePath().normalize();
     }
 }

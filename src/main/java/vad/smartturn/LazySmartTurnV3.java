@@ -5,8 +5,9 @@ import java.nio.file.Path;
 import model.download.ModelDownloader;
 import model.download.SmartTurnV3ModelDownloader;
 import onnx.OnnxModelException;
+import vad.TurnDetector;
 
-public class LazySmartTurnV3 implements AutoCloseable {
+public class LazySmartTurnV3 implements TurnDetector, AutoCloseable {
     private final Path modelPath;
     private final float completeThreshold;
     private SmartTurnV3 delegate;
@@ -30,6 +31,11 @@ public class LazySmartTurnV3 implements AutoCloseable {
 
     public synchronized float completionProbability(float[] samples) {
         return delegate().completionProbability(samples);
+    }
+
+    @Override
+    public synchronized boolean isTurnComplete(float[] samples) {
+        return predict(samples).complete();
     }
 
     private SmartTurnV3 delegate() {

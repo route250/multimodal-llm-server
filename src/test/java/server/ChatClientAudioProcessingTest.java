@@ -12,7 +12,8 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
-import vad.silero.VadAudioProcessor;
+
+import vad.VadAudioProcessor;
 
 @Timeout(5)
 class ChatClientAudioProcessingTest {
@@ -128,7 +129,7 @@ class ChatClientAudioProcessingTest {
         private final CountDownLatch calls = new CountDownLatch(3);
 
         RecordingAudioProcessor() {
-            super(samples -> 0.0f, (audioBuffer, startSampleIndex, endSampleIndexExclusive) -> "");
+            super(samples -> 0.0f, samples -> true, (audioBuffer, startSampleIndex, endSampleIndexExclusive) -> "", Runnable::run);
         }
 
         @Override
@@ -151,7 +152,7 @@ class ChatClientAudioProcessingTest {
         private final String transcript;
 
         TranscriptAudioProcessor(String transcript) {
-            super(samples -> 0.0f, (audioBuffer, startSampleIndex, endSampleIndexExclusive) -> "");
+            super(samples -> 0.0f, samples -> true, (audioBuffer, startSampleIndex, endSampleIndexExclusive) -> "", Runnable::run);
             this.transcript = transcript;
         }
 
@@ -165,7 +166,7 @@ class ChatClientAudioProcessingTest {
         private int calls;
 
         FailingThenTranscriptAudioProcessor() {
-            super(samples -> 0.0f, (audioBuffer, startSampleIndex, endSampleIndexExclusive) -> "");
+            super(samples -> 0.0f, samples -> true, (audioBuffer, startSampleIndex, endSampleIndexExclusive) -> "", Runnable::run);
         }
 
         @Override
@@ -189,7 +190,7 @@ class ChatClientAudioProcessingTest {
         }
 
         BlockingAudioProcessor(String transcript) {
-            super(samples -> 0.0f, (audioBuffer, startSampleIndex, endSampleIndexExclusive) -> "");
+            super(samples -> 0.0f, samples -> true, (audioBuffer, startSampleIndex, endSampleIndexExclusive) -> "", Runnable::run);
             this.transcript = transcript;
         }
 

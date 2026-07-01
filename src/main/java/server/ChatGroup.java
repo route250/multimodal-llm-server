@@ -4,7 +4,8 @@ import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Future;
-import vad.silero.VadAudioProcessor;
+
+import vad.VadAudioProcessor;
 
 public class ChatGroup {
     private final String id;

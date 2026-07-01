@@ -29,13 +29,13 @@ mvn -q -DskipTests compile
 起動:
 
 ```bash
-java -cp target/classes server.MainTest
+./run-server.sh
 ```
 
 ポート指定:
 
 ```bash
-java -cp target/classes server.MainTest 18080
+./run-server.sh 18080
 ```
 
 ## 実装方針

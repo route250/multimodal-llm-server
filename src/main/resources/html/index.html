@@ -157,12 +157,14 @@
             micStream = await navigator.mediaDevices.getUserMedia({
                 audio: {
                     channelCount: 1,
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true
+                    sampleRate: { ideal: targetSampleRate },
+                    echoCancellation: false,
+                    noiseSuppression: false,
+                    autoGainControl: false
                 }
             });
             audioContext = new AudioContext();
+            await audioContext.resume();
             resampler = createResampler(audioContext.sampleRate, targetSampleRate);
             micSource = audioContext.createMediaStreamSource(micStream);
             micProcessor = audioContext.createScriptProcessor(4096, 1, 1);
@@ -173,12 +175,20 @@
             micSource.connect(micProcessor);
             micProcessor.connect(audioContext.destination);
             micStop.disabled = false;
-            micStatus.textContent = `microphone streaming ${audioContext.sampleRate}Hz to ${targetSampleRate}Hz`;
+            micStatus.textContent = microphoneStatus();
         } catch (error) {
             micStatus.textContent = `microphone error: ${error.message}`;
             micStart.disabled = false;
             stopMicrophone();
         }
+    }
+
+    function microphoneStatus() {
+        const track = micStream.getAudioTracks()[0];
+        const settings = track ? track.getSettings() : {};
+        const trackRate = settings.sampleRate ? `${settings.sampleRate}Hz` : "unknown";
+        const trackChannels = settings.channelCount ? `${settings.channelCount}ch` : "unknown";
+        return `microphone track ${trackRate} ${trackChannels}; context ${audioContext.sampleRate}Hz; sending ${targetSampleRate}Hz`;
     }
 
     function stopMicrophone() {
