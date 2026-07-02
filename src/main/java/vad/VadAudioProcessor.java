@@ -139,7 +139,10 @@ public class VadAudioProcessor {
             case UNDETECTED -> {
                 // 未検出状態で START_THRESHOLD 以上になったフレームを発話開始として扱う。
                 if (probability >= START_THRESHOLD) {
-                    startSpeech(frameStartSampleIndex, frameEndSampleIndex);
+                    speechState = SpeechState.DETECTED;
+                    speechStartSampleIndex = Math.max(receiveBuffer.startSampleIndex(), frameStartSampleIndex - PRE_ROLL_SAMPLES);
+                    lastSpeechSampleIndex = frameEndSampleIndex;
+                    lastTurnDetectionSampleIndex = Long.MIN_VALUE;
                 }
                 return;
             }
@@ -191,25 +194,13 @@ public class VadAudioProcessor {
             case TRANSCRIBING -> {
                 // START_THRESHOLD 以上になったら新しい発話区間として発話検出状態へ戻す。
                 if (probability >= START_THRESHOLD) {
-                    startSpeech(frameStartSampleIndex, frameEndSampleIndex);
+                    speechState = SpeechState.DETECTED;
+                    lastSpeechSampleIndex = frameEndSampleIndex;
                 }
                 return;
             }
         }
         throw new IllegalStateException("unknown speech state: " + speechState);
-    }
-
-    /**
-     * 発話区間の開始位置を記録して発話検出状態へ切り替える。
-     *
-     * @param frameStartSampleIndex 発話開始と判定した VAD フレームの先頭サンプル番号
-     * @param frameEndSampleIndex 発話開始と判定した VAD フレームの終端サンプル番号
-     */
-    private void startSpeech(long frameStartSampleIndex, long frameEndSampleIndex) {
-        speechState = SpeechState.DETECTED;
-        speechStartSampleIndex = Math.max(receiveBuffer.startSampleIndex(), frameStartSampleIndex - PRE_ROLL_SAMPLES);
-        lastSpeechSampleIndex = frameEndSampleIndex;
-        lastTurnDetectionSampleIndex = Long.MIN_VALUE;
     }
 
     /**
@@ -268,7 +259,7 @@ public class VadAudioProcessor {
             synchronized (this) {
                 boolean matchesCurrentSpeech = this.lastSpeechSampleIndex == lastSpeechSampleIndex;
                 if (matchesCurrentSpeech && text != null && !text.isEmpty()) {
-                    transcribeResults.addLast(new TranscribeSegment(text));
+                    transcribeResults.addLast(new TranscribeSegment(text,startSampleIndex, endSampleIndexExclusive));
                 }
                 if (speechState == SpeechState.TRANSCRIBING && matchesCurrentSpeech) {
                     speechState = SpeechState.UNDETECTED;
@@ -319,9 +310,13 @@ public class VadAudioProcessor {
         TRANSCRIBING
     }
     public static class TranscribeSegment {
+        public final long startSampleIndex;
+        public final long endSampleIndexExclusive;
         public final String text;
-        public TranscribeSegment( String text ) {
+        public TranscribeSegment( String text, long startSampleIndex, long endSampleIndexExclusive ) {
             this.text = text;
+            this.startSampleIndex = startSampleIndex;
+            this.endSampleIndexExclusive = endSampleIndexExclusive;
         }
     }
 }
