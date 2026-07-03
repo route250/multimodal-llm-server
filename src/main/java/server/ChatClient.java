@@ -10,6 +10,7 @@ import model.download.SmartTurnV3ModelDownloader;
 import model.download.SileroVadModelDownloader;
 import onnx.OnnxModelException;
 import stt.SpeechToTextException;
+import stt.Transcription;
 import stt.WhisperServerSpeechToText;
 import vad.VadAudioProcessor;
 import vad.silero.LazySileroVad;
@@ -88,8 +89,8 @@ public class ChatClient {
             return;
         }
         try {
-            Optional<String> transcript = audioProcessor.acceptPcm16Le(body);
-            transcript.ifPresent(value -> sendToGroupIfOpen(ServerEvent.message(value)));
+            Optional<Transcription> transcript = audioProcessor.acceptPcm16Le(body);
+            transcript.ifPresent(value -> sendToGroupIfOpen(ServerEvent.message(value.text())));
         } catch (IllegalArgumentException e) {
             sendAudioProcessingFailure(e);
         } catch (SpeechToTextException e) {

@@ -13,7 +13,6 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
-import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class WhisperServerSpeechToText implements SpeechToText {
@@ -21,7 +20,8 @@ public class WhisperServerSpeechToText implements SpeechToText {
     private static final int SAMPLE_RATE = 16_000;
     private static final int CHANNELS = 1;
     private static final int BITS_PER_SAMPLE = 16;
-    private static final Pattern JSON_TEXT = Pattern.compile("\"text\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"");
+    private static final Pattern VTT_TIMING = Pattern.compile(
+            "(\\d{2}:\\d{2}:\\d{2}\\.\\d{3})\\s+-->\\s+(\\d{2}:\\d{2}:\\d{2}\\.\\d{3})(?:\\s+.*)?");
 
     private final URI endpoint;
     private final HttpClient httpClient;
@@ -39,10 +39,23 @@ public class WhisperServerSpeechToText implements SpeechToText {
 
     @Override
     public String transcribe(AudioBuffer audioBuffer, long startSampleIndex, long endSampleIndexExclusive) {
+        return transcribeWithSegments(audioBuffer, startSampleIndex, endSampleIndexExclusive).text();
+    }
+
+    @Override
+    public Transcription transcribeWithSegments(
+            AudioBuffer audioBuffer,
+            long startSampleIndex,
+            long endSampleIndexExclusive) {
         if (endSampleIndexExclusive <= startSampleIndex) {
-            return "";
+            return Transcription.empty();
         }
         byte[] wav = wav(audioBuffer, startSampleIndex, endSampleIndexExclusive);
+        String body = requestWhisper(wav, "vtt");
+        return parseWebVtt(body);
+    }
+
+    private String requestWhisper(byte[] wav, String responseFormat) {
         String boundary = "----java-whisper-" + UUID.randomUUID();
         HttpRequest request = HttpRequest.newBuilder(endpoint)
                 .timeout(Duration.ofSeconds(60))
@@ -51,7 +64,7 @@ public class WhisperServerSpeechToText implements SpeechToText {
                         FormPart.file("file", "speech.wav", "audio/wav", wav),
                         FormPart.field("language", "ja"),
                         FormPart.field("temperature", "0.0"),
-                        FormPart.field("response_format", "json"))))
+                        FormPart.field("response_format", responseFormat))))
                 .build();
 
         try {
@@ -59,13 +72,65 @@ public class WhisperServerSpeechToText implements SpeechToText {
             if (response.statusCode() / 100 != 2) {
                 throw new SpeechToTextException("whisper-server returned HTTP " + response.statusCode());
             }
-            return extractText(response.body());
+            return response.body();
         } catch (IOException e) {
             throw new SpeechToTextException("failed to request whisper-server at " + endpoint, e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new SpeechToTextException("interrupted while requesting whisper-server at " + endpoint, e);
         }
+    }
+
+    static Transcription parseWebVtt(String body) {
+        List<TranscriptSegment> segments = new ArrayList<>();
+        List<String> lines = body.lines()
+                .map(String::stripTrailing)
+                .toList();
+
+        for (int i = 0; i < lines.size(); i++) {
+            var matcher = VTT_TIMING.matcher(lines.get(i));
+            if (!matcher.matches()) {
+                continue;
+            }
+
+            Duration start = parseWebVttTimestamp(matcher.group(1));
+            Duration end = parseWebVttTimestamp(matcher.group(2));
+            StringBuilder text = new StringBuilder();
+            i++;
+            while (i < lines.size() && !lines.get(i).isBlank()) {
+                if (!text.isEmpty()) {
+                    text.append('\n');
+                }
+                text.append(lines.get(i));
+                i++;
+            }
+
+            String segmentText = text.toString().trim();
+            if (!segmentText.isEmpty()) {
+                segments.add(new TranscriptSegment(start, end, segmentText));
+            }
+        }
+
+        String text = segments.stream()
+                .map(TranscriptSegment::text)
+                .reduce((left, right) -> left + "\n" + right)
+                .orElse("");
+        return new Transcription(text, segments);
+    }
+
+    private static Duration parseWebVttTimestamp(String value) {
+        String[] hourAndRest = value.split(":", 3);
+        if (hourAndRest.length != 3) {
+            throw new SpeechToTextException("invalid WEBVTT timestamp: " + value);
+        }
+        String[] secondAndMillis = hourAndRest[2].split("\\.", 2);
+        if (secondAndMillis.length != 2) {
+            throw new SpeechToTextException("invalid WEBVTT timestamp: " + value);
+        }
+        return Duration.ofHours(Long.parseLong(hourAndRest[0]))
+                .plusMinutes(Long.parseLong(hourAndRest[1]))
+                .plusSeconds(Long.parseLong(secondAndMillis[0]))
+                .plusMillis(Long.parseLong(secondAndMillis[1]));
     }
 
     private static byte[] wav(AudioBuffer audioBuffer, long startSampleIndex, long endSampleIndexExclusive) {
@@ -110,47 +175,6 @@ public class WhisperServerSpeechToText implements SpeechToText {
         }
         body.add(("--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
         return HttpRequest.BodyPublishers.ofByteArrays(body);
-    }
-
-    private static String extractText(String body) {
-        Matcher matcher = JSON_TEXT.matcher(body);
-        if (matcher.find()) {
-            return unescapeJsonString(matcher.group(1)).trim();
-        }
-        return body.trim();
-    }
-
-    private static String unescapeJsonString(String value) {
-        StringBuilder result = new StringBuilder(value.length());
-        for (int i = 0; i < value.length(); i++) {
-            char ch = value.charAt(i);
-            if (ch != '\\' || i + 1 >= value.length()) {
-                result.append(ch);
-                continue;
-            }
-            char escaped = value.charAt(++i);
-            switch (escaped) {
-                case '"' -> result.append('"');
-                case '\\' -> result.append('\\');
-                case '/' -> result.append('/');
-                case 'b' -> result.append('\b');
-                case 'f' -> result.append('\f');
-                case 'n' -> result.append('\n');
-                case 'r' -> result.append('\r');
-                case 't' -> result.append('\t');
-                case 'u' -> {
-                    if (i + 4 >= value.length()) {
-                        result.append("\\u");
-                        break;
-                    }
-                    String hex = value.substring(i + 1, i + 5);
-                    result.append((char) Integer.parseInt(hex, 16));
-                    i += 4;
-                }
-                default -> result.append(escaped);
-            }
-        }
-        return result.toString();
     }
 
     private record FormPart(String name, String filename, String contentType, byte[] body) {

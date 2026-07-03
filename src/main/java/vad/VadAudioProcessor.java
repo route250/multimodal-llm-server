@@ -3,12 +3,18 @@ package vad;
 import audio.AudioBuffer;
 import audio.Pcm16Le;
 
+import java.time.Duration;
 import java.util.ArrayDeque;
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import stt.SpeechToText;
+import stt.Transcription;
 import vad.silero.SileroVad;
 import vad.silero.VoiceActivityDetector;
 
@@ -21,6 +27,14 @@ public class VadAudioProcessor {
     public static final int PRE_ROLL_SAMPLES = 9_600;
     /** 発話終了と判定するまでに必要な無音区間のサンプル数。9,600 サンプルは 16 kHz で 600 ms。 */
     public static final int END_SILENCE_SAMPLES = 9_600;
+    /** 発話が継続している間に中間 STT を実行する間隔。38,400 サンプルは 16 kHz で 2.4 秒。 */
+    public static final int PARTIAL_TRANSCRIPTION_INTERVAL_SAMPLES = 38_400;
+    /** 重複セグメント後も STT 入力へ残す先頭側マージン。1,600 サンプルは 16 kHz で 100 ms。 */
+    public static final int TRANSCRIPTION_OVERLAP_MARGIN_SAMPLES = 1_600;
+    /** 1 セグメント一致だけで重複と判断する最小文字数。 */
+    public static final int MIN_OVERLAP_TEXT_LENGTH = 8;
+    /** 1 セグメント一致だけで重複と判断する最小音声長。11,200 サンプルは 16 kHz で 700 ms。 */
+    public static final int MIN_OVERLAP_SAMPLES = 11_200;
     /** SmartTurn によるターン検出を開始するまでに必要な無音区間のサンプル数。 */
     public static final int MIN_TURN_DETECTION_SILENCE_SAMPLES = END_SILENCE_SAMPLES;
     /** SmartTurn によるターン検出を再試行する間隔のサンプル数。 */
@@ -32,8 +46,8 @@ public class VadAudioProcessor {
 
     /** 受信直後の PCM と VAD 値を保持するバッファ。 */
     private final AudioBuffer receiveBuffer = new AudioBuffer(SAMPLE_RATE * 30, VAD_FRAME_SAMPLES);
-    /** STT に渡す発話区間の PCM を保持する長時間用バッファ。 */
-    private final AudioBuffer sttBuffer = new AudioBuffer(SAMPLE_RATE * 30, VAD_FRAME_SAMPLES);
+    /** STT に渡す発話区間の PCM を保持する長時間用バッファ。5 分までの発話を保持する。 */
+    private final AudioBuffer sttBuffer = new AudioBuffer(SAMPLE_RATE * 5 * 60, VAD_FRAME_SAMPLES);
     /** PCM フレームから発話確率を計算する VAD 実装。 */
     private final VoiceActivityDetector vad;
     /** 発話区間が会話ターンとして完了したかを判定する実装。 */
@@ -46,9 +60,15 @@ public class VadAudioProcessor {
     private final Object transcriptionTaskLock = new Object();
     private CompletableFuture<Void> transcriptionTaskTail = CompletableFuture.completedFuture(null);
     /** STT 完了時に文字起こし結果を通知する処理。 */
-    private final ArrayDeque<TranscribeSegment> transcribeResults = new ArrayDeque<>();
+    private final ArrayDeque<Transcription> transcribeResults = new ArrayDeque<>();
     /** STT タスクで発生し、次回の音声処理で表面化させる例外。 */
     private RuntimeException pendingTranscriptionFailure;
+    /** 次回以降の STT 入力に使える先頭サンプル番号。重複セグメント検出後に前へ戻らない値として更新する。 */
+    private long transcriptionStartFloorSampleIndex;
+    /** 重複セグメント検出に使う直近の採用済み STT 結果。 */
+    private TranscriptionReference previousTranscription;
+    /** 現在の発話区間を識別する番号。古い STT タスクの結果を捨てるために使う。 */
+    private long speechSequenceId;
     /** 次に受信する PCM チャンクの先頭サンプル番号。 */
     private long nextSampleIndex;
     /** 次に VAD を実行するフレームの先頭サンプル番号。 */
@@ -57,10 +77,16 @@ public class VadAudioProcessor {
     private SpeechState speechState = SpeechState.UNDETECTED;
     /** 現在の発話区間の先頭サンプル番号。PRE_ROLL_SAMPLES を含む場合がある。 */
     private long speechStartSampleIndex;
+    /** STT 用バッファへ蓄積済みの現在発話区間の終端サンプル番号。 */
+    private long sttBufferedEndSampleIndex;
     /** END_THRESHOLD を超えた最後の VAD フレームの終端サンプル番号。 */
     private long lastSpeechSampleIndex;
     /** SmartTurn によるターン検出を最後に実行したフレームの終端サンプル番号。 */
     private long lastTurnDetectionSampleIndex = Long.MIN_VALUE;
+    /** 次に中間 STT を実行する発話内の終端サンプル番号。 */
+    private long nextPartialTranscriptionEndSampleIndex = Long.MAX_VALUE;
+    /** 次に中間 STT を実行する発話内の先頭サンプル番号。 */
+    private long nextPartialTranscriptionStartSampleIndex;
 
     /**
      * VAD、ターン検出、STT の実装、STT 用 executor を受け取って音声処理器を作成する。
@@ -81,13 +107,21 @@ public class VadAudioProcessor {
         this.transcriptionExecutor = Objects.requireNonNull(transcriptionExecutor);
     }
 
+    private void setState(long pos,SpeechState newState) {
+        if (speechState != newState) {
+            long f = pos / 512;
+            float m = (float) pos / SAMPLE_RATE;
+            System.out.println(String.format("frame: %5d pos: %7.3f",f,m)+" state: " + speechState + " -> " + newState);
+            speechState = newState;
+        }
+    }
     /**
      * PCM 16-bit little-endian のバイト列を受け取り、発話終了時に文字起こし結果を返す。
      *
      * @param bytes PCM 16-bit little-endian 形式の音声バイト列
      * @return 発話区間が確定した場合は文字起こし結果。未確定の場合は Optional.empty()
      */
-    public synchronized Optional<String> acceptPcm16Le(byte[] bytes) {
+    public synchronized Optional<Transcription> acceptPcm16Le(byte[] bytes) {
         short[] samples = Pcm16Le.decode(bytes);
         long chunkStartSampleIndex = nextSampleIndex;
         receiveBuffer.append(samples, chunkStartSampleIndex);
@@ -96,11 +130,33 @@ public class VadAudioProcessor {
     }
 
     /**
+     * 現在投入済みの STT タスクが完了するまで待つ。
+     *
+     * <p>デバッグ実行やテストで音声投入直後に executor を閉じる場合、後続 STT が投入される前に
+     * executor が終了しないよう、このメソッドでキュー末尾の完了を待つ。</p>
+     *
+     * @param timeout 最大待機時間
+     */
+    public void awaitTranscriptions(Duration timeout) throws InterruptedException {
+        CompletableFuture<Void> taskTail;
+        synchronized (transcriptionTaskLock) {
+            taskTail = transcriptionTaskTail;
+        }
+        try {
+            taskTail.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (ExecutionException e) {
+            throw new IllegalStateException("transcription task failed", e.getCause());
+        } catch (TimeoutException e) {
+            throw new IllegalStateException("timed out waiting for transcription tasks", e);
+        }
+    }
+
+    /**
      * 受信済み PCM から VAD 実行可能なフレームを順に処理する。
      *
      * @return この処理中に発話区間が確定した場合は最後の文字起こし結果。未確定の場合は Optional.empty()
      */
-    private Optional<String> processAvailableWindows() {
+    private Optional<Transcription> processAvailableWindows() {
         long latestFrameStart = receiveBuffer.endSampleIndexExclusive() - VAD_FRAME_SAMPLES;
         while (nextVadStartSampleIndex <= latestFrameStart) {
             if (nextVadStartSampleIndex < receiveBuffer.startSampleIndex()) {
@@ -119,9 +175,9 @@ public class VadAudioProcessor {
             throw failure;
         }
 
-        TranscribeSegment segment = transcribeResults.pollFirst();
-        if (segment != null) {
-            return Optional.of(segment.text);
+        Transcription transcription = transcribeResults.pollFirst();
+        if (transcription != null) {
+            return Optional.of(transcription);
         }
         return Optional.empty();
     }
@@ -139,10 +195,16 @@ public class VadAudioProcessor {
             case UNDETECTED -> {
                 // 未検出状態で START_THRESHOLD 以上になったフレームを発話開始として扱う。
                 if (probability >= START_THRESHOLD) {
-                    speechState = SpeechState.DETECTED;
-                    speechStartSampleIndex = Math.max(receiveBuffer.startSampleIndex(), frameStartSampleIndex - PRE_ROLL_SAMPLES);
-                    lastSpeechSampleIndex = frameEndSampleIndex;
-                    lastTurnDetectionSampleIndex = Long.MIN_VALUE;
+                    setState( frameStartSampleIndex, SpeechState.DETECTED );
+                    startSpeech(frameStartSampleIndex, frameEndSampleIndex);
+                }
+                return;
+            }
+            case TRANSCRIBING -> {
+                // START_THRESHOLD 以上になったら新しい発話区間として発話検出状態へ戻す。
+                if (probability >= START_THRESHOLD) {
+                    setState( frameStartSampleIndex, SpeechState.DETECTED );
+                    startSpeech(frameStartSampleIndex, frameEndSampleIndex);
                 }
                 return;
             }
@@ -150,16 +212,20 @@ public class VadAudioProcessor {
                 // 発話検出状態で END_THRESHOLD を超えている間は発話継続として扱う。
                 if (probability > END_THRESHOLD) {
                     lastSpeechSampleIndex = frameEndSampleIndex;
+                    appendCurrentSpeechToSttBuffer(frameEndSampleIndex);
+                    maybeTranscribePartialSpeech(frameEndSampleIndex);
                     return;
                 }
-                speechState = SpeechState.TRAILING_SILENCE;
+                setState( frameStartSampleIndex, SpeechState.TRAILING_SILENCE );
                 return;
             }
             case TRAILING_SILENCE -> {
                 // 後続無音状態で END_THRESHOLD を超えた場合は同じ発話区間として発話検出状態へ戻す。
                 if (probability > END_THRESHOLD) {
-                    speechState = SpeechState.DETECTED;
+                    setState( frameStartSampleIndex, SpeechState.DETECTED );
                     lastSpeechSampleIndex = frameEndSampleIndex;
+                    appendCurrentSpeechToSttBuffer(frameEndSampleIndex);
+                    maybeTranscribePartialSpeech(frameEndSampleIndex);
                     return;
                 }
 
@@ -175,32 +241,40 @@ public class VadAudioProcessor {
                 lastTurnDetectionSampleIndex = frameEndSampleIndex;
 
                 long speechEndSampleIndex = Math.min(receiveBuffer.endSampleIndexExclusive(), frameEndSampleIndex);
-                if (!receiveBuffer.contains(speechStartSampleIndex, speechEndSampleIndex)) {
+                appendCurrentSpeechToSttBuffer(speechEndSampleIndex);
+                if (!sttBuffer.contains(speechStartSampleIndex, speechEndSampleIndex)) {
                     return;
                 }
-                speechState = SpeechState.TURN_DETECTING;
+                setState( frameStartSampleIndex, SpeechState.TURN_DETECTING );
                 if (!detectTurn(speechEndSampleIndex)) {
-                    speechState = SpeechState.TRAILING_SILENCE;
+                    setState( frameStartSampleIndex, SpeechState.TRAILING_SILENCE );
                     return;
                 }
-                speechState = SpeechState.TRANSCRIBING;
-                sttBuffer.appendRangeFrom(receiveBuffer, speechStartSampleIndex, speechEndSampleIndex);
-                transcribeCompletedSpeech(lastSpeechSampleIndex, speechEndSampleIndex);
+                setState( frameStartSampleIndex, SpeechState.TRANSCRIBING );
+                transcribeCompletedSpeech(speechEndSampleIndex);
                 return;
             }
             case TURN_DETECTING -> {
                 return;
             }
-            case TRANSCRIBING -> {
-                // START_THRESHOLD 以上になったら新しい発話区間として発話検出状態へ戻す。
-                if (probability >= START_THRESHOLD) {
-                    speechState = SpeechState.DETECTED;
-                    lastSpeechSampleIndex = frameEndSampleIndex;
-                }
-                return;
-            }
         }
         throw new IllegalStateException("unknown speech state: " + speechState);
+    }
+
+    /**
+     * 新しい発話区間を開始し、重複検出済みの先頭位置より前を STT 対象から外す。
+     */
+    private void startSpeech(long frameStartSampleIndex, long frameEndSampleIndex) {
+        speechSequenceId++;
+        long preRollStartSampleIndex = Math.max(receiveBuffer.startSampleIndex(), frameStartSampleIndex - PRE_ROLL_SAMPLES);
+        long boundedStartFloorSampleIndex = Math.min(transcriptionStartFloorSampleIndex, frameStartSampleIndex);
+        speechStartSampleIndex = Math.max(preRollStartSampleIndex, boundedStartFloorSampleIndex);
+        sttBufferedEndSampleIndex = speechStartSampleIndex;
+        lastSpeechSampleIndex = frameEndSampleIndex;
+        lastTurnDetectionSampleIndex = Long.MIN_VALUE;
+        nextPartialTranscriptionEndSampleIndex = frameStartSampleIndex + PARTIAL_TRANSCRIPTION_INTERVAL_SAMPLES;
+        nextPartialTranscriptionStartSampleIndex = speechStartSampleIndex;
+        appendCurrentSpeechToSttBuffer(frameEndSampleIndex);
     }
 
     /**
@@ -210,9 +284,25 @@ public class VadAudioProcessor {
      * @return ターン完了を検出した場合は文字起こし結果。未完了の場合は Optional.empty()
      */
     private boolean detectTurn(long speechEndSampleIndex) {
-        return turnDetector.isTurnComplete(receiveBuffer.floats(
-                speechStartSampleIndex,
-                Math.toIntExact(speechEndSampleIndex - speechStartSampleIndex)));
+        long startSampleIndex = transcriptionRangeStartSampleIndex(speechEndSampleIndex);
+        return turnDetector.isTurnComplete(sttBuffer.floats(
+                startSampleIndex,
+                Math.toIntExact(speechEndSampleIndex - startSampleIndex)));
+    }
+
+    /**
+     * 現在の発話区間を STT 用バッファへ追加する。
+     *
+     * <p>receiveBuffer は直近 30 秒だけを保持するため、長い発話では終了時に先頭側の PCM が破棄される。
+     * STT 用バッファへ発話中に順次移すことで、長い発話でも文字起こし対象を保持する。</p>
+     */
+    private void appendCurrentSpeechToSttBuffer(long endSampleIndexExclusive) {
+        long copyStartSampleIndex = Math.max(speechStartSampleIndex, sttBufferedEndSampleIndex);
+        if (endSampleIndexExclusive <= copyStartSampleIndex) {
+            return;
+        }
+        sttBuffer.appendRangeFrom(receiveBuffer, copyStartSampleIndex, endSampleIndexExclusive);
+        sttBufferedEndSampleIndex = endSampleIndexExclusive;
     }
 
 
@@ -225,23 +315,74 @@ public class VadAudioProcessor {
         transcriptionAudio.appendRangeFrom(sttBuffer, startSampleIndex, endSampleIndexExclusive);
         return transcriptionAudio;
     }
+
+    /**
+     * 発話継続中に 2.4 秒単位の中間 STT を投入する。
+     */
+    private void maybeTranscribePartialSpeech(long frameEndSampleIndex) {
+        while (frameEndSampleIndex >= nextPartialTranscriptionEndSampleIndex) {
+            long endSampleIndexExclusive = nextPartialTranscriptionEndSampleIndex;
+            long startSampleIndex = Math.max(
+                    nextPartialTranscriptionStartSampleIndex,
+                    transcriptionRangeStartSampleIndex(endSampleIndexExclusive));
+            if (endSampleIndexExclusive > startSampleIndex
+                    && sttBuffer.contains(startSampleIndex, endSampleIndexExclusive)) {
+                transcribeSpeech(speechSequenceId, startSampleIndex, endSampleIndexExclusive, TranscriptionKind.PARTIAL);
+                nextPartialTranscriptionStartSampleIndex = Math.max(
+                        speechStartSampleIndex,
+                        endSampleIndexExclusive - TRANSCRIPTION_OVERLAP_MARGIN_SAMPLES);
+            }
+            nextPartialTranscriptionEndSampleIndex += PARTIAL_TRANSCRIPTION_INTERVAL_SAMPLES;
+        }
+    }
+
+    /**
+     * 現在の STT 開始下限を反映した、STT 入力範囲の先頭サンプル番号を返す。
+     */
+    private long transcriptionRangeStartSampleIndex(long endSampleIndexExclusive) {
+        long boundedStartFloorSampleIndex = Math.min(transcriptionStartFloorSampleIndex, endSampleIndexExclusive);
+        return Math.max(speechStartSampleIndex, boundedStartFloorSampleIndex);
+    }
+
     /**
      * 確定した発話区間を STT 実行中状態で文字起こしし、完了後に未検出状態へ戻す。
      *
      * @param speechEndSampleIndex 文字起こし対象の終端サンプル番号。この番号のサンプルは含まない
      * @return 文字起こし結果
      */
-    private void transcribeCompletedSpeech(long lastSpeechSampleIndex, long speechEndSampleIndex) {
-        AudioBuffer transcriptionAudio = copyTranscriptionAudio(speechStartSampleIndex, speechEndSampleIndex);
-        long transcriptionStartSampleIndex = speechStartSampleIndex;
+    private void transcribeCompletedSpeech(long speechEndSampleIndex) {
+        long transcriptionStartSampleIndex = Math.max(
+                transcriptionRangeStartSampleIndex(speechEndSampleIndex),
+                nextPartialTranscriptionStartSampleIndex);
+        if (speechEndSampleIndex <= transcriptionStartSampleIndex) {
+            return;
+        }
+        long transcriptionSpeechSequenceId = speechSequenceId;
+        transcribeSpeech(
+                transcriptionSpeechSequenceId,
+                transcriptionStartSampleIndex,
+                speechEndSampleIndex,
+                TranscriptionKind.FINAL);
+    }
+
+    /**
+     * 指定範囲の音声をコピーして STT タスクを発話順に投入する。
+     */
+    private void transcribeSpeech(
+            long transcriptionSpeechSequenceId,
+            long transcriptionStartSampleIndex,
+            long endSampleIndexExclusive,
+            TranscriptionKind kind) {
+        AudioBuffer transcriptionAudio = copyTranscriptionAudio(transcriptionStartSampleIndex, endSampleIndexExclusive);
         synchronized (transcriptionTaskLock) {
             transcriptionTaskTail = transcriptionTaskTail.handle((ignored, error) -> null)
                     .thenRunAsync(
                             () -> transcribeAsync(
-                                    lastSpeechSampleIndex,
+                                    transcriptionSpeechSequenceId,
                                     transcriptionAudio,
                                     transcriptionStartSampleIndex,
-                                    speechEndSampleIndex),
+                                    endSampleIndexExclusive,
+                                    kind),
                             transcriptionExecutor);
         }
     }
@@ -250,34 +391,184 @@ public class VadAudioProcessor {
      * 別タスクで STT を実行し、結果または失敗を通知する。
      */
     private void transcribeAsync(
-            long lastSpeechSampleIndex,
+            long transcriptionSpeechSequenceId,
             AudioBuffer transcriptionAudio,
             long startSampleIndex,
-            long endSampleIndexExclusive) {
+            long endSampleIndexExclusive,
+            TranscriptionKind kind) {
         try {
-            String text = speechToText.transcribe(transcriptionAudio, startSampleIndex, endSampleIndexExclusive);
+            System.out.println("transcribeAsync: startSampleIndex=" + startSampleIndex + " endSampleIndexExclusive=" + endSampleIndexExclusive);
+            Transcription transcription = speechToText.transcribeWithSegments(
+                    transcriptionAudio,
+                    startSampleIndex,
+                    endSampleIndexExclusive);
+            String text = transcription.text();
             synchronized (this) {
-                boolean matchesCurrentSpeech = this.lastSpeechSampleIndex == lastSpeechSampleIndex;
-                if (matchesCurrentSpeech && text != null && !text.isEmpty()) {
-                    transcribeResults.addLast(new TranscribeSegment(text,startSampleIndex, endSampleIndexExclusive));
+                boolean matchesCurrentSpeech = this.speechSequenceId == transcriptionSpeechSequenceId;
+                if (text != null ) {
+                    if( !text.isEmpty() ) {
+                        updateTranscriptionStartFloor(
+                                startSampleIndex,
+                                endSampleIndexExclusive,
+                                transcription,
+                                kind == TranscriptionKind.PARTIAL && matchesCurrentSpeech);
+                        if (matchesCurrentSpeech) {
+                            System.out.println("transcribeAsync: transcription result for startSampleIndex=" + startSampleIndex + " endSampleIndexExclusive=" + endSampleIndexExclusive + " text=" + text);
+                            transcribeResults.addLast(transcription);
+                        }
+                    } else {
+                        System.out.println("transcribeAsync: empty transcription result for startSampleIndex=" + startSampleIndex + " endSampleIndexExclusive=" + endSampleIndexExclusive);
+                    }
                 }
-                if (speechState == SpeechState.TRANSCRIBING && matchesCurrentSpeech) {
-                    speechState = SpeechState.UNDETECTED;
+                if (kind == TranscriptionKind.FINAL && speechState == SpeechState.TRANSCRIBING && matchesCurrentSpeech) {
+                    setState( endSampleIndexExclusive, SpeechState.UNDETECTED );
                 }
             }
         } catch (RuntimeException e) {
             synchronized (this) {
-                if (this.lastSpeechSampleIndex == lastSpeechSampleIndex && pendingTranscriptionFailure == null) {
+                if (this.speechSequenceId == transcriptionSpeechSequenceId && pendingTranscriptionFailure == null) {
                     pendingTranscriptionFailure = e;
                 }
             }
         } finally {
             synchronized (this) {
-                if (speechState == SpeechState.TRANSCRIBING && this.lastSpeechSampleIndex == lastSpeechSampleIndex) {
-                    speechState = SpeechState.UNDETECTED;
+                if (kind == TranscriptionKind.FINAL
+                        && speechState == SpeechState.TRANSCRIBING
+                        && this.speechSequenceId == transcriptionSpeechSequenceId) {
+                    setState( endSampleIndexExclusive, SpeechState.UNDETECTED );
                 }
             }
         }
+    }
+
+    /**
+     * 前回末尾と今回先頭の一致セグメントから、次回 STT 入力の先頭サンプル番号を更新する。
+     */
+    private void updateTranscriptionStartFloor(
+            long startSampleIndex,
+            long endSampleIndexExclusive,
+            Transcription transcription,
+            boolean advanceByPartialSegmentEnd) {
+        TranscriptionReference current = TranscriptionReference.from(startSampleIndex, transcription);
+        if (previousTranscription != null) {
+            Optional<SegmentOverlap> overlap = findSegmentOverlap(previousTranscription.segments(), current.segments());
+            if (overlap.isPresent()) {
+                long nextStart = Math.max(0, overlap.get().currentEndSampleIndex() - TRANSCRIPTION_OVERLAP_MARGIN_SAMPLES);
+                transcriptionStartFloorSampleIndex = Math.max(transcriptionStartFloorSampleIndex, nextStart);
+            }
+        }
+        if (advanceByPartialSegmentEnd) {
+            current.lastSegmentEndSampleIndex()
+                    .ifPresent(segmentEndSampleIndex -> {
+                        long boundedSegmentEndSampleIndex = Math.min(segmentEndSampleIndex, endSampleIndexExclusive);
+                        long nextStart = Math.max(0, boundedSegmentEndSampleIndex - TRANSCRIPTION_OVERLAP_MARGIN_SAMPLES);
+                        transcriptionStartFloorSampleIndex = Math.max(transcriptionStartFloorSampleIndex, nextStart);
+                    });
+        }
+        previousTranscription = current;
+    }
+
+    /**
+     * 前回の末尾セグメント列と今回の先頭セグメント列の最長一致を返す。
+     */
+    private static Optional<SegmentOverlap> findSegmentOverlap(
+            List<AbsoluteTranscriptSegment> previous,
+            List<AbsoluteTranscriptSegment> current) {
+        int maxCount = Math.min(previous.size(), current.size());
+        SegmentOverlap best = null;
+        for (int count = 1; count <= maxCount; count++) {
+            int previousStart = previous.size() - count;
+            if (segmentsMatch(previous, previousStart, current, count)) {
+                AbsoluteTranscriptSegment last = current.get(count - 1);
+                int textLength = normalizedTextLength(current, count);
+                long sampleLength = last.endSampleIndex() - current.getFirst().startSampleIndex();
+                if (count >= 2 || textLength >= MIN_OVERLAP_TEXT_LENGTH || sampleLength >= MIN_OVERLAP_SAMPLES) {
+                    best = new SegmentOverlap(last.endSampleIndex());
+                }
+            }
+        }
+        return Optional.ofNullable(best);
+    }
+
+    private static boolean segmentsMatch(
+            List<AbsoluteTranscriptSegment> previous,
+            int previousStart,
+            List<AbsoluteTranscriptSegment> current,
+            int count) {
+        for (int i = 0; i < count; i++) {
+            String previousText = previous.get(previousStart + i).normalizedText();
+            String currentText = current.get(i).normalizedText();
+            if (previousText.isEmpty() || !previousText.equals(currentText)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static int normalizedTextLength(List<AbsoluteTranscriptSegment> segments, int count) {
+        int length = 0;
+        for (int i = 0; i < count; i++) {
+            length += segments.get(i).normalizedText().length();
+        }
+        return length;
+    }
+
+    private static long durationToSamples(Duration duration) {
+        return duration.toNanos() * SAMPLE_RATE / 1_000_000_000L;
+    }
+
+    private static String normalizeSegmentText(String text) {
+        StringBuilder normalized = new StringBuilder(text.length());
+        for (int offset = 0; offset < text.length();) {
+            int codePoint = text.codePointAt(offset);
+            offset += Character.charCount(codePoint);
+            int type = Character.getType(codePoint);
+            if (Character.isWhitespace(codePoint)
+                    || type == Character.CONNECTOR_PUNCTUATION
+                    || type == Character.DASH_PUNCTUATION
+                    || type == Character.START_PUNCTUATION
+                    || type == Character.END_PUNCTUATION
+                    || type == Character.INITIAL_QUOTE_PUNCTUATION
+                    || type == Character.FINAL_QUOTE_PUNCTUATION
+                    || type == Character.OTHER_PUNCTUATION) {
+                continue;
+            }
+            normalized.appendCodePoint(Character.toLowerCase(codePoint));
+        }
+        return normalized.toString();
+    }
+
+    private record TranscriptionReference(List<AbsoluteTranscriptSegment> segments) {
+        static TranscriptionReference from(long startSampleIndex, Transcription transcription) {
+            List<AbsoluteTranscriptSegment> segments = transcription.segments().stream()
+                    .map(segment -> new AbsoluteTranscriptSegment(
+                            startSampleIndex + durationToSamples(segment.start()),
+                            startSampleIndex + durationToSamples(segment.end()),
+                            normalizeSegmentText(segment.text())))
+                    .toList();
+            return new TranscriptionReference(segments);
+        }
+
+        Optional<Long> lastSegmentEndSampleIndex() {
+            for (int i = segments.size() - 1; i >= 0; i--) {
+                AbsoluteTranscriptSegment segment = segments.get(i);
+                if (!segment.normalizedText().isEmpty()) {
+                    return Optional.of(segment.endSampleIndex());
+                }
+            }
+            return Optional.empty();
+        }
+    }
+
+    private record AbsoluteTranscriptSegment(long startSampleIndex, long endSampleIndex, String normalizedText) {
+    }
+
+    private record SegmentOverlap(long currentEndSampleIndex) {
+    }
+
+    private enum TranscriptionKind {
+        PARTIAL,
+        FINAL
     }
 
     /**
@@ -308,15 +599,5 @@ public class VadAudioProcessor {
         TURN_DETECTING,
         /** 確定した発話区間を STT へ渡している状態。 */
         TRANSCRIBING
-    }
-    public static class TranscribeSegment {
-        public final long startSampleIndex;
-        public final long endSampleIndexExclusive;
-        public final String text;
-        public TranscribeSegment( String text, long startSampleIndex, long endSampleIndexExclusive ) {
-            this.text = text;
-            this.startSampleIndex = startSampleIndex;
-            this.endSampleIndexExclusive = endSampleIndexExclusive;
-        }
     }
 }
