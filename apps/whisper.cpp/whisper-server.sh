@@ -1,8 +1,21 @@
 #!/bin/bash
 
-PRJ_DIR="$(cd $(dirname $0);pwd)"
-WHISPER_BIN="$PRJ_DIR/whisper-1.9.1-coreML-bin"
+# 実行環境
+PNAME=whisper-server
+SCR_DIR="$(cd $(dirname $0);pwd)"
+PRJ_DIR="$(cd $SCR_DIR/../..;pwd)"
+WHISPER_HOME="$PRJ_DIR/.local/opt/whisper.cpp"
+WHISPER_BIN="$WHISPER_HOME/bin"
+WHISPER_MODELS="$WHISPER_HOME/models"
+PKG_DIR="$SCR_DIR/pkg"
+
+# whisper-serverのインストール
+$SCR_DIR/whisper-install.sh
+
+# modelの用意
+$SCR_DIR/model_download.sh
+
 export PATH="$WHISPER_BIN:$PATH"
 
-whisper-server --port 8766 -m models/ggml-small.bin
+whisper-server --port 8767 -m $WHISPER_MODELS/ggml-small.bin
 

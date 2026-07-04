@@ -25,4 +25,4 @@ replay_pid*
 
 /target/
 tmp/
-models/
+.local
