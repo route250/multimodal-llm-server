@@ -156,6 +156,13 @@ public class AudioBuffer {
             pcm[physicalIndex(sampleIndex)] = source.sampleAt(sampleIndex);
         }
         endSampleIndexExclusive = endExclusive;
+        long vadCopyStart = Math.floorDiv(writeStart, samplesPerVadValue) * samplesPerVadValue;
+        for (long sampleIndex = vadCopyStart; sampleIndex < endExclusive; sampleIndex += samplesPerVadValue) {
+            float value = source.vadValue(sampleIndex);
+            if (!Float.isNaN(value)) {
+                putVadValue(sampleIndex, value);
+            }
+        }
         trimToCapacity();
     }
 

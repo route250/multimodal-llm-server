@@ -35,6 +35,8 @@ class WhisperServerTranscriptionTest {
         assertTrue(Files.isRegularFile(audioFile), "Audio file not found: " + audioFile.toAbsolutePath());
 
         HttpResponse<String> response = transcribeOrSkip(endpoint, audioFile);
+        assumeTrue(!isLfm2AudioServer(response),
+                "lfm2-audio-server is running at " + endpoint + ", not whisper-server");
         assertTrue(response.statusCode() / 100 == 2,
                 () -> "whisper-server returned HTTP " + response.statusCode() + "\n" + response.body());
 
@@ -44,6 +46,13 @@ class WhisperServerTranscriptionTest {
         System.out.println("transcription: " + text);
 
         assertFalse(text.isBlank(), () -> "Transcription text is blank. Raw response:\n" + response.body());
+    }
+
+    private static boolean isLfm2AudioServer(HttpResponse<?> response) {
+        return response.headers()
+                .firstValue("Server")
+                .map(value -> value.contains("lfm2-audio-server"))
+                .orElse(false);
     }
 
     private static HttpResponse<String> transcribeOrSkip(URI endpoint, Path audioFile)

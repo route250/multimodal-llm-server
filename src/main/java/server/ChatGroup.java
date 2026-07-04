@@ -5,6 +5,8 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Future;
 
+import llm.LanguageModel;
+import llm.OpenAiResponsesLanguageModel;
 import vad.VadAudioProcessor;
 
 public class ChatGroup {
@@ -43,7 +45,12 @@ public class ChatGroup {
     }
 
     ChatClient join(String clientId, VadAudioProcessor audioProcessor) {
-        ChatClient client = new ChatClient(clientId, this, audioProcessor);
+        ChatClient client = new ChatClient(clientId, this, audioProcessor, new OpenAiResponsesLanguageModel());
+        return join(clientId, client);
+    }
+
+    ChatClient join(String clientId, VadAudioProcessor audioProcessor, LanguageModel languageModel) {
+        ChatClient client = new ChatClient(clientId, this, audioProcessor, languageModel);
         return join(clientId, client);
     }
 

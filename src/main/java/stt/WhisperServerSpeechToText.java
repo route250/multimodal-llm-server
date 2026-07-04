@@ -43,28 +43,50 @@ public class WhisperServerSpeechToText implements SpeechToText {
     }
 
     @Override
+    public String transcribe(
+            AudioBuffer audioBuffer,
+            long startSampleIndex,
+            long endSampleIndexExclusive,
+            String prompt) {
+        return transcribeWithSegments(audioBuffer, startSampleIndex, endSampleIndexExclusive, prompt).text();
+    }
+
+    @Override
     public Transcription transcribeWithSegments(
             AudioBuffer audioBuffer,
             long startSampleIndex,
             long endSampleIndexExclusive) {
+        return transcribeWithSegments(audioBuffer, startSampleIndex, endSampleIndexExclusive, "");
+    }
+
+    @Override
+    public Transcription transcribeWithSegments(
+            AudioBuffer audioBuffer,
+            long startSampleIndex,
+            long endSampleIndexExclusive,
+            String prompt) {
         if (endSampleIndexExclusive <= startSampleIndex) {
             return Transcription.empty();
         }
         byte[] wav = wav(audioBuffer, startSampleIndex, endSampleIndexExclusive);
-        String body = requestWhisper(wav, "vtt");
+        String body = requestWhisper(wav, "vtt", prompt);
         return parseWebVtt(body);
     }
 
-    private String requestWhisper(byte[] wav, String responseFormat) {
+    private String requestWhisper(byte[] wav, String responseFormat, String prompt) {
         String boundary = "----java-whisper-" + UUID.randomUUID();
+        List<FormPart> parts = new ArrayList<>();
+        parts.add(FormPart.file("file", "speech.wav", "audio/wav", wav));
+        parts.add(FormPart.field("language", "ja"));
+        parts.add(FormPart.field("temperature", "0.0"));
+        if (prompt != null && !prompt.isBlank()) {
+            parts.add(FormPart.field("prompt", prompt));
+        }
+        parts.add(FormPart.field("response_format", responseFormat));
         HttpRequest request = HttpRequest.newBuilder(endpoint)
                 .timeout(Duration.ofSeconds(60))
                 .header("Content-Type", "multipart/form-data; boundary=" + boundary)
-                .POST(multipart(boundary, List.of(
-                        FormPart.file("file", "speech.wav", "audio/wav", wav),
-                        FormPart.field("language", "ja"),
-                        FormPart.field("temperature", "0.0"),
-                        FormPart.field("response_format", responseFormat))))
+                .POST(multipart(boundary, parts))
                 .build();
 
         try {

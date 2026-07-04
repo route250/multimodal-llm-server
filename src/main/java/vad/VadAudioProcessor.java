@@ -1,9 +1,11 @@
 package vad;
 
 import audio.AudioBuffer;
+import audio.AudioDiagnostics;
 import audio.Pcm16Le;
 
 import java.time.Duration;
+import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.List;
 import java.util.Objects;
@@ -13,24 +15,31 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.Consumer;
 import stt.SpeechToText;
 import stt.Transcription;
-import vad.silero.SileroVad;
-import vad.silero.VoiceActivityDetector;
 
 public class VadAudioProcessor {
     /** VAD と STT に渡す PCM のサンプルレート。単位は Hz。 */
     public static final int SAMPLE_RATE = 16_000;
-    /** VAD を 1 回実行する PCM サンプル数。 */
-    public static final int VAD_FRAME_SAMPLES = SileroVad.CHUNK_SAMPLES;
+    /** ブラウザ VAD 値 1 個に対応する PCM サンプル数。 */
+    public static final int VAD_FRAME_SAMPLES = 256;
     /** 発話開始時に先頭へ追加する過去音声のサンプル数。9,600 サンプルは 16 kHz で 600 ms。 */
     public static final int PRE_ROLL_SAMPLES = 9_600;
+    /** スパイクから発話開始と判定するまでに必要なサンプル数。3,200 サンプルは 16 kHz で 200 ms。 */
+    public static final int SPIKE_SAMPLES = 3_200;
     /** 発話終了と判定するまでに必要な無音区間のサンプル数。9,600 サンプルは 16 kHz で 600 ms。 */
     public static final int END_SILENCE_SAMPLES = 9_600;
-    /** 発話が継続している間に中間 STT を実行する間隔。38,400 サンプルは 16 kHz で 2.4 秒。 */
-    public static final int PARTIAL_TRANSCRIPTION_INTERVAL_SAMPLES = 38_400;
+    /** 発話が継続している間に中間 STT を実行する間隔。76,800 サンプルは 16 kHz で 4.8 秒。 */
+    public static final int PARTIAL_TRANSCRIPTION_INTERVAL_SAMPLES = 76_800;
     /** 重複セグメント後も STT 入力へ残す先頭側マージン。1,600 サンプルは 16 kHz で 100 ms。 */
     public static final int TRANSCRIPTION_OVERLAP_MARGIN_SAMPLES = 1_600;
+    /** Whisper の prompt に渡す直近テキストの最大文字数。 */
+    public static final int TRANSCRIPTION_PROMPT_MAX_CHARS = 500;
+    /** 短音声で prompt を抑止する長さ。24,000 サンプルは 16 kHz で 1,500 ms。 */
+    public static final int SHORT_AUDIO_PROMPT_SUPPRESSION_SAMPLES = 24_000;
+    /** 短音声で prompt を抑止する RMS 下限。0.01 は -40 dBFS 相当。 */
+    public static final float LOW_RMS_PROMPT_SUPPRESSION_THRESHOLD = 0.01f;
     /** 1 セグメント一致だけで重複と判断する最小文字数。 */
     public static final int MIN_OVERLAP_TEXT_LENGTH = 8;
     /** 1 セグメント一致だけで重複と判断する最小音声長。11,200 サンプルは 16 kHz で 700 ms。 */
@@ -40,7 +49,7 @@ public class VadAudioProcessor {
     /** SmartTurn によるターン検出を再試行する間隔のサンプル数。 */
     public static final int TURN_DETECTION_INTERVAL_SAMPLES = 9_600;
     /** 非発話状態から発話状態へ切り替える VAD 確率の下限値。 */
-    public static final float START_THRESHOLD = 0.5f;
+    public static final float START_THRESHOLD = 0.65f;
     /** 発話状態を継続する VAD 確率の下限値。 */
     public static final float END_THRESHOLD = 0.35f;
 
@@ -48,8 +57,6 @@ public class VadAudioProcessor {
     private final AudioBuffer receiveBuffer = new AudioBuffer(SAMPLE_RATE * 30, VAD_FRAME_SAMPLES);
     /** STT に渡す発話区間の PCM を保持する長時間用バッファ。5 分までの発話を保持する。 */
     private final AudioBuffer sttBuffer = new AudioBuffer(SAMPLE_RATE * 5 * 60, VAD_FRAME_SAMPLES);
-    /** PCM フレームから発話確率を計算する VAD 実装。 */
-    private final VoiceActivityDetector vad;
     /** 発話区間が会話ターンとして完了したかを判定する実装。 */
     private final TurnDetector turnDetector;
     /** 確定した発話区間を文字起こしする STT 実装。 */
@@ -60,13 +67,18 @@ public class VadAudioProcessor {
     private final Object transcriptionTaskLock = new Object();
     private CompletableFuture<Void> transcriptionTaskTail = CompletableFuture.completedFuture(null);
     /** STT 完了時に文字起こし結果を通知する処理。 */
-    private final ArrayDeque<Transcription> transcribeResults = new ArrayDeque<>();
+    private final ArrayDeque<TranscriptionResult> transcribeResults = new ArrayDeque<>();
+    /** 音声処理状態の変更を外部へ通知する処理。 */
+    private Consumer<SpeechStateChange> speechStateListener = change -> {
+    };
     /** STT タスクで発生し、次回の音声処理で表面化させる例外。 */
     private RuntimeException pendingTranscriptionFailure;
     /** 次回以降の STT 入力に使える先頭サンプル番号。重複セグメント検出後に前へ戻らない値として更新する。 */
     private long transcriptionStartFloorSampleIndex;
     /** 重複セグメント検出に使う直近の採用済み STT 結果。 */
     private TranscriptionReference previousTranscription;
+    /** Whisper の prompt に渡す直近の文字起こしテキスト。 */
+    private String transcriptionPrompt = "";
     /** 現在の発話区間を識別する番号。古い STT タスクの結果を捨てるために使う。 */
     private long speechSequenceId;
     /** 次に受信する PCM チャンクの先頭サンプル番号。 */
@@ -75,6 +87,8 @@ public class VadAudioProcessor {
     private long nextVadStartSampleIndex;
     /** 現在の音声処理状態。 */
     private SpeechState speechState = SpeechState.UNDETECTED;
+    /** スパイクが検出された際の開始サンプル番号。 */
+    private long spikeStartSampleIndex;
     /** 現在の発話区間の先頭サンプル番号。PRE_ROLL_SAMPLES を含む場合がある。 */
     private long speechStartSampleIndex;
     /** STT 用バッファへ蓄積済みの現在発話区間の終端サンプル番号。 */
@@ -85,46 +99,125 @@ public class VadAudioProcessor {
     private long lastTurnDetectionSampleIndex = Long.MIN_VALUE;
     /** 次に中間 STT を実行する発話内の終端サンプル番号。 */
     private long nextPartialTranscriptionEndSampleIndex = Long.MAX_VALUE;
-    /** 次に中間 STT を実行する発話内の先頭サンプル番号。 */
+    /** 次に結果として返す文字起こしの先頭サンプル番号。 */
     private long nextPartialTranscriptionStartSampleIndex;
+    /** 診断ログへ出力する接続情報。 */
+    private AudioDiagnostics.Context diagnosticsContext = AudioDiagnostics.Context.empty();
 
     /**
-     * VAD、ターン検出、STT の実装、STT 用 executor を受け取って音声処理器を作成する。
+     * ブラウザ VAD、ターン検出、STT の実装、STT 用 executor を受け取って音声処理器を作成する。
      *
-     * @param vad PCM フレームから発話確率を計算する実装
      * @param turnDetector 発話区間が会話ターンとして完了したかを判定する実装
      * @param speechToText 発話区間の PCM を文字起こしする実装
      * @param transcriptionExecutor STT を実行する executor。音声受信処理とは別タスクで実行する
      */
     public VadAudioProcessor(
-            VoiceActivityDetector vad,
             TurnDetector turnDetector,
             SpeechToText speechToText,
             Executor transcriptionExecutor) {
-        this.vad = Objects.requireNonNull(vad);
         this.turnDetector = Objects.requireNonNull(turnDetector);
         this.speechToText = Objects.requireNonNull(speechToText);
         this.transcriptionExecutor = Objects.requireNonNull(transcriptionExecutor);
     }
 
-    private void setState(long pos,SpeechState newState) {
+    private void setState(long pos, SpeechState newState) {
+        setState(pos, newState, Float.NaN);
+    }
+
+    private void setState(long pos, SpeechState newState, float vadProbability) {
         if (speechState != newState) {
-            long f = pos / 512;
-            float m = (float) pos / SAMPLE_RATE;
-            System.out.println(String.format("frame: %5d pos: %7.3f",f,m)+" state: " + speechState + " -> " + newState);
+            SpeechState previousState = speechState;
             speechState = newState;
+            AudioDiagnostics.log("vad-state-change", diagnosticsContext, AudioDiagnostics.fields(
+                    "speechSequenceId", speechSequenceId,
+                    "startSampleIndex", pos,
+                    "durationMs", sampleIndexToMillis(pos),
+                    "vadProbability", Float.isNaN(vadProbability) ? null : vadProbability,
+                    "stateFrom", previousState,
+                    "stateTo", newState));
+            speechStateListener.accept(new SpeechStateChange(
+                    previousState,
+                    newState,
+                    speechSequenceId,
+                    pos));
         }
     }
+
     /**
-     * PCM 16-bit little-endian のバイト列を受け取り、発話終了時に文字起こし結果を返す。
+     * 診断ログへ出力する接続情報を設定する。
+     *
+     * @param groupId チャットグループID
+     * @param sessionId セッションID
+     */
+    public synchronized void setDiagnosticsContext(String groupId, String sessionId) {
+        diagnosticsContext = AudioDiagnostics.context(groupId, sessionId);
+    }
+
+    /**
+     * 音声処理状態の変更通知を設定する。
+     *
+     * @param listener 状態変更を受け取る処理
+     */
+    public synchronized void setSpeechStateListener(Consumer<SpeechStateChange> listener) {
+        speechStateListener = listener == null ? change -> {
+        } : listener;
+    }
+
+    /**
+     * 指定サンプル番号より前の音声を今後の STT 対象から外す。
+     *
+     * @param sampleIndex STT 対象として許可する最小サンプル番号
+     */
+    public synchronized void ignoreTranscriptionBefore(long sampleIndex) {
+        transcriptionStartFloorSampleIndex = Math.max(transcriptionStartFloorSampleIndex, sampleIndex);
+    }
+
+    /**
+     * ブラウザ VAD 値なしの PCM 入力は受け付けない。
      *
      * @param bytes PCM 16-bit little-endian 形式の音声バイト列
-     * @return 発話区間が確定した場合は文字起こし結果。未確定の場合は Optional.empty()
+     * @return 常に例外を送出する
      */
     public synchronized Optional<Transcription> acceptPcm16Le(byte[] bytes) {
+        return acceptPcm16LeDetailed(bytes).map(TranscriptionResult::transcription);
+    }
+
+    /**
+     * ブラウザ VAD 値なしの PCM 入力は受け付けない。
+     *
+     * @param bytes PCM 16-bit little-endian 形式の音声バイト列
+     * @return 常に例外を送出する
+     */
+    public synchronized Optional<TranscriptionResult> acceptPcm16LeDetailed(byte[] bytes) {
+        throw new IllegalArgumentException("browser VAD bytes are required");
+    }
+
+    /**
+     * PCM 16-bit little-endian とブラウザ VAD のバイト列を受け取り、発話終了時に文字起こし結果を返す。
+     *
+     * @param bytes PCM 16-bit little-endian 形式の音声バイト列
+     * @param vadBytes 下位 7 bit に 0..100 の VAD 値、最上位 bit に再生フラグを持つバイト列
+     * @return 発話区間が確定した場合は文字起こし結果。未確定の場合は Optional.empty()
+     */
+    public synchronized Optional<Transcription> acceptPcm16LeWithVad(byte[] bytes, byte[] vadBytes) {
+        return acceptPcm16LeWithVadDetailed(bytes, vadBytes).map(TranscriptionResult::transcription);
+    }
+
+    /**
+     * PCM 16-bit little-endian とブラウザ VAD のバイト列を受け取り、発話終了時に文字起こし結果と種別を返す。
+     *
+     * @param bytes PCM 16-bit little-endian 形式の音声バイト列
+     * @param vadBytes 下位 7 bit に 0..100 の VAD 値、最上位 bit に再生フラグを持つバイト列
+     * @return 発話区間が確定した場合は文字起こし結果。未確定の場合は Optional.empty()
+     */
+    public synchronized Optional<TranscriptionResult> acceptPcm16LeWithVadDetailed(byte[] bytes, byte[] vadBytes) {
         short[] samples = Pcm16Le.decode(bytes);
         long chunkStartSampleIndex = nextSampleIndex;
         receiveBuffer.append(samples, chunkStartSampleIndex);
+        for (int i = 0; i < vadBytes.length; i++) {
+            int vadValue = Byte.toUnsignedInt(vadBytes[i]) & 0x7f;
+            receiveBuffer.putVadValue(chunkStartSampleIndex + (long) i * VAD_FRAME_SAMPLES, vadValue / 100.0f);
+        }
         nextSampleIndex += samples.length;
         return processAvailableWindows();
     }
@@ -156,7 +249,7 @@ public class VadAudioProcessor {
      *
      * @return この処理中に発話区間が確定した場合は最後の文字起こし結果。未確定の場合は Optional.empty()
      */
-    private Optional<Transcription> processAvailableWindows() {
+    private Optional<TranscriptionResult> processAvailableWindows() {
         long latestFrameStart = receiveBuffer.endSampleIndexExclusive() - VAD_FRAME_SAMPLES;
         while (nextVadStartSampleIndex <= latestFrameStart) {
             if (nextVadStartSampleIndex < receiveBuffer.startSampleIndex()) {
@@ -164,7 +257,10 @@ public class VadAudioProcessor {
                 continue;
             }
 
-            float probability = vad.speechProbability(receiveBuffer.floats(nextVadStartSampleIndex, VAD_FRAME_SAMPLES));
+            float probability = receiveBuffer.vadValue(nextVadStartSampleIndex);
+            if (Float.isNaN(probability)) {
+                break;
+            }
             receiveBuffer.putVadValue(nextVadStartSampleIndex, probability);
             updateSpeechState(nextVadStartSampleIndex, probability);
             nextVadStartSampleIndex += VAD_FRAME_SAMPLES;
@@ -175,9 +271,9 @@ public class VadAudioProcessor {
             throw failure;
         }
 
-        Transcription transcription = transcribeResults.pollFirst();
-        if (transcription != null) {
-            return Optional.of(transcription);
+        TranscriptionResult transcriptionResult = transcribeResults.pollFirst();
+        if (transcriptionResult != null) {
+            return Optional.of(transcriptionResult);
         }
         return Optional.empty();
     }
@@ -195,16 +291,19 @@ public class VadAudioProcessor {
             case UNDETECTED -> {
                 // 未検出状態で START_THRESHOLD 以上になったフレームを発話開始として扱う。
                 if (probability >= START_THRESHOLD) {
-                    setState( frameStartSampleIndex, SpeechState.DETECTED );
-                    startSpeech(frameStartSampleIndex, frameEndSampleIndex);
+                    setState(frameStartSampleIndex, SpeechState.SPIKE, probability);
+                    spikeStartSampleIndex = frameStartSampleIndex;
                 }
                 return;
             }
-            case TRANSCRIBING -> {
-                // START_THRESHOLD 以上になったら新しい発話区間として発話検出状態へ戻す。
-                if (probability >= START_THRESHOLD) {
-                    setState( frameStartSampleIndex, SpeechState.DETECTED );
-                    startSpeech(frameStartSampleIndex, frameEndSampleIndex);
+            case SPIKE -> {
+                if (probability > END_THRESHOLD) {
+                    if (frameStartSampleIndex - spikeStartSampleIndex >= SPIKE_SAMPLES) {
+                        setState(frameStartSampleIndex, SpeechState.DETECTED, probability);
+                        startSpeech(spikeStartSampleIndex, frameEndSampleIndex);
+                    }
+                } else {
+                    setState(frameStartSampleIndex, SpeechState.UNDETECTED, probability);
                 }
                 return;
             }
@@ -216,13 +315,13 @@ public class VadAudioProcessor {
                     maybeTranscribePartialSpeech(frameEndSampleIndex);
                     return;
                 }
-                setState( frameStartSampleIndex, SpeechState.TRAILING_SILENCE );
+                setState(frameStartSampleIndex, SpeechState.TRAILING_SILENCE, probability);
                 return;
             }
             case TRAILING_SILENCE -> {
                 // 後続無音状態で END_THRESHOLD を超えた場合は同じ発話区間として発話検出状態へ戻す。
                 if (probability > END_THRESHOLD) {
-                    setState( frameStartSampleIndex, SpeechState.DETECTED );
+                    setState(frameStartSampleIndex, SpeechState.DETECTED, probability);
                     lastSpeechSampleIndex = frameEndSampleIndex;
                     appendCurrentSpeechToSttBuffer(frameEndSampleIndex);
                     maybeTranscribePartialSpeech(frameEndSampleIndex);
@@ -245,16 +344,24 @@ public class VadAudioProcessor {
                 if (!sttBuffer.contains(speechStartSampleIndex, speechEndSampleIndex)) {
                     return;
                 }
-                setState( frameStartSampleIndex, SpeechState.TURN_DETECTING );
+                setState(frameStartSampleIndex, SpeechState.TURN_DETECTING, probability);
                 if (!detectTurn(speechEndSampleIndex)) {
-                    setState( frameStartSampleIndex, SpeechState.TRAILING_SILENCE );
+                    setState(frameStartSampleIndex, SpeechState.TRAILING_SILENCE, probability);
                     return;
                 }
-                setState( frameStartSampleIndex, SpeechState.TRANSCRIBING );
+                setState(frameStartSampleIndex, SpeechState.TRANSCRIBING, probability);
                 transcribeCompletedSpeech(speechEndSampleIndex);
                 return;
             }
             case TURN_DETECTING -> {
+                return;
+            }
+            case TRANSCRIBING -> {
+                // START_THRESHOLD 以上になったら新しい発話区間として発話検出状態へ戻す。
+                if (probability >= START_THRESHOLD) {
+                    setState(frameStartSampleIndex, SpeechState.DETECTED, probability);
+                    startSpeech(frameStartSampleIndex, frameEndSampleIndex);
+                }
                 return;
             }
         }
@@ -327,7 +434,11 @@ public class VadAudioProcessor {
                     transcriptionRangeStartSampleIndex(endSampleIndexExclusive));
             if (endSampleIndexExclusive > startSampleIndex
                     && sttBuffer.contains(startSampleIndex, endSampleIndexExclusive)) {
-                transcribeSpeech(speechSequenceId, startSampleIndex, endSampleIndexExclusive, TranscriptionKind.PARTIAL);
+                transcribeSpeech(
+                        speechSequenceId,
+                        startSampleIndex,
+                        endSampleIndexExclusive,
+                        TranscriptionKind.PARTIAL);
                 nextPartialTranscriptionStartSampleIndex = Math.max(
                         speechStartSampleIndex,
                         endSampleIndexExclusive - TRANSCRIPTION_OVERLAP_MARGIN_SAMPLES);
@@ -374,6 +485,21 @@ public class VadAudioProcessor {
             long endSampleIndexExclusive,
             TranscriptionKind kind) {
         AudioBuffer transcriptionAudio = copyTranscriptionAudio(transcriptionStartSampleIndex, endSampleIndexExclusive);
+        float rms = rms(transcriptionAudio, transcriptionStartSampleIndex, endSampleIndexExclusive);
+        boolean suppressPrompt = shouldSuppressPrompt(
+                endSampleIndexExclusive - transcriptionStartSampleIndex,
+                rms);
+        String prompt = suppressPrompt ? "" : transcriptionPrompt;
+        AudioDiagnostics.log("stt-queued", diagnosticsContext, AudioDiagnostics.fields(
+                "speechSequenceId", transcriptionSpeechSequenceId,
+                "kind", kind,
+                "startSampleIndex", transcriptionStartSampleIndex,
+                "endSampleIndexExclusive", endSampleIndexExclusive,
+                "durationMs", samplesToMillis(endSampleIndexExclusive - transcriptionStartSampleIndex),
+                "pcmBytes", (endSampleIndexExclusive - transcriptionStartSampleIndex) * Short.BYTES,
+                "rms", rms,
+                "promptSuppressed", suppressPrompt,
+                "promptChars", prompt.length()));
         synchronized (transcriptionTaskLock) {
             transcriptionTaskTail = transcriptionTaskTail.handle((ignored, error) -> null)
                     .thenRunAsync(
@@ -382,6 +508,7 @@ public class VadAudioProcessor {
                                     transcriptionAudio,
                                     transcriptionStartSampleIndex,
                                     endSampleIndexExclusive,
+                                    prompt,
                                     kind),
                             transcriptionExecutor);
         }
@@ -395,13 +522,32 @@ public class VadAudioProcessor {
             AudioBuffer transcriptionAudio,
             long startSampleIndex,
             long endSampleIndexExclusive,
+            String prompt,
             TranscriptionKind kind) {
         try {
-            System.out.println("transcribeAsync: startSampleIndex=" + startSampleIndex + " endSampleIndexExclusive=" + endSampleIndexExclusive);
+            AudioDiagnostics.SavedAudioFiles savedAudioFiles = AudioDiagnostics.saveWav(
+                            diagnosticsContext,
+                            transcriptionSpeechSequenceId,
+                            kind.name(),
+                            startSampleIndex,
+                            endSampleIndexExclusive,
+                            transcriptionAudio)
+                    .orElse(null);
+            AudioDiagnostics.log("stt-start", diagnosticsContext, AudioDiagnostics.fields(
+                    "speechSequenceId", transcriptionSpeechSequenceId,
+                    "kind", kind,
+                    "startSampleIndex", startSampleIndex,
+                    "endSampleIndexExclusive", endSampleIndexExclusive,
+                    "durationMs", samplesToMillis(endSampleIndexExclusive - startSampleIndex),
+                    "pcmBytes", (endSampleIndexExclusive - startSampleIndex) * Short.BYTES,
+                    "promptChars", prompt.length(),
+                    "wavPath", savedAudioFiles == null ? null : savedAudioFiles.wavPath().toString(),
+                    "vadPath", savedAudioFiles == null ? null : savedAudioFiles.vadPath().toString()));
             Transcription transcription = speechToText.transcribeWithSegments(
                     transcriptionAudio,
                     startSampleIndex,
-                    endSampleIndexExclusive);
+                    endSampleIndexExclusive,
+                    prompt);
             String text = transcription.text();
             synchronized (this) {
                 boolean matchesCurrentSpeech = this.speechSequenceId == transcriptionSpeechSequenceId;
@@ -412,12 +558,32 @@ public class VadAudioProcessor {
                                 endSampleIndexExclusive,
                                 transcription,
                                 kind == TranscriptionKind.PARTIAL && matchesCurrentSpeech);
+                        AudioDiagnostics.log("stt-result", diagnosticsContext, AudioDiagnostics.fields(
+                                "speechSequenceId", transcriptionSpeechSequenceId,
+                                "kind", kind,
+                                "startSampleIndex", startSampleIndex,
+                                "endSampleIndexExclusive", endSampleIndexExclusive,
+                                "durationMs", samplesToMillis(endSampleIndexExclusive - startSampleIndex),
+                                "textChars", text.length(),
+                                "text", text));
                         if (matchesCurrentSpeech) {
-                            System.out.println("transcribeAsync: transcription result for startSampleIndex=" + startSampleIndex + " endSampleIndexExclusive=" + endSampleIndexExclusive + " text=" + text);
-                            transcribeResults.addLast(transcription);
+                            transcribeResults.addLast(new TranscriptionResult(
+                                    transcriptionSpeechSequenceId,
+                                    startSampleIndex,
+                                    endSampleIndexExclusive,
+                                    kind,
+                                    transcription));
+                            appendTranscriptionPrompt(text);
                         }
                     } else {
-                        System.out.println("transcribeAsync: empty transcription result for startSampleIndex=" + startSampleIndex + " endSampleIndexExclusive=" + endSampleIndexExclusive);
+                        AudioDiagnostics.log("stt-empty-result", diagnosticsContext, AudioDiagnostics.fields(
+                                "speechSequenceId", transcriptionSpeechSequenceId,
+                                "kind", kind,
+                                "startSampleIndex", startSampleIndex,
+                                "endSampleIndexExclusive", endSampleIndexExclusive,
+                                "durationMs", samplesToMillis(endSampleIndexExclusive - startSampleIndex),
+                                "textChars", 0,
+                                "text", ""));
                     }
                 }
                 if (kind == TranscriptionKind.FINAL && speechState == SpeechState.TRANSCRIBING && matchesCurrentSpeech) {
@@ -425,6 +591,14 @@ public class VadAudioProcessor {
                 }
             }
         } catch (RuntimeException e) {
+            AudioDiagnostics.log("stt-error", diagnosticsContext, AudioDiagnostics.fields(
+                    "speechSequenceId", transcriptionSpeechSequenceId,
+                    "kind", kind,
+                    "startSampleIndex", startSampleIndex,
+                    "endSampleIndexExclusive", endSampleIndexExclusive,
+                    "durationMs", samplesToMillis(endSampleIndexExclusive - startSampleIndex),
+                    "errorClass", e.getClass().getName(),
+                    "errorMessage", e.getMessage()));
             synchronized (this) {
                 if (this.speechSequenceId == transcriptionSpeechSequenceId && pendingTranscriptionFailure == null) {
                     pendingTranscriptionFailure = e;
@@ -439,6 +613,23 @@ public class VadAudioProcessor {
                 }
             }
         }
+    }
+
+    private static boolean shouldSuppressPrompt(long sampleCount, float rms) {
+        return sampleCount < SHORT_AUDIO_PROMPT_SUPPRESSION_SAMPLES
+                && rms < LOW_RMS_PROMPT_SUPPRESSION_THRESHOLD;
+    }
+
+    private static float rms(AudioBuffer audioBuffer, long startSampleIndex, long endSampleIndexExclusive) {
+        if (endSampleIndexExclusive <= startSampleIndex) {
+            return 0.0f;
+        }
+        double squareSum = 0.0;
+        for (long sampleIndex = startSampleIndex; sampleIndex < endSampleIndexExclusive; sampleIndex++) {
+            double sample = audioBuffer.sampleAt(sampleIndex) / 32768.0;
+            squareSum += sample * sample;
+        }
+        return (float) Math.sqrt(squareSum / (endSampleIndexExclusive - startSampleIndex));
     }
 
     /**
@@ -466,6 +657,17 @@ public class VadAudioProcessor {
                     });
         }
         previousTranscription = current;
+    }
+
+    /**
+     * Whisper の prompt 用に直近テキストだけを保持する。
+     */
+    private void appendTranscriptionPrompt(String text) {
+        transcriptionPrompt = (transcriptionPrompt + "\n" + text).trim();
+        if (transcriptionPrompt.length() > TRANSCRIPTION_PROMPT_MAX_CHARS) {
+            transcriptionPrompt = transcriptionPrompt.substring(
+                    transcriptionPrompt.length() - TRANSCRIPTION_PROMPT_MAX_CHARS);
+        }
     }
 
     /**
@@ -517,6 +719,14 @@ public class VadAudioProcessor {
         return duration.toNanos() * SAMPLE_RATE / 1_000_000_000L;
     }
 
+    private static long samplesToMillis(long samples) {
+        return samples * 1_000L / SAMPLE_RATE;
+    }
+
+    private static long sampleIndexToMillis(long sampleIndex) {
+        return samplesToMillis(sampleIndex);
+    }
+
     private static String normalizeSegmentText(String text) {
         StringBuilder normalized = new StringBuilder(text.length());
         for (int offset = 0; offset < text.length();) {
@@ -566,9 +776,41 @@ public class VadAudioProcessor {
     private record SegmentOverlap(long currentEndSampleIndex) {
     }
 
-    private enum TranscriptionKind {
+    public enum TranscriptionKind {
         PARTIAL,
         FINAL
+    }
+
+    /**
+     * STT 結果と、その結果がどの発話・範囲・種別から得られたかを表す。
+     *
+     * @param speechSequenceId 発話区間ID
+     * @param startSampleIndex STT対象の先頭サンプル番号
+     * @param endSampleIndexExclusive STT対象の終端サンプル番号。この番号のサンプルは含まない
+     * @param kind 中間結果か最終結果か
+     * @param transcription STT結果
+     */
+    public record TranscriptionResult(
+            long speechSequenceId,
+            long startSampleIndex,
+            long endSampleIndexExclusive,
+            TranscriptionKind kind,
+            Transcription transcription) {
+    }
+
+    /**
+     * VAD フレーム処理から STT 完了までの音声処理状態変更。
+     *
+     * @param previousState 変更前の状態
+     * @param currentState 変更後の状態
+     * @param speechSequenceId 発話区間ID
+     * @param sampleIndex 状態変更が発生したサンプル番号
+     */
+    public record SpeechStateChange(
+            SpeechState previousState,
+            SpeechState currentState,
+            long speechSequenceId,
+            long sampleIndex) {
     }
 
     /**
@@ -588,9 +830,11 @@ public class VadAudioProcessor {
     /**
      * VAD フレーム処理から STT 完了までの音声処理状態。
      */
-    private enum SpeechState {
+    public enum SpeechState {
         /** 発話を検出していない状態。 */
         UNDETECTED,
+        /** START_THRESHOLD 以上のフレームを検出し、発話確定に必要な継続時間を確認している状態。 */
+        SPIKE,
         /** 発話を検出し、END_THRESHOLD を超えるフレームが続いている状態。 */
         DETECTED,
         /** 発話後に END_THRESHOLD 以下のフレームが続き、終了判定待ちの状態。 */

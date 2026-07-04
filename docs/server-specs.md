@@ -80,6 +80,7 @@ The client ID is currently derived from the `sessionId` query parameter.
 Responsibilities:
 
 - Hold the outbound event queue for its SSE connection.
+- Keep the latest 20 user/assistant messages as LLM conversation history.
 - Receive events from the `ChatGroup`.
 - Handle incoming `ChatRequest`.
 - Send resulting events to its `ChatGroup`.
@@ -135,6 +136,10 @@ Current event types:
 ```text
 system
 message
+message-delta
+audio-delta
+audio-control
+message-done
 ```
 
 ### `POST /chat/request`
@@ -184,7 +189,8 @@ Supported request content handling:
 ```text
 text/*            Treated as text.
 application/json  Treated as text.
-audio/pcm         Treated as a PCM16LE 16kHz mono audio chunk when rate=16000, channels=1, format=s16le.
+audio/pcm         Rejected for audio processing because browser VAD bytes are required.
+audio/pcm-vad     Treated as a PCM16LE 16kHz mono audio chunk with browser VAD bytes.
 other             Treated as binary.
 ```
 
@@ -196,11 +202,23 @@ audio  -> queued for the per-client audio buffer and VAD processor.
 binary -> received binary chunk: N bytes (...)
 ```
 
-Audio requests must use:
+Audio requests must use browser VAD bytes:
 
 ```http
-Content-Type: audio/pcm; rate=16000; channels=1; format=s16le
+Content-Type: audio/pcm-vad; rate=16000; channels=1; format=s16le; vad-frame-samples=256
+X-Client-Mic-Start-Sample: 0
+X-Client-Mic-End-Sample: 3200
 ```
+
+ブラウザクライアントは 16 kHz へ変換したマイクPCMの累積サンプル番号を上記ヘッダに入れます。
+サーバはこのサンプル範囲と AI 音声再生区間を照合し、該当PCMを VAD/STT へ渡す前に 0 で埋めます。
+
+`audio/pcm-vad` の body は、32 byte header、PCM16LE、VAD byte array の順です。
+header は little-endian で、`magic=MVAD`、`version=1`、`flags=0`、`sampleRate=16000`、`channels=1`、
+`pcmFormat=1`、`pcmSampleCount`、`vadFrameSamples=256`、`vadByteCount`、`reserved=0` を保持します。
+VAD byte は下位 7 bit に `0..100` の整数値を保持し、最上位 bit `0x80` はブラウザ側で AI 音声の
+`currentPlayback` または `pausedPlayback` が存在する間に `1` にします。
+サーバは VAD byte の下位 7 bit を発話判定に使い、サーバ側では VAD 確率を再計算しません。
 
 Each `ChatClient` keeps a 6 second receive buffer and a 30 second STT buffer.
 Audio requests return `202 Accepted` after the chunk is queued.
@@ -208,31 +226,77 @@ PCM decoding and VAD run asynchronously in request order for each `ChatClient`.
 STT runs on a separate asynchronous task after a speech turn is confirmed, so later audio chunks can continue PCM decoding and VAD while transcription is still running.
 STT tasks are queued in speech-confirmation order for each `VadAudioProcessor`.
 Async audio processing failures are sent to connected clients as SSE `system` events.
-The receive buffer stores PCM samples and VAD values in 512 sample units.
-VAD runs once per 512 samples, which is 32 ms at 16 kHz.
-The Silero ONNX model receives 512 audio samples plus 64 samples of context.
+The receive buffer stores PCM samples and browser VAD values in 256 sample units.
+Browser VAD values are applied once per 256 samples, which is 16 ms at 16 kHz.
 
-Speech starts when the VAD value is at least `0.5`.
+Speech spike detection starts when the VAD value is at least `0.5`.
+Speech starts when the VAD value then stays above `0.35` for at least 1,600 samples, which is 100 ms at 16 kHz.
 When speech starts, the target range includes the previous 0.6 seconds of audio.
 Speech ends when the VAD value stays at or below `0.35` for 0.6 seconds.
 On speech end, the speech range is appended to the STT buffer using PCM sample indexes so overlapping ranges are not duplicated.
-The current STT implementation is a dummy implementation and emits:
+STT の結果が空文字でない場合、サーバは OpenAI Responses API 互換エンドポイントへ `stream:true` で送信し、LLM の応答差分を `message-delta` イベントとして配信します。
+LLM 応答差分は、以下の条件で TTS へ送信する単位に分割します。
+
+- 句読点: `。`、`、`、`，`、`,`、`.`、`！`、`!`、`？`、`?`、`；`、`;`、`：`、`:`
+- 空白: `Character.isWhitespace(c)` が `true` の文字
+- 最大長: 80 文字
+
+TTS の音声差分は `audio-delta` イベントとして配信します。
+`audio-delta` の payload には `assistantTurnId` を含めます。クライアントは現在の再生対象より古い
+`assistantTurnId`、またはキャンセル済みの `assistantTurnId` を持つ音声差分を破棄します。
+
+VAD がユーザー発話を検出した場合、サーバは `audio-control` イベントを配信します。payload は
+`action`、`assistantTurnId`、`interruptionId`、`speechSequenceId`、`reason` を含みます。
 
 ```text
-dummy stt result
+pause   VAD が発話を検出したため、対象の AI 音声再生を一時停止する。
+resume  非空の STT 結果が出ないまま発話処理が終わったため、同じ AI 音声再生を再開する。
+cancel  非空の STT 結果が出たため、対象の AI 音声再生と古い応答出力を破棄する。
+```
+AI 音声の出力遅延やマイク入力への残響を考慮し、AI 応答ターンが存在する状態で VAD が発話を検出した場合、
+サーバは検出サンプル番号から 12,000 サンプル後までを STT 対象外にします。12,000 サンプルは 16 kHz で 750 ms です。
+ブラウザは AI 音声の再生開始、停止、再開、終了、キャンセルを `/chat/playback` へ通知します。
+サーバは通知された再生区間と停止後 12,000 サンプルを EchoMask として保持します。
+再生中の開いた区間も、音声チャンク受信時点で EchoMask と同じ扱いで無音化します。
+
+```http
+POST /chat/playback?group=group-1&sessionId=user-a
+Content-Type: application/json; charset=utf-8
+
+{"assistantTurnId":1,"state":"start","clientMicSampleIndex":16000}
 ```
 
-Silero VAD uses an ONNX model at:
+`state` は `start`、`resume`、`pause`、`stop`、`end`、`cancel` を受け付けます。
+ブラウザは `echoCancellation:true` と `noiseSuppression:true` を有効にし、AI 音声再生中に TEN VAD 値が
+50 以上の状態が 3 フレーム、つまり 48 ms 続いたらローカルで再生を一時停止します。
+一時停止中は TEN VAD 値が 35 未満の状態が 8 フレーム、つまり 128 ms 続いたらローカルで再開します。
+`audio-delta` の `message` は JSON 文字列で、`data` は base64、`format` は `pcm`、`sampleRate` は通常 `24000` です。
+LLM 応答と TTS 処理が終了したら `message-done` イベントを配信します。
+デフォルトでは LM Studio のローカルエンドポイントを使います。
 
 ```text
-models/silero-vad.onnx
+LMSTUDIO_BASE_URL=http://localhost:1234/v1
+LLM_MODEL=gemma[-_]?4[-]?e2b
+LLM_SYSTEM_PROMPT=あなたは日本語で簡潔に応答するアシスタントです。
+LLM_TIMEOUT_SECONDS=120
 ```
 
-If the model file does not exist or is 0 bytes, the server downloads it during the first audio request.
-The model can also be downloaded explicitly before sending audio:
+`LLM_MODEL` は Java の正規表現として扱います。
+サーバは `GET /v1/models` でモデル一覧を取得し、モデル ID に対して `Pattern.matcher(modelId).find()` が真になる最初のモデルを `POST /v1/responses` の `model` に指定します。
+テキスト入力と STT 結果は、同じ `ChatClient` の直近 20 件の user/assistant 履歴と一緒に `POST /v1/responses` へ送信します。
 
-```bash
-mvn -q -DskipTests compile exec:java -Dexec.mainClass=model.download.SileroVadModelDownloader
+LFM2.5 Audio の STT/TTS は、デフォルトで `llama-liquid-audio-server` の OpenAI Chat Completions 互換エンドポイントを使います。
+
+```text
+LFM2_AUDIO_STT_URL=http://localhost:8766/v1/chat/completions
+LFM2_AUDIO_STT_MODEL=lfm2-audio
+LFM2_AUDIO_STT_SYSTEM_PROMPT=Perform ASR in japanese.
+LFM2_AUDIO_STT_TIMEOUT_SECONDS=120
+
+LFM2_AUDIO_TTS_URL=http://localhost:8766/v1/chat/completions
+LFM2_AUDIO_TTS_MODEL=lfm2-audio
+LFM2_AUDIO_TTS_SYSTEM_PROMPT=Perform TTS.
+LFM2_AUDIO_TTS_TIMEOUT_SECONDS=120
 ```
 
 ## Message Flow
@@ -259,7 +323,6 @@ This keeps `ChatGroup` as the room and `ChatClient` as the participant.
 - Authentication is not implemented.
 - `sessionId` collision handling is not defined.
 - Reconnecting with the same `sessionId` replaces the client in `ChatGroup`.
-- Chat history is not stored.
-- Audio chunks are decoded as PCM16LE and passed through VAD/STT, but full LLM voice interaction is not implemented.
-- LLM integration is not implemented.
+- Chat history is kept in memory per `ChatClient` and is lost when that client disconnects.
+- Audio chunks are decoded as PCM16LE and passed through VAD/STT/LLM/TTS.
 - Error response schema is not yet centralized.

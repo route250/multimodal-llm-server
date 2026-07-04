@@ -6,8 +6,15 @@ import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import audio.AudioBuffer;
+import audio.AudioDiagnostics;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -15,44 +22,39 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import stt.SpeechToText;
-import vad.silero.VoiceActivityDetector;
+import stt.TranscriptSegment;
+import stt.Transcription;
 
 class VadAudioProcessorTest {
     @Test
     void trailingSilenceReturnsToDetectedWhenSpeechResumes() {
         ExecutorService transcriptionExecutor = Executors.newSingleThreadExecutor();
         try {
-        SequenceVad vad = new SequenceVad();
         RecordingSpeechToText speechToText = new RecordingSpeechToText("hello");
-        VadAudioProcessor processor = new VadAudioProcessor(vad, samples -> true, speechToText, transcriptionExecutor);
+        VadAudioProcessor processor = new VadAudioProcessor(samples -> true, speechToText, transcriptionExecutor);
 
-        vad.add(0.6f);
-        assertTrue(processor.acceptPcm16Le(frameBytes()).isEmpty());
+        assertTrue(acceptSpeechStart(processor).isEmpty());
 
         for (int i = 0; i < 5; i++) {
-            vad.add(0.0f);
-            assertTrue(processor.acceptPcm16Le(frameBytes()).isEmpty());
+            assertTrue(acceptFrame(processor, 0).isEmpty());
         }
 
-        vad.add(0.6f);
-        assertTrue(processor.acceptPcm16Le(frameBytes()).isEmpty());
+        assertTrue(acceptSpeechStart(processor).isEmpty());
 
-        Optional<String> transcript = Optional.empty();
-        for (int i = 0; i < 19; i++) {
-            vad.add(0.0f);
-            transcript = processor.acceptPcm16Le(frameBytes());
+        Optional<Transcription> transcript = Optional.empty();
+        for (int i = 0; i < silenceFramesForTurnDetection(); i++) {
+            transcript = acceptFrame(processor, 0);
         }
 
         assertTrue(transcript.isEmpty());
         assertTrue(speechToText.completed.await(1, TimeUnit.SECONDS));
 
-        vad.add(0.0f);
-        transcript = processor.acceptPcm16Le(frameBytes());
+        transcript = acceptUntilTranscript(processor);
 
-        assertEquals(Optional.of("hello"), transcript);
+        assertTranscriptText("hello", transcript);
         assertEquals(1, speechToText.calls);
         assertEquals(0, speechToText.startSampleIndex);
-        assertEquals(26L * VadAudioProcessor.VAD_FRAME_SAMPLES, speechToText.endSampleIndexExclusive);
+        assertEquals(71L * VadAudioProcessor.VAD_FRAME_SAMPLES, speechToText.endSampleIndexExclusive);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new AssertionError(e);
@@ -65,36 +67,30 @@ class VadAudioProcessorTest {
     void turnDetectionRepeatsAfterIntervalUntilComplete() {
         ExecutorService transcriptionExecutor = Executors.newSingleThreadExecutor();
         try {
-        SequenceVad vad = new SequenceVad();
         SequenceTurnDetector turnDetector = new SequenceTurnDetector();
         RecordingSpeechToText speechToText = new RecordingSpeechToText("hello");
-        VadAudioProcessor processor = new VadAudioProcessor(vad, turnDetector, speechToText, transcriptionExecutor);
+        VadAudioProcessor processor = new VadAudioProcessor(turnDetector, speechToText, transcriptionExecutor);
 
-        vad.add(0.6f);
-        assertTrue(processor.acceptPcm16Le(frameBytes()).isEmpty());
+        assertTrue(acceptSpeechStart(processor).isEmpty());
 
         turnDetector.add(false);
-        for (int i = 0; i < 19; i++) {
-            vad.add(0.0f);
-            assertTrue(processor.acceptPcm16Le(frameBytes()).isEmpty());
+        for (int i = 0; i < silenceFramesForTurnDetection(); i++) {
+            assertTrue(acceptFrame(processor, 0).isEmpty());
         }
         assertEquals(1, turnDetector.calls);
         assertEquals(0, speechToText.calls);
 
-        for (int i = 0; i < 18; i++) {
-            vad.add(0.0f);
-            assertTrue(processor.acceptPcm16Le(frameBytes()).isEmpty());
+        for (int i = 0; i < silenceFramesForTurnDetection() - 1; i++) {
+            assertTrue(acceptFrame(processor, 0).isEmpty());
         }
         assertEquals(1, turnDetector.calls);
         assertEquals(0, speechToText.calls);
 
-        vad.add(0.0f);
         turnDetector.add(true);
-        assertTrue(processor.acceptPcm16Le(frameBytes()).isEmpty());
+        assertTrue(acceptFrame(processor, 0).isEmpty());
         assertTrue(speechToText.completed.await(1, TimeUnit.SECONDS));
 
-        vad.add(0.0f);
-        assertEquals(Optional.of("hello"), processor.acceptPcm16Le(frameBytes()));
+        assertTranscriptText("hello", acceptUntilTranscript(processor));
         assertEquals(2, turnDetector.calls);
         assertEquals(1, speechToText.calls);
         } catch (InterruptedException e) {
@@ -109,31 +105,25 @@ class VadAudioProcessorTest {
     void asynchronousTranscriptionDoesNotBlockLaterAudioFrames() throws Exception {
         ExecutorService transcriptionExecutor = Executors.newSingleThreadExecutor();
         try {
-            SequenceVad vad = new SequenceVad();
             BlockingSpeechToText speechToText = new BlockingSpeechToText("hello");
             VadAudioProcessor processor = new VadAudioProcessor(
-                    vad,
                     samples -> true,
                     speechToText,
                     transcriptionExecutor);
 
-            vad.add(0.6f);
-            assertTrue(processor.acceptPcm16Le(frameBytes()).isEmpty());
+            assertTrue(acceptSpeechStart(processor).isEmpty());
 
-            for (int i = 0; i < 19; i++) {
-                vad.add(0.0f);
+            for (int i = 0; i < silenceFramesForTurnDetection(); i++) {
                 assertTimeoutPreemptively(
                         Duration.ofMillis(200),
-                        () -> assertTrue(processor.acceptPcm16Le(frameBytes()).isEmpty()));
+                        () -> assertTrue(acceptFrame(processor, 0).isEmpty()));
             }
 
             assertTrue(speechToText.started.await(1, TimeUnit.SECONDS));
 
-            vad.add(0.6f);
             assertTimeoutPreemptively(
                     Duration.ofMillis(200),
-                    () -> assertTrue(processor.acceptPcm16Le(frameBytes()).isEmpty()));
-            assertEquals(21, vad.calls);
+                    () -> assertTrue(acceptFrame(processor, 60).isEmpty()));
 
             speechToText.release();
         } finally {
@@ -145,27 +135,22 @@ class VadAudioProcessorTest {
     void asynchronousTranscriptionResultIsReturnedByNextAccept() throws Exception {
         ExecutorService transcriptionExecutor = Executors.newSingleThreadExecutor();
         try {
-            SequenceVad vad = new SequenceVad();
             BlockingSpeechToText speechToText = new BlockingSpeechToText("hello");
             VadAudioProcessor processor = new VadAudioProcessor(
-                    vad,
                     samples -> true,
                     speechToText,
                     transcriptionExecutor);
 
-            vad.add(0.6f);
-            assertTrue(processor.acceptPcm16Le(frameBytes()).isEmpty());
-            for (int i = 0; i < 19; i++) {
-                vad.add(0.0f);
-                assertTrue(processor.acceptPcm16Le(frameBytes()).isEmpty());
+            assertTrue(acceptSpeechStart(processor).isEmpty());
+            for (int i = 0; i < silenceFramesForTurnDetection(); i++) {
+                assertTrue(acceptFrame(processor, 0).isEmpty());
             }
 
             assertTrue(speechToText.started.await(1, TimeUnit.SECONDS));
             speechToText.release();
             assertTrue(speechToText.completed.await(1, TimeUnit.SECONDS));
 
-            vad.add(0.0f);
-            assertEquals(Optional.of("hello"), processor.acceptPcm16Le(frameBytes()));
+            assertTranscriptText("hello", acceptFrame(processor, 0));
         } finally {
             transcriptionExecutor.shutdownNow();
         }
@@ -175,24 +160,19 @@ class VadAudioProcessorTest {
     void asynchronousTranscriptionFailureIsThrownByNextAccept() throws Exception {
         ExecutorService transcriptionExecutor = Executors.newSingleThreadExecutor();
         try {
-            SequenceVad vad = new SequenceVad();
             FailingSpeechToText speechToText = new FailingSpeechToText();
             VadAudioProcessor processor = new VadAudioProcessor(
-                    vad,
                     samples -> true,
                     speechToText,
                     transcriptionExecutor);
 
-            vad.add(0.6f);
-            assertTrue(processor.acceptPcm16Le(frameBytes()).isEmpty());
-            for (int i = 0; i < 19; i++) {
-                vad.add(0.0f);
-                assertTrue(processor.acceptPcm16Le(frameBytes()).isEmpty());
+            assertTrue(acceptSpeechStart(processor).isEmpty());
+            for (int i = 0; i < silenceFramesForTurnDetection(); i++) {
+                assertTrue(acceptFrame(processor, 0).isEmpty());
             }
 
             assertTrue(speechToText.completed.await(1, TimeUnit.SECONDS));
-            vad.add(0.0f);
-            RuntimeException failure = assertThrows(RuntimeException.class, () -> processor.acceptPcm16Le(frameBytes()));
+            RuntimeException failure = assertThrows(RuntimeException.class, () -> acceptUntilFailure(processor));
             assertEquals("stt failed", failure.getMessage());
         } finally {
             transcriptionExecutor.shutdownNow();
@@ -203,30 +183,24 @@ class VadAudioProcessorTest {
     void staleTranscriptionResultIsDiscardedWhenNewSpeechUpdatesLastSpeechSampleIndex() throws Exception {
         ExecutorService transcriptionExecutor = Executors.newSingleThreadExecutor();
         try {
-            SequenceVad vad = new SequenceVad();
             BlockingSpeechToText speechToText = new BlockingSpeechToText("stale");
             VadAudioProcessor processor = new VadAudioProcessor(
-                    vad,
                     samples -> true,
                     speechToText,
                     transcriptionExecutor);
 
-            vad.add(0.6f);
-            assertTrue(processor.acceptPcm16Le(frameBytes()).isEmpty());
-            for (int i = 0; i < 19; i++) {
-                vad.add(0.0f);
-                assertTrue(processor.acceptPcm16Le(frameBytes()).isEmpty());
+            assertTrue(acceptSpeechStart(processor).isEmpty());
+            for (int i = 0; i < silenceFramesForTurnDetection(); i++) {
+                assertTrue(acceptFrame(processor, 0).isEmpty());
             }
             assertTrue(speechToText.started.await(1, TimeUnit.SECONDS));
 
-            vad.add(0.6f);
-            assertTrue(processor.acceptPcm16Le(frameBytes()).isEmpty());
+            assertTrue(acceptSpeechStart(processor).isEmpty());
 
             speechToText.release();
             assertTrue(speechToText.completed.await(1, TimeUnit.SECONDS));
 
-            vad.add(0.0f);
-            assertTrue(processor.acceptPcm16Le(frameBytes()).isEmpty());
+            assertTrue(acceptFrame(processor, 0).isEmpty());
         } finally {
             transcriptionExecutor.shutdownNow();
         }
@@ -236,52 +210,230 @@ class VadAudioProcessorTest {
     void staleTranscriptionFailureIsDiscardedWhenNewSpeechUpdatesLastSpeechSampleIndex() throws Exception {
         ExecutorService transcriptionExecutor = Executors.newSingleThreadExecutor();
         try {
-            SequenceVad vad = new SequenceVad();
             DelayedFailingSpeechToText speechToText = new DelayedFailingSpeechToText();
             VadAudioProcessor processor = new VadAudioProcessor(
-                    vad,
                     samples -> true,
                     speechToText,
                     transcriptionExecutor);
 
-            vad.add(0.6f);
-            assertTrue(processor.acceptPcm16Le(frameBytes()).isEmpty());
-            for (int i = 0; i < 19; i++) {
-                vad.add(0.0f);
-                assertTrue(processor.acceptPcm16Le(frameBytes()).isEmpty());
+            assertTrue(acceptSpeechStart(processor).isEmpty());
+            for (int i = 0; i < silenceFramesForTurnDetection(); i++) {
+                assertTrue(acceptFrame(processor, 0).isEmpty());
             }
             assertTrue(speechToText.started.await(1, TimeUnit.SECONDS));
 
-            vad.add(0.6f);
-            assertTrue(processor.acceptPcm16Le(frameBytes()).isEmpty());
+            assertTrue(acceptSpeechStart(processor).isEmpty());
 
             speechToText.release();
             assertTrue(speechToText.completed.await(1, TimeUnit.SECONDS));
 
-            vad.add(0.0f);
-            assertTrue(processor.acceptPcm16Le(frameBytes()).isEmpty());
+            assertTrue(acceptFrame(processor, 0).isEmpty());
         } finally {
             transcriptionExecutor.shutdownNow();
         }
+    }
+
+    @Test
+    void matchingLeadingSegmentUpdatesNextTranscriptionStart() {
+        QueuedSegmentSpeechToText speechToText = new QueuedSegmentSpeechToText();
+        speechToText.add(segmentTranscription("overlap12", Duration.ofSeconds(1)));
+        speechToText.add(segmentTranscription("overlap12", Duration.ofSeconds(1)));
+        speechToText.add(segmentTranscription("next", Duration.ofMillis(500)));
+        VadAudioProcessor processor = new VadAudioProcessor(samples -> true, speechToText, Runnable::run);
+
+        acceptCompleteSpeech(processor);
+        acceptCompleteSpeech(processor);
+        acceptCompleteSpeech(processor);
+
+        assertEquals(List.of(0L, 3_712L, 18_112L), speechToText.startSampleIndexes);
+    }
+
+    @Test
+    void detectedSpeechLongerThanPartialIntervalStartsPartialTranscription() {
+        QueuedSegmentSpeechToText speechToText = new QueuedSegmentSpeechToText();
+        speechToText.add(segmentTranscription("partial", Duration.ofMillis(4_800)));
+        speechToText.add(segmentTranscription("final", Duration.ofMillis(700)));
+        VadAudioProcessor processor = new VadAudioProcessor(samples -> true, speechToText, Runnable::run);
+
+        assertTrue(acceptSpeechStart(processor).isEmpty());
+        for (int i = speechStartFrames(); i < 300; i++) {
+            acceptFrame(processor, 60);
+        }
+
+        assertEquals(List.of(0L), speechToText.startSampleIndexes);
+        assertEquals(List.of(76_800L), speechToText.endSampleIndexes);
+
+        Optional<Transcription> transcript = Optional.empty();
+        for (int i = 0; i < silenceFramesForTurnDetection(); i++) {
+            transcript = acceptFrame(processor, 0);
+        }
+
+        assertTranscriptText("final", transcript);
+        assertEquals(List.of(0L, 75_200L), speechToText.startSampleIndexes);
+    }
+
+    @Test
+    void detectedSpeechQueuesPartialTranscriptionsEveryInterval() {
+        QueuedSegmentSpeechToText speechToText = new QueuedSegmentSpeechToText();
+        speechToText.add(segmentTranscription("partial1", Duration.ofMillis(4_800)));
+        speechToText.add(segmentTranscription("partial2", Duration.ofMillis(4_800)));
+        speechToText.add(segmentTranscription("final", Duration.ofMillis(700)));
+        VadAudioProcessor processor = new VadAudioProcessor(samples -> true, speechToText, Runnable::run);
+
+        acceptSpeechStart(processor);
+        for (int i = speechStartFrames(); i < 600; i++) {
+            acceptFrame(processor, 60);
+        }
+        for (int i = 0; i < silenceFramesForTurnDetection(); i++) {
+            acceptFrame(processor, 0);
+        }
+
+        assertEquals(List.of(0L, 75_200L, 152_000L), speechToText.startSampleIndexes);
+        assertEquals(List.of(76_800L, 153_600L, 163_328L), speechToText.endSampleIndexes);
+    }
+
+    @Test
+    void sttInputWavAndVadCsvAreSavedBeforeTranscription() throws Exception {
+        RecordingSpeechToText speechToText = new RecordingSpeechToText("hello");
+        VadAudioProcessor processor = new VadAudioProcessor(samples -> true, speechToText, Runnable::run);
+        processor.setDiagnosticsContext("diag/group", "diag session");
+
+        Optional<Transcription> transcript = acceptCompleteSpeech(processor);
+
+        assertTranscriptText("hello", transcript);
+        Path wavPath;
+        try (var paths = Files.list(AudioDiagnostics.wavDir())) {
+            wavPath = paths
+                    .filter(path -> path.getFileName().toString()
+                            .contains("_diag_group_diag_session_1_FINAL_0-13312.wav"))
+                    .findFirst()
+                    .orElseThrow();
+        }
+
+        byte[] wav = Files.readAllBytes(wavPath);
+        assertEquals("RIFF", new String(wav, 0, 4));
+        assertEquals("WAVE", new String(wav, 8, 4));
+        assertEquals(44 + 13_312 * Short.BYTES, wav.length);
+        assertEquals(13_312 * Short.BYTES, ByteBuffer.wrap(wav, 40, 4)
+                .order(ByteOrder.LITTLE_ENDIAN)
+                .getInt());
+
+        Path vadPath = wavPath.resolveSibling(wavPath.getFileName().toString().replace(".wav", ".vad.csv"));
+        List<String> vadLines = Files.readAllLines(vadPath);
+        assertEquals("startSampleIndex,endSampleIndexExclusive,vadValue", vadLines.getFirst());
+        assertEquals("0,256,70", vadLines.get(1));
+        assertTrue(vadLines.contains("3328,3584,70"));
+        assertTrue(vadLines.contains("3584,3840,0"));
+    }
+
+    @Test
+    void shortLowRmsAudioSuppressesPrompt() {
+        PromptRecordingSpeechToText speechToText = new PromptRecordingSpeechToText("first", "second");
+        VadAudioProcessor processor = new VadAudioProcessor(samples -> true, speechToText, Runnable::run);
+
+        acceptCompleteSpeech(processor);
+        acceptCompleteSpeech(processor);
+
+        assertEquals(List.of("", ""), speechToText.prompts);
+    }
+
+    @Test
+    void shortAudibleAudioKeepsPrompt() {
+        PromptRecordingSpeechToText speechToText = new PromptRecordingSpeechToText("first", "second");
+        VadAudioProcessor processor = new VadAudioProcessor(samples -> true, speechToText, Runnable::run);
+
+        acceptCompleteSpeech(processor);
+        acceptCompleteSpeech(processor, (short) 1_000);
+
+        assertEquals(List.of("", "first"), speechToText.prompts);
     }
 
     private static byte[] frameBytes() {
         return new byte[VadAudioProcessor.VAD_FRAME_SAMPLES * Short.BYTES];
     }
 
-    private static class SequenceVad implements VoiceActivityDetector {
-        private final ArrayDeque<Float> probabilities = new ArrayDeque<>();
-        private int calls;
+    private static Optional<Transcription> acceptCompleteSpeech(VadAudioProcessor processor) {
+        return acceptCompleteSpeech(processor, (short) 0);
+    }
 
-        void add(float probability) {
-            probabilities.add(probability);
+    private static Optional<Transcription> acceptCompleteSpeech(VadAudioProcessor processor, short sample) {
+        Optional<Transcription> transcript;
+        transcript = acceptSpeechStart(processor, sample);
+        for (int i = 0; i < silenceFramesForTurnDetection(); i++) {
+            transcript = acceptFrame(processor, 0, sample);
         }
+        return transcript;
+    }
 
-        @Override
-        public float speechProbability(float[] samples) {
-            calls++;
-            return probabilities.removeFirst();
+    private static Optional<Transcription> acceptSpeechStart(VadAudioProcessor processor) {
+        return acceptSpeechStart(processor, (short) 0);
+    }
+
+    private static Optional<Transcription> acceptSpeechStart(VadAudioProcessor processor, short sample) {
+        Optional<Transcription> transcript = Optional.empty();
+        for (int i = 0; i < speechStartFrames(); i++) {
+            transcript = acceptFrame(processor, 70, sample);
         }
+        return transcript;
+    }
+
+    private static int speechStartFrames() {
+        return VadAudioProcessor.SPIKE_SAMPLES / VadAudioProcessor.VAD_FRAME_SAMPLES + 2;
+    }
+
+    private static Transcription segmentTranscription(String text, Duration end) {
+        return new Transcription(text, List.of(new TranscriptSegment(Duration.ZERO, end, text)));
+    }
+
+    private static Optional<Transcription> acceptUntilTranscript(VadAudioProcessor processor) {
+        Optional<Transcription> transcript = Optional.empty();
+        for (int i = 0; i < 50 && transcript.isEmpty(); i++) {
+            transcript = acceptFrame(processor, 0);
+            if (transcript.isEmpty()) {
+                try {
+                    Thread.sleep(10);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return Optional.empty();
+                }
+            }
+        }
+        return transcript;
+    }
+
+    private static void acceptUntilFailure(VadAudioProcessor processor) {
+        for (int i = 0; i < 50; i++) {
+            acceptFrame(processor, 0);
+            try {
+                Thread.sleep(10);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+    }
+
+    private static Optional<Transcription> acceptFrame(VadAudioProcessor processor, int vadValue) {
+        return processor.acceptPcm16LeWithVad(frameBytes(), new byte[] {(byte) vadValue});
+    }
+
+    private static Optional<Transcription> acceptFrame(VadAudioProcessor processor, int vadValue, short sample) {
+        byte[] bytes = frameBytes();
+        if (sample != 0) {
+            ByteBuffer buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN);
+            for (int i = 0; i < VadAudioProcessor.VAD_FRAME_SAMPLES; i++) {
+                buffer.putShort(sample);
+            }
+        }
+        return processor.acceptPcm16LeWithVad(bytes, new byte[] {(byte) vadValue});
+    }
+
+    private static int silenceFramesForTurnDetection() {
+        return VadAudioProcessor.MIN_TURN_DETECTION_SILENCE_SAMPLES / VadAudioProcessor.VAD_FRAME_SAMPLES + 1;
+    }
+
+    private static void assertTranscriptText(String expected, Optional<Transcription> actual) {
+        assertEquals(Optional.of(expected), actual.map(Transcription::text));
     }
 
     private static class RecordingSpeechToText implements SpeechToText {
@@ -297,11 +449,19 @@ class VadAudioProcessorTest {
 
         @Override
         public String transcribe(AudioBuffer audioBuffer, long startSampleIndex, long endSampleIndexExclusive) {
+            return transcript;
+        }
+
+        @Override
+        public Transcription transcribeWithSegments(AudioBuffer audioBuffer, long startSampleIndex, long endSampleIndexExclusive) {
             calls++;
             this.startSampleIndex = startSampleIndex;
             this.endSampleIndexExclusive = endSampleIndexExclusive;
             completed.countDown();
-            return transcript;
+            return Transcription.singleSegment(
+                    transcribe(audioBuffer, startSampleIndex, endSampleIndexExclusive),
+                    endSampleIndexExclusive - startSampleIndex,
+                    16_000);
         }
     }
 
@@ -317,13 +477,21 @@ class VadAudioProcessorTest {
 
         @Override
         public String transcribe(AudioBuffer audioBuffer, long startSampleIndex, long endSampleIndexExclusive) {
+            return transcript;
+        }
+
+        @Override
+        public Transcription transcribeWithSegments(AudioBuffer audioBuffer, long startSampleIndex, long endSampleIndexExclusive) {
             started.countDown();
             try {
                 release.await(1, TimeUnit.SECONDS);
-                return transcript;
+                return Transcription.singleSegment(
+                        transcribe(audioBuffer, startSampleIndex, endSampleIndexExclusive),
+                        endSampleIndexExclusive - startSampleIndex,
+                        16_000);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                return "";
+                return Transcription.empty();
             } finally {
                 completed.countDown();
             }
@@ -339,8 +507,16 @@ class VadAudioProcessorTest {
 
         @Override
         public String transcribe(AudioBuffer audioBuffer, long startSampleIndex, long endSampleIndexExclusive) {
-            completed.countDown();
             throw new RuntimeException("stt failed");
+        }
+
+        @Override
+        public Transcription transcribeWithSegments(AudioBuffer audioBuffer, long startSampleIndex, long endSampleIndexExclusive) {
+            completed.countDown();
+            return Transcription.singleSegment(
+                    transcribe(audioBuffer, startSampleIndex, endSampleIndexExclusive),
+                    endSampleIndexExclusive - startSampleIndex,
+                    16_000);
         }
     }
 
@@ -351,13 +527,21 @@ class VadAudioProcessorTest {
 
         @Override
         public String transcribe(AudioBuffer audioBuffer, long startSampleIndex, long endSampleIndexExclusive) {
+            throw new RuntimeException("stale failure");
+        }
+
+        @Override
+        public Transcription transcribeWithSegments(AudioBuffer audioBuffer, long startSampleIndex, long endSampleIndexExclusive) {
             started.countDown();
             try {
                 release.await(1, TimeUnit.SECONDS);
-                throw new RuntimeException("stale failure");
+                return Transcription.singleSegment(
+                        transcribe(audioBuffer, startSampleIndex, endSampleIndexExclusive),
+                        endSampleIndexExclusive - startSampleIndex,
+                        16_000);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                return "";
+                return Transcription.empty();
             } finally {
                 completed.countDown();
             }
@@ -365,6 +549,63 @@ class VadAudioProcessorTest {
 
         void release() {
             release.countDown();
+        }
+    }
+
+    private static class QueuedSegmentSpeechToText implements SpeechToText {
+        private final ArrayDeque<Transcription> transcriptions = new ArrayDeque<>();
+        private final List<Long> startSampleIndexes = new ArrayList<>();
+        private final List<Long> endSampleIndexes = new ArrayList<>();
+
+        void add(Transcription transcription) {
+            transcriptions.addLast(transcription);
+        }
+
+        @Override
+        public String transcribe(AudioBuffer audioBuffer, long startSampleIndex, long endSampleIndexExclusive) {
+            return transcriptions.getFirst().text();
+        }
+
+        @Override
+        public Transcription transcribeWithSegments(
+                AudioBuffer audioBuffer,
+                long startSampleIndex,
+                long endSampleIndexExclusive) {
+            startSampleIndexes.add(startSampleIndex);
+            endSampleIndexes.add(endSampleIndexExclusive);
+            return transcriptions.removeFirst();
+        }
+    }
+
+    private static class PromptRecordingSpeechToText implements SpeechToText {
+        private final ArrayDeque<String> transcripts = new ArrayDeque<>();
+        private final List<String> prompts = new ArrayList<>();
+
+        PromptRecordingSpeechToText(String... transcripts) {
+            this.transcripts.addAll(List.of(transcripts));
+        }
+
+        @Override
+        public String transcribe(AudioBuffer audioBuffer, long startSampleIndex, long endSampleIndexExclusive) {
+            return transcripts.getFirst();
+        }
+
+        @Override
+        public Transcription transcribeWithSegments(AudioBuffer audioBuffer, long startSampleIndex, long endSampleIndexExclusive) {
+            return transcribeWithSegments(audioBuffer, startSampleIndex, endSampleIndexExclusive, "");
+        }
+
+        @Override
+        public Transcription transcribeWithSegments(
+                AudioBuffer audioBuffer,
+                long startSampleIndex,
+                long endSampleIndexExclusive,
+                String prompt) {
+            prompts.add(prompt);
+            return Transcription.singleSegment(
+                    transcripts.removeFirst(),
+                    endSampleIndexExclusive - startSampleIndex,
+                    16_000);
         }
     }
 
