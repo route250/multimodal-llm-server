@@ -12,9 +12,6 @@ PKG_DIR="$SCR_DIR/pkg"
 # whisper-serverのインストール
 $SCR_DIR/whisper-install.sh
 
-# modelの用意
-$SCR_DIR/model_download.sh
-
 export PATH="$WHISPER_BIN:$PATH"
 
 whisper-server --port 8767 -m $WHISPER_MODELS/ggml-small.bin
