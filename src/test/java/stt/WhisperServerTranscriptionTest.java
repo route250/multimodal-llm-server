@@ -23,7 +23,7 @@ import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
 
 class WhisperServerTranscriptionTest {
-    private static final URI DEFAULT_ENDPOINT = URI.create("http://localhost:8766/inference");
+    private static final URI DEFAULT_ENDPOINT = URI.create("http://localhost:8767/inference");
     private static final Path DEFAULT_AUDIO_FILE = Path.of("src/test/test-data/voice_mosimosi.wav");
     private static final Pattern JSON_TEXT = Pattern.compile("\"text\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"");
 

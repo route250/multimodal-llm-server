@@ -58,29 +58,7 @@ public class Lfm2AudioSpeechToText implements SpeechToText {
     }
 
     @Override
-    public String transcribe(AudioBuffer audioBuffer, long startSampleIndex, long endSampleIndexExclusive) {
-        return transcribeWithSegments(audioBuffer, startSampleIndex, endSampleIndexExclusive).text();
-    }
-
-    @Override
-    public String transcribe(
-            AudioBuffer audioBuffer,
-            long startSampleIndex,
-            long endSampleIndexExclusive,
-            String prompt) {
-        return transcribeWithSegments(audioBuffer, startSampleIndex, endSampleIndexExclusive, prompt).text();
-    }
-
-    @Override
-    public Transcription transcribeWithSegments(
-            AudioBuffer audioBuffer,
-            long startSampleIndex,
-            long endSampleIndexExclusive) {
-        return transcribeWithSegments(audioBuffer, startSampleIndex, endSampleIndexExclusive, "");
-    }
-
-    @Override
-    public Transcription transcribeWithSegments(
+    public Transcription transcribe(
             AudioBuffer audioBuffer,
             long startSampleIndex,
             long endSampleIndexExclusive,

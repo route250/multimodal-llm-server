@@ -322,13 +322,16 @@ class VadAudioProcessorVirtualThreadWavTest {
         }
 
         @Override
-        public String transcribe(AudioBuffer audioBuffer, long startSampleIndex, long endSampleIndexExclusive) {
-            return transcribeWithSegments(audioBuffer, startSampleIndex, endSampleIndexExclusive).text();
-        }
-
-        @Override
-        public Transcription transcribeWithSegments(AudioBuffer audioBuffer, long startSampleIndex, long endSampleIndexExclusive) {
-            Transcription transcription = delegate.transcribeWithSegments(audioBuffer, startSampleIndex, endSampleIndexExclusive);
+        public Transcription transcribe(
+                AudioBuffer audioBuffer,
+                long startSampleIndex,
+                long endSampleIndexExclusive,
+                String prompt) {
+            Transcription transcription = delegate.transcribe(
+                    audioBuffer,
+                    startSampleIndex,
+                    endSampleIndexExclusive,
+                    prompt);
             transcripts.add(transcription.text());
             System.out.println("stt [" + startSampleIndex + ", " + endSampleIndexExclusive + ") = " + transcription.text());
             return transcription;

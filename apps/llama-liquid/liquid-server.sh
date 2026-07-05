@@ -24,5 +24,4 @@ M4="tokenizer-LFM2.5-Audio-1.5B-JP-${QT}.gguf"
 $SCR_DIR/model_download.sh $QT
 
 # サーバ実行
-$LIQUID_BIN/llama-liquid-audio-server -m $CKPT/$M1 -mm $CKPT/$M2 -mv $CKPT/$M3 --tts-speaker-file $CKPT/$M4 $*
-
+$LIQUID_BIN/llama-liquid-audio-server --port 8766 -m $CKPT/$M1 -mm $CKPT/$M2 -mv $CKPT/$M3 --tts-speaker-file $CKPT/$M4 $*

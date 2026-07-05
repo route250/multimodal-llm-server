@@ -4,14 +4,13 @@ import audio.AudioBuffer;
 
 public class DummySpeechToText implements SpeechToText {
     @Override
-    public String transcribe(AudioBuffer audioBuffer, long startSampleIndex, long endSampleIndexExclusive) {
-        return "dummy stt result";
-    }
-
-    @Override
-    public Transcription transcribeWithSegments(AudioBuffer audioBuffer, long startSampleIndex, long endSampleIndexExclusive) {
+    public Transcription transcribe(
+            AudioBuffer audioBuffer,
+            long startSampleIndex,
+            long endSampleIndexExclusive,
+            String prompt) {
         return Transcription.singleSegment(
-                transcribe(audioBuffer, startSampleIndex, endSampleIndexExclusive),
+                "dummy stt result",
                 endSampleIndexExclusive - startSampleIndex,
                 16_000);
     }

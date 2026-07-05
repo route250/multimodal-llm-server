@@ -35,7 +35,7 @@ class Lfm2AudioSpeechToTextTest {
             AudioBuffer audio = new AudioBuffer(16_000, 16_000);
             audio.append(new short[] {1, 2}, 0);
 
-            Transcription transcription = speechToText.transcribeWithSegments(audio, 0, 2);
+            Transcription transcription = speechToText.transcribe(audio, 0, 2, "");
 
             assertEquals("もしもし", transcription.text());
             assertEquals(1, transcription.segments().size());

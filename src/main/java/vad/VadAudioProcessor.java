@@ -543,7 +543,7 @@ public class VadAudioProcessor {
                     "promptChars", prompt.length(),
                     "wavPath", savedAudioFiles == null ? null : savedAudioFiles.wavPath().toString(),
                     "vadPath", savedAudioFiles == null ? null : savedAudioFiles.vadPath().toString()));
-            Transcription transcription = speechToText.transcribeWithSegments(
+            Transcription transcription = speechToText.transcribe(
                     transcriptionAudio,
                     startSampleIndex,
                     endSampleIndexExclusive,

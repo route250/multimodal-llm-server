@@ -9,30 +9,27 @@ import org.junit.jupiter.api.Test;
 
 class SpeechToTextTest {
     @Test
-    void segmentTranscriptionCanWrapTextWithInputDuration() {
+    void transcribeReturnsSegmentsWithInputDuration() {
         SpeechToText speechToText = new SpeechToText() {
             @Override
-            public String transcribe(AudioBuffer audioBuffer, long startSampleIndex, long endSampleIndexExclusive) {
-                return "hello";
-            }
-
-            @Override
-            public Transcription transcribeWithSegments(
+            public Transcription transcribe(
                     AudioBuffer audioBuffer,
                     long startSampleIndex,
-                    long endSampleIndexExclusive) {
+                    long endSampleIndexExclusive,
+                    String prompt) {
                 return Transcription.singleSegment(
-                        transcribe(audioBuffer, startSampleIndex, endSampleIndexExclusive),
+                        "hello",
                         endSampleIndexExclusive - startSampleIndex,
                         16_000);
             }
         };
         AudioBuffer audioBuffer = new AudioBuffer(16_000, 512);
 
-        Transcription transcription = speechToText.transcribeWithSegments(
+        Transcription transcription = speechToText.transcribe(
                 audioBuffer,
                 1_000,
-                1_000 + 16_000);
+                1_000 + 16_000,
+                "");
 
         assertEquals("hello", transcription.text());
         assertEquals(1, transcription.segments().size());
@@ -44,10 +41,11 @@ class SpeechToTextTest {
     @Test
     void exposesSegmentTranscriptionMethod() throws Exception {
         Method method = SpeechToText.class.getMethod(
-                "transcribeWithSegments",
+                "transcribe",
                 AudioBuffer.class,
                 long.class,
-                long.class);
+                long.class,
+                String.class);
 
         assertEquals(Transcription.class, method.getReturnType());
     }

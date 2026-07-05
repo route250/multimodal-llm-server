@@ -16,7 +16,7 @@ import java.util.UUID;
 import java.util.regex.Pattern;
 
 public class WhisperServerSpeechToText implements SpeechToText {
-    public static final URI DEFAULT_ENDPOINT = URI.create("http://localhost:8766/inference");
+    public static final URI DEFAULT_ENDPOINT = URI.create("http://localhost:8767/inference");
     private static final int SAMPLE_RATE = 16_000;
     private static final int CHANNELS = 1;
     private static final int BITS_PER_SAMPLE = 16;
@@ -38,29 +38,7 @@ public class WhisperServerSpeechToText implements SpeechToText {
     }
 
     @Override
-    public String transcribe(AudioBuffer audioBuffer, long startSampleIndex, long endSampleIndexExclusive) {
-        return transcribeWithSegments(audioBuffer, startSampleIndex, endSampleIndexExclusive).text();
-    }
-
-    @Override
-    public String transcribe(
-            AudioBuffer audioBuffer,
-            long startSampleIndex,
-            long endSampleIndexExclusive,
-            String prompt) {
-        return transcribeWithSegments(audioBuffer, startSampleIndex, endSampleIndexExclusive, prompt).text();
-    }
-
-    @Override
-    public Transcription transcribeWithSegments(
-            AudioBuffer audioBuffer,
-            long startSampleIndex,
-            long endSampleIndexExclusive) {
-        return transcribeWithSegments(audioBuffer, startSampleIndex, endSampleIndexExclusive, "");
-    }
-
-    @Override
-    public Transcription transcribeWithSegments(
+    public Transcription transcribe(
             AudioBuffer audioBuffer,
             long startSampleIndex,
             long endSampleIndexExclusive,

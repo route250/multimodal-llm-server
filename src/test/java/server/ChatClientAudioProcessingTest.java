@@ -457,15 +457,11 @@ class ChatClientAudioProcessingTest {
     private static SpeechToText emptySpeechToText() {
         return new SpeechToText() {
             @Override
-            public String transcribe(AudioBuffer audioBuffer, long startSampleIndex, long endSampleIndexExclusive) {
-                return "";
-            }
-
-            @Override
-            public Transcription transcribeWithSegments(
+            public Transcription transcribe(
                     AudioBuffer audioBuffer,
                     long startSampleIndex,
-                    long endSampleIndexExclusive) {
+                    long endSampleIndexExclusive,
+                    String prompt) {
                 return Transcription.empty();
             }
         };

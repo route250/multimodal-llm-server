@@ -448,18 +448,17 @@ class VadAudioProcessorTest {
         }
 
         @Override
-        public String transcribe(AudioBuffer audioBuffer, long startSampleIndex, long endSampleIndexExclusive) {
-            return transcript;
-        }
-
-        @Override
-        public Transcription transcribeWithSegments(AudioBuffer audioBuffer, long startSampleIndex, long endSampleIndexExclusive) {
+        public Transcription transcribe(
+                AudioBuffer audioBuffer,
+                long startSampleIndex,
+                long endSampleIndexExclusive,
+                String prompt) {
             calls++;
             this.startSampleIndex = startSampleIndex;
             this.endSampleIndexExclusive = endSampleIndexExclusive;
             completed.countDown();
             return Transcription.singleSegment(
-                    transcribe(audioBuffer, startSampleIndex, endSampleIndexExclusive),
+                    transcript,
                     endSampleIndexExclusive - startSampleIndex,
                     16_000);
         }
@@ -476,17 +475,16 @@ class VadAudioProcessorTest {
         }
 
         @Override
-        public String transcribe(AudioBuffer audioBuffer, long startSampleIndex, long endSampleIndexExclusive) {
-            return transcript;
-        }
-
-        @Override
-        public Transcription transcribeWithSegments(AudioBuffer audioBuffer, long startSampleIndex, long endSampleIndexExclusive) {
+        public Transcription transcribe(
+                AudioBuffer audioBuffer,
+                long startSampleIndex,
+                long endSampleIndexExclusive,
+                String prompt) {
             started.countDown();
             try {
                 release.await(1, TimeUnit.SECONDS);
                 return Transcription.singleSegment(
-                        transcribe(audioBuffer, startSampleIndex, endSampleIndexExclusive),
+                        transcript,
                         endSampleIndexExclusive - startSampleIndex,
                         16_000);
             } catch (InterruptedException e) {
@@ -506,17 +504,13 @@ class VadAudioProcessorTest {
         private final CountDownLatch completed = new CountDownLatch(1);
 
         @Override
-        public String transcribe(AudioBuffer audioBuffer, long startSampleIndex, long endSampleIndexExclusive) {
-            throw new RuntimeException("stt failed");
-        }
-
-        @Override
-        public Transcription transcribeWithSegments(AudioBuffer audioBuffer, long startSampleIndex, long endSampleIndexExclusive) {
+        public Transcription transcribe(
+                AudioBuffer audioBuffer,
+                long startSampleIndex,
+                long endSampleIndexExclusive,
+                String prompt) {
             completed.countDown();
-            return Transcription.singleSegment(
-                    transcribe(audioBuffer, startSampleIndex, endSampleIndexExclusive),
-                    endSampleIndexExclusive - startSampleIndex,
-                    16_000);
+            throw new RuntimeException("stt failed");
         }
     }
 
@@ -526,19 +520,15 @@ class VadAudioProcessorTest {
         private final CountDownLatch completed = new CountDownLatch(1);
 
         @Override
-        public String transcribe(AudioBuffer audioBuffer, long startSampleIndex, long endSampleIndexExclusive) {
-            throw new RuntimeException("stale failure");
-        }
-
-        @Override
-        public Transcription transcribeWithSegments(AudioBuffer audioBuffer, long startSampleIndex, long endSampleIndexExclusive) {
+        public Transcription transcribe(
+                AudioBuffer audioBuffer,
+                long startSampleIndex,
+                long endSampleIndexExclusive,
+                String prompt) {
             started.countDown();
             try {
                 release.await(1, TimeUnit.SECONDS);
-                return Transcription.singleSegment(
-                        transcribe(audioBuffer, startSampleIndex, endSampleIndexExclusive),
-                        endSampleIndexExclusive - startSampleIndex,
-                        16_000);
+                throw new RuntimeException("stale failure");
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return Transcription.empty();
@@ -562,15 +552,11 @@ class VadAudioProcessorTest {
         }
 
         @Override
-        public String transcribe(AudioBuffer audioBuffer, long startSampleIndex, long endSampleIndexExclusive) {
-            return transcriptions.getFirst().text();
-        }
-
-        @Override
-        public Transcription transcribeWithSegments(
+        public Transcription transcribe(
                 AudioBuffer audioBuffer,
                 long startSampleIndex,
-                long endSampleIndexExclusive) {
+                long endSampleIndexExclusive,
+                String prompt) {
             startSampleIndexes.add(startSampleIndex);
             endSampleIndexes.add(endSampleIndexExclusive);
             return transcriptions.removeFirst();
@@ -586,17 +572,7 @@ class VadAudioProcessorTest {
         }
 
         @Override
-        public String transcribe(AudioBuffer audioBuffer, long startSampleIndex, long endSampleIndexExclusive) {
-            return transcripts.getFirst();
-        }
-
-        @Override
-        public Transcription transcribeWithSegments(AudioBuffer audioBuffer, long startSampleIndex, long endSampleIndexExclusive) {
-            return transcribeWithSegments(audioBuffer, startSampleIndex, endSampleIndexExclusive, "");
-        }
-
-        @Override
-        public Transcription transcribeWithSegments(
+        public Transcription transcribe(
                 AudioBuffer audioBuffer,
                 long startSampleIndex,
                 long endSampleIndexExclusive,
