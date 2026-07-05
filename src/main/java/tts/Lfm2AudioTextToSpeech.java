@@ -20,7 +20,7 @@ public class Lfm2AudioTextToSpeech implements TextToSpeech {
     public static final URI DEFAULT_ENDPOINT = URI.create("http://localhost:8766/v1/chat/completions");
 
     private static final String DEFAULT_MODEL = "lfm2-audio";
-    private static final String DEFAULT_SYSTEM_PROMPT = "Perform TTS.";
+    private static final String DEFAULT_SYSTEM_PROMPT = "Perform TTS in japanese.";
     private static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(120);
 
     private final URI endpoint;

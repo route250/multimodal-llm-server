@@ -245,16 +245,16 @@ TTS の音声差分は `audio-delta` イベントとして配信します。
 `audio-delta` の payload には `assistantTurnId` を含めます。クライアントは現在の再生対象より古い
 `assistantTurnId`、またはキャンセル済みの `assistantTurnId` を持つ音声差分を破棄します。
 
-VAD がユーザー発話を検出した場合、サーバは `audio-control` イベントを配信します。payload は
+STT タスクが投入された場合、サーバは `audio-control` イベントを配信します。payload は
 `action`、`assistantTurnId`、`interruptionId`、`speechSequenceId`、`reason` を含みます。
 
 ```text
-pause   VAD が発話を検出したため、対象の AI 音声再生を一時停止する。
-resume  非空の STT 結果が出ないまま発話処理が終わったため、同じ AI 音声再生を再開する。
-cancel  非空の STT 結果が出たため、対象の AI 音声再生と古い応答出力を破棄する。
+pause   STT 結果待ちに入ったため、対象の AI 音声再生を一時停止する。reason は stt-wait。
+resume  FINAL STT 結果が空文字だったため、同じ AI 音声再生を再開する。reason は empty-stt。
+cancel  PARTIAL または FINAL STT 結果が非空だったため、対象の AI 音声再生と古い応答出力を破棄する。reason は user-transcript。
 ```
-AI 音声の出力遅延やマイク入力への残響を考慮し、AI 応答ターンが存在する状態で VAD が発話を検出した場合、
-サーバは検出サンプル番号から 12,000 サンプル後までを STT 対象外にします。12,000 サンプルは 16 kHz で 750 ms です。
+VAD による短時間の再生停止と再開はブラウザだけで完結させ、サーバは VAD 検出を理由に `audio-control`
+を配信しません。
 ブラウザは AI 音声の再生開始、停止、再開、終了、キャンセルを `/chat/playback` へ通知します。
 サーバは通知された再生区間と停止後 12,000 サンプルを EchoMask として保持します。
 再生中の開いた区間も、音声チャンク受信時点で EchoMask と同じ扱いで無音化します。
@@ -270,8 +270,20 @@ Content-Type: application/json; charset=utf-8
 ブラウザは `echoCancellation:true` と `noiseSuppression:true` を有効にし、AI 音声再生中に TEN VAD 値が
 50 以上の状態が 3 フレーム、つまり 48 ms 続いたらローカルで再生を一時停止します。
 一時停止中は TEN VAD 値が 35 未満の状態が 8 フレーム、つまり 128 ms 続いたらローカルで再開します。
+ブラウザは `localVadPlaybackPaused` と `serverSttPlaybackPaused` の 2 つの停止フラグを保持し、
+両方が `false` になった時だけ再生を再開します。
 `audio-delta` の `message` は JSON 文字列で、`data` は base64、`format` は `pcm`、`sampleRate` は通常 `24000` です。
 LLM 応答と TTS 処理が終了したら `message-done` イベントを配信します。
+
+再生状態の調査用に、サーバとブラウザは `tmp/audio-debug/audio-debug.log` へ JSON Lines 形式の診断ログを出力します。
+サーバは `assistant-turn-start`、`llm-message-delta`、`tts-chunk-start`、`tts-audio-delta`、`tts-chunk-done`、
+`sse-send-audio-delta`、`sse-send-audio-control`、`playback-report` を記録します。
+ブラウザは `/chat/client-log` へ状態を送信し、サーバは `browser-audio-delta-received`、
+`browser-audio-delta-queued`、`browser-pump-playback-blocked`、`browser-playback-start`、
+`browser-playback-ended`、`browser-local-vad-pause-set`、`browser-server-stt-pause-set`、
+`browser-cancel-playback-received` などを記録します。
+ブラウザログは `assistantTurnId`、`activeAssistantTurnId`、`queuedAudioDeltas`、`currentPlayback`、
+`pausedPlayback`、`localVadPlaybackPaused`、`serverSttPlaybackPaused`、`playbackReady` を含みます。
 デフォルトでは LM Studio のローカルエンドポイントを使います。
 
 ```text

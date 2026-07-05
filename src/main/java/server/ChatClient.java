@@ -9,6 +9,7 @@ import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.LinkedBlockingQueue;
 import audio.AudioDiagnostics;
 import llm.ChatMessage;
@@ -25,9 +26,9 @@ import tts.StreamingTextChunker;
 import tts.TextToSpeech;
 import tts.TextToSpeechException;
 import vad.VadAudioProcessor;
-import vad.VadAudioProcessor.SpeechState;
-import vad.VadAudioProcessor.SpeechStateChange;
+import vad.VadAudioProcessor.TranscriptionKind;
 import vad.VadAudioProcessor.TranscriptionResult;
+import vad.VadAudioProcessor.TranscriptionStarted;
 import vad.smartturn.LazySmartTurnV3;
 
 public class ChatClient {
@@ -47,15 +48,15 @@ public class ChatClient {
     private final List<ChatMessage> conversationHistory = new ArrayList<>();
     private final Set<Long> canceledAssistantTurnIds = new HashSet<>();
     private CompletableFuture<Void> audioTaskTail = CompletableFuture.completedFuture(null);
+    private Future<?> activeAssistantTask;
     private long currentAssistantTurnId;
     private long currentInterruptionId;
     private long activePlaybackAssistantTurnId;
     private long activePlaybackStartSampleIndex = Long.MIN_VALUE;
-    private long pausedAssistantTurnId;
-    private long pausedSpeechSequenceId = Long.MIN_VALUE;
+    private long sttWaitAssistantTurnId;
+    private long sttWaitSpeechSequenceId = Long.MIN_VALUE;
     private boolean assistantTurnActive;
-    private boolean playbackPaused;
-    private boolean nonEmptyTranscriptSeenDuringPause;
+    private boolean sttWaitActive;
     private boolean closed;
 
     public ChatClient(String id, ChatGroup chatGroup) {
@@ -88,7 +89,7 @@ public class ChatClient {
         this.languageModel = languageModel;
         this.textToSpeech = textToSpeech;
         this.audioProcessor.setDiagnosticsContext(chatGroup.id(), id);
-        this.audioProcessor.setSpeechStateListener(this::handleSpeechStateChange);
+        this.audioProcessor.setTranscriptionStartedListener(this::handleTranscriptionStarted);
     }
 
     public String id() {
@@ -130,7 +131,7 @@ public class ChatClient {
     private void handleText(ChatRequest request) {
         String text = request.textBody().trim();
         if (!text.isBlank()) {
-            execute(() -> replyToTranscript(text));
+            startAssistantReply(text);
         }
     }
 
@@ -181,6 +182,10 @@ public class ChatClient {
     }
 
     public void handlePlayback(PlaybackEvent playbackEvent) {
+        AudioDiagnostics.log("playback-report", diagnosticsContext, AudioDiagnostics.fields(
+                "assistantTurnId", playbackEvent.assistantTurnId(),
+                "state", playbackEvent.state(),
+                "clientMicSampleIndex", playbackEvent.clientMicSampleIndex()));
         synchronized (playbackControlLock) {
             String state = playbackEvent.state();
             if ("start".equals(state) || "resume".equals(state)) {
@@ -203,79 +208,84 @@ public class ChatClient {
         activePlaybackStartSampleIndex = Long.MIN_VALUE;
     }
 
-    private void handleSpeechStateChange(SpeechStateChange change) {
-        if (isClosed()) {
-            return;
-        }
-        if (change.currentState() == SpeechState.DETECTED
-                && (change.previousState() == SpeechState.UNDETECTED
-                || change.previousState() == SpeechState.SPIKE
-                || change.previousState() == SpeechState.TRANSCRIBING)) {
-            pausePlaybackForSpeech(change.speechSequenceId(), change.sampleIndex());
-            return;
-        }
-        if (change.currentState() == SpeechState.UNDETECTED) {
-            resumePlaybackIfNoTranscript(change.speechSequenceId());
-        }
-    }
-
-    private void pausePlaybackForSpeech(long speechSequenceId, long detectedSampleIndex) {
+    private void handleTranscriptionStarted(TranscriptionStarted started) {
         ServerEvent event = null;
         synchronized (playbackControlLock) {
-            if (playbackPaused && pausedSpeechSequenceId == speechSequenceId) {
+            if (sttWaitActive && sttWaitSpeechSequenceId == started.speechSequenceId()) {
+                return;
+            }
+            if (currentAssistantTurnId <= 0) {
                 return;
             }
             currentInterruptionId++;
-            playbackPaused = true;
-            nonEmptyTranscriptSeenDuringPause = false;
-            pausedAssistantTurnId = currentAssistantTurnId;
-            pausedSpeechSequenceId = speechSequenceId;
+            sttWaitActive = true;
+            sttWaitAssistantTurnId = currentAssistantTurnId;
+            sttWaitSpeechSequenceId = started.speechSequenceId();
             event = ServerEvent.audioControl(
                     "pause",
-                    pausedAssistantTurnId,
+                    sttWaitAssistantTurnId,
                     currentInterruptionId,
-                    speechSequenceId,
-                    "vad");
+                    started.speechSequenceId(),
+                    "stt-wait");
         }
+        AudioDiagnostics.log("audio-control-send", diagnosticsContext, AudioDiagnostics.fields(
+                "action", "pause",
+                "assistantTurnId", event == null ? null : sttWaitAssistantTurnId,
+                "interruptionId", currentInterruptionId,
+                "speechSequenceId", started.speechSequenceId(),
+                "reason", "stt-wait"));
         sendToGroupIfOpen(event);
     }
 
-    private void resumePlaybackIfNoTranscript(long speechSequenceId) {
+    private void resumePlaybackForEmptyTranscript(long speechSequenceId) {
         ServerEvent event = null;
         synchronized (playbackControlLock) {
-            if (!playbackPaused || pausedSpeechSequenceId != speechSequenceId || nonEmptyTranscriptSeenDuringPause) {
+            if (!sttWaitActive || sttWaitSpeechSequenceId != speechSequenceId) {
                 return;
             }
-            if (canceledAssistantTurnIds.contains(pausedAssistantTurnId)) {
-                playbackPaused = false;
+            if (canceledAssistantTurnIds.contains(sttWaitAssistantTurnId)) {
+                sttWaitActive = false;
                 return;
             }
             event = ServerEvent.audioControl(
                     "resume",
-                    pausedAssistantTurnId,
+                    sttWaitAssistantTurnId,
                     currentInterruptionId,
                     speechSequenceId,
                     "empty-stt");
-            playbackPaused = false;
+            sttWaitActive = false;
         }
+        AudioDiagnostics.log("audio-control-send", diagnosticsContext, AudioDiagnostics.fields(
+                "action", "resume",
+                "assistantTurnId", event == null ? null : sttWaitAssistantTurnId,
+                "interruptionId", currentInterruptionId,
+                "speechSequenceId", speechSequenceId,
+                "reason", "empty-stt"));
         sendToGroupIfOpen(event);
     }
 
     private void handleTranscriptionResult(TranscriptionResult result) {
-        String transcript = result.transcription().text().trim();
+        String text = result.transcription().text();
+        String transcript = text == null ? "" : text.trim();
         if (transcript.isBlank()) {
+            if (result.kind() == TranscriptionKind.FINAL) {
+                resumePlaybackForEmptyTranscript(result.speechSequenceId());
+            }
             return;
         }
         cancelCurrentAssistantTurnForTranscript(result.speechSequenceId());
-        replyToTranscript(transcript);
+        startAssistantReply(transcript);
     }
 
     private void cancelCurrentAssistantTurnForTranscript(long speechSequenceId) {
         ServerEvent event = null;
+        Future<?> taskToCancel = null;
+        long canceledTurnId;
         synchronized (playbackControlLock) {
-            nonEmptyTranscriptSeenDuringPause = true;
-            if (assistantTurnActive || playbackPaused) {
-                long canceledTurnId = currentAssistantTurnId;
+            canceledTurnId = sttWaitActive && sttWaitSpeechSequenceId == speechSequenceId
+                    ? sttWaitAssistantTurnId
+                    : currentAssistantTurnId;
+            if (canceledTurnId > 0) {
                 canceledAssistantTurnIds.add(canceledTurnId);
                 event = ServerEvent.audioControl(
                         "cancel",
@@ -284,19 +294,54 @@ public class ChatClient {
                         speechSequenceId,
                         "user-transcript");
             }
-            playbackPaused = false;
-            assistantTurnActive = false;
+            if (activeAssistantTask != null) {
+                taskToCancel = activeAssistantTask;
+            }
+            sttWaitActive = false;
+            if (currentAssistantTurnId == canceledTurnId) {
+                assistantTurnActive = false;
+            }
+        }
+        if (event != null) {
+            AudioDiagnostics.log("audio-control-send", diagnosticsContext, AudioDiagnostics.fields(
+                    "action", "cancel",
+                    "assistantTurnId", canceledTurnId,
+                    "interruptionId", currentInterruptionId,
+                    "speechSequenceId", speechSequenceId,
+                    "reason", "user-transcript"));
+        }
+        if (taskToCancel != null) {
+            taskToCancel.cancel(true);
         }
         if (event != null) {
             sendToGroupIfOpen(event);
         }
     }
 
-    private void replyToTranscript(String transcript) {
+    private void startAssistantReply(String transcript) {
+        long assistantTurnId = beginAssistantTurn();
+        AudioDiagnostics.log("assistant-turn-start", diagnosticsContext, AudioDiagnostics.fields(
+                "assistantTurnId", assistantTurnId,
+                "transcriptChars", transcript.length(),
+                "transcript", transcript));
+        FutureTask<Void> task = new FutureTask<>(() -> {
+            replyToTranscript(transcript, assistantTurnId);
+            return null;
+        });
+        synchronized (playbackControlLock) {
+            if (currentAssistantTurnId == assistantTurnId && !canceledAssistantTurnIds.contains(assistantTurnId)) {
+                activeAssistantTask = task;
+            } else {
+                task.cancel(true);
+            }
+        }
+        execute(task);
+    }
+
+    private void replyToTranscript(String transcript, long assistantTurnId) {
         if (isClosed()) {
             return;
         }
-        long assistantTurnId = beginAssistantTurn();
         synchronized (conversationLock) {
             StreamingTextChunker chunker = new StreamingTextChunker();
             StringBuilder assistantText = new StringBuilder();
@@ -309,6 +354,9 @@ public class ChatClient {
                         return;
                     }
                     assistantText.append(delta);
+                    AudioDiagnostics.log("llm-message-delta", diagnosticsContext, AudioDiagnostics.fields(
+                            "assistantTurnId", assistantTurnId,
+                            "deltaChars", delta.length()));
                     sendToGroupIfOpen(ServerEvent.messageDelta(delta));
                     speak(assistantTurnId, chunker.append(delta));
                 });
@@ -317,13 +365,20 @@ public class ChatClient {
                     return;
                 }
                 remember(userMessage, assistantText.toString());
+                AudioDiagnostics.log("assistant-turn-message-done", diagnosticsContext, AudioDiagnostics.fields(
+                        "assistantTurnId", assistantTurnId,
+                        "assistantTextChars", assistantText.length()));
                 sendToGroupIfOpen(ServerEvent.messageDone());
                 finishAssistantTurn(assistantTurnId);
             } catch (LanguageModelException e) {
-                sendToGroupIfOpen(ServerEvent.system("llm request failed: " + e.getMessage()));
+                if (isAssistantTurnActive(assistantTurnId)) {
+                    sendToGroupIfOpen(ServerEvent.system("llm request failed: " + e.getMessage()));
+                }
                 finishAssistantTurn(assistantTurnId);
             } catch (TextToSpeechException e) {
-                sendToGroupIfOpen(ServerEvent.system("tts request failed: " + e.getMessage()));
+                if (isAssistantTurnActive(assistantTurnId)) {
+                    sendToGroupIfOpen(ServerEvent.system("tts request failed: " + e.getMessage()));
+                }
                 finishAssistantTurn(assistantTurnId);
             }
         }
@@ -333,6 +388,7 @@ public class ChatClient {
         synchronized (playbackControlLock) {
             currentAssistantTurnId++;
             assistantTurnActive = true;
+            activeAssistantTask = null;
             return currentAssistantTurnId;
         }
     }
@@ -341,6 +397,7 @@ public class ChatClient {
         synchronized (playbackControlLock) {
             if (currentAssistantTurnId == assistantTurnId && !canceledAssistantTurnIds.contains(assistantTurnId)) {
                 assistantTurnActive = false;
+                activeAssistantTask = null;
             }
         }
     }
@@ -377,8 +434,22 @@ public class ChatClient {
             if (!isAssistantTurnActive(assistantTurnId)) {
                 return;
             }
+            AudioDiagnostics.log("tts-chunk-start", diagnosticsContext, AudioDiagnostics.fields(
+                    "assistantTurnId", assistantTurnId,
+                    "textChars", chunk.length(),
+                    "text", chunk));
+            final int[] audioDeltaCount = {0};
+            final long[] audioBase64Chars = {0};
             textToSpeech.synthesizeStreaming(chunk, audio -> {
                 if (isAssistantTurnActive(assistantTurnId)) {
+                    audioDeltaCount[0]++;
+                    audioBase64Chars[0] += audio.data().length();
+                    AudioDiagnostics.log("tts-audio-delta", diagnosticsContext, AudioDiagnostics.fields(
+                            "assistantTurnId", assistantTurnId,
+                            "deltaIndex", audioDeltaCount[0],
+                            "base64Chars", audio.data().length(),
+                            "format", audio.format(),
+                            "sampleRate", audio.sampleRate()));
                     sendToGroupIfOpen(ServerEvent.audioDelta(
                             audio.data(),
                             audio.format(),
@@ -386,6 +457,10 @@ public class ChatClient {
                             assistantTurnId));
                 }
             });
+            AudioDiagnostics.log("tts-chunk-done", diagnosticsContext, AudioDiagnostics.fields(
+                    "assistantTurnId", assistantTurnId,
+                    "audioDeltaCount", audioDeltaCount[0],
+                    "audioBase64Chars", audioBase64Chars[0]));
         }
     }
 
@@ -413,8 +488,18 @@ public class ChatClient {
     }
 
     public void close() {
+        Future<?> taskToCancel;
         synchronized (lifecycleLock) {
             closed = true;
+        }
+        synchronized (playbackControlLock) {
+            taskToCancel = activeAssistantTask;
+            activeAssistantTask = null;
+            assistantTurnActive = false;
+            sttWaitActive = false;
+        }
+        if (taskToCancel != null) {
+            taskToCancel.cancel(true);
         }
     }
 

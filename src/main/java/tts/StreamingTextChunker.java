@@ -8,6 +8,7 @@ import java.util.List;
  */
 public class StreamingTextChunker {
     private static final int DEFAULT_MAX_CHARS = 80;
+    private static final int MIN_CHARS_BEFORE_SEPARATOR_SPLIT = 3;
 
     private final StringBuilder pending = new StringBuilder();
     private final int maxChars;
@@ -32,8 +33,10 @@ public class StreamingTextChunker {
         for (int i = 0; i < delta.length(); i++) {
             char c = delta.charAt(i);
             pending.append(c);
-            if (isSeparator(c) || pending.length() >= maxChars) {
-                addPending(chunks);
+            if (isSeparator(c)) {
+                addPending(chunks, false);
+            } else if (pending.length() >= maxChars) {
+                addPending(chunks, true);
             }
         }
         return chunks;
@@ -41,16 +44,21 @@ public class StreamingTextChunker {
 
     public List<String> finish() {
         List<String> chunks = new ArrayList<>();
-        addPending(chunks);
+        addPending(chunks, true);
         return chunks;
     }
 
-    private void addPending(List<String> chunks) {
+    private void addPending(List<String> chunks, boolean force) {
         String chunk = pending.toString().trim();
-        pending.setLength(0);
-        if (!chunk.isBlank()) {
-            chunks.add(chunk);
+        if (chunk.isBlank() || isMarkdownSymbolsOnly(chunk)) {
+            pending.setLength(0);
+            return;
         }
+        if (!force && speechCharCount(chunk) < MIN_CHARS_BEFORE_SEPARATOR_SPLIT) {
+            return;
+        }
+        pending.setLength(0);
+        chunks.add(chunk);
     }
 
     private static boolean isSeparator(char c) {
@@ -68,5 +76,31 @@ public class StreamingTextChunker {
                 || c == ';'
                 || c == '：'
                 || c == ':';
+    }
+
+    private static int speechCharCount(String chunk) {
+        int count = 0;
+        for (int i = 0; i < chunk.length(); i++) {
+            char c = chunk.charAt(i);
+            if (!Character.isWhitespace(c) && !isSeparator(c)) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private static boolean isMarkdownSymbolsOnly(String chunk) {
+        for (int i = 0; i < chunk.length(); i++) {
+            char c = chunk.charAt(i);
+            if (Character.isLetterOrDigit(c)) {
+                return false;
+            }
+            if (Character.UnicodeScript.of(c) == Character.UnicodeScript.HIRAGANA
+                    || Character.UnicodeScript.of(c) == Character.UnicodeScript.KATAKANA
+                    || Character.UnicodeScript.of(c) == Character.UnicodeScript.HAN) {
+                return false;
+            }
+        }
+        return true;
     }
 }

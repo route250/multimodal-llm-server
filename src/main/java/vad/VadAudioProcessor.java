@@ -71,6 +71,9 @@ public class VadAudioProcessor {
     /** 音声処理状態の変更を外部へ通知する処理。 */
     private Consumer<SpeechStateChange> speechStateListener = change -> {
     };
+    /** STT タスク投入を外部へ通知する処理。 */
+    private Consumer<TranscriptionStarted> transcriptionStartedListener = started -> {
+    };
     /** STT タスクで発生し、次回の音声処理で表面化させる例外。 */
     private RuntimeException pendingTranscriptionFailure;
     /** 次回以降の STT 入力に使える先頭サンプル番号。重複セグメント検出後に前へ戻らない値として更新する。 */
@@ -160,6 +163,16 @@ public class VadAudioProcessor {
      */
     public synchronized void setSpeechStateListener(Consumer<SpeechStateChange> listener) {
         speechStateListener = listener == null ? change -> {
+        } : listener;
+    }
+
+    /**
+     * STT タスク投入通知を設定する。
+     *
+     * @param listener STT タスク投入時に呼び出す処理
+     */
+    public synchronized void setTranscriptionStartedListener(Consumer<TranscriptionStarted> listener) {
+        transcriptionStartedListener = listener == null ? started -> {
         } : listener;
     }
 
@@ -500,6 +513,11 @@ public class VadAudioProcessor {
                 "rms", rms,
                 "promptSuppressed", suppressPrompt,
                 "promptChars", prompt.length()));
+        transcriptionStartedListener.accept(new TranscriptionStarted(
+                transcriptionSpeechSequenceId,
+                transcriptionStartSampleIndex,
+                endSampleIndexExclusive,
+                kind));
         synchronized (transcriptionTaskLock) {
             transcriptionTaskTail = transcriptionTaskTail.handle((ignored, error) -> null)
                     .thenRunAsync(
@@ -548,42 +566,48 @@ public class VadAudioProcessor {
                     startSampleIndex,
                     endSampleIndexExclusive,
                     prompt);
-            String text = transcription.text();
+            String text = transcription.text() == null ? "" : transcription.text().trim();
             synchronized (this) {
                 boolean matchesCurrentSpeech = this.speechSequenceId == transcriptionSpeechSequenceId;
-                if (text != null ) {
-                    if( !text.isEmpty() ) {
-                        updateTranscriptionStartFloor(
+                if (!text.isEmpty()) {
+                    updateTranscriptionStartFloor(
+                            startSampleIndex,
+                            endSampleIndexExclusive,
+                            transcription,
+                            kind == TranscriptionKind.PARTIAL && matchesCurrentSpeech);
+                    AudioDiagnostics.log("stt-result", diagnosticsContext, AudioDiagnostics.fields(
+                            "speechSequenceId", transcriptionSpeechSequenceId,
+                            "kind", kind,
+                            "startSampleIndex", startSampleIndex,
+                            "endSampleIndexExclusive", endSampleIndexExclusive,
+                            "durationMs", samplesToMillis(endSampleIndexExclusive - startSampleIndex),
+                            "textChars", text.length(),
+                            "text", text));
+                    if (matchesCurrentSpeech) {
+                        transcribeResults.addLast(new TranscriptionResult(
+                                transcriptionSpeechSequenceId,
                                 startSampleIndex,
                                 endSampleIndexExclusive,
-                                transcription,
-                                kind == TranscriptionKind.PARTIAL && matchesCurrentSpeech);
-                        AudioDiagnostics.log("stt-result", diagnosticsContext, AudioDiagnostics.fields(
-                                "speechSequenceId", transcriptionSpeechSequenceId,
-                                "kind", kind,
-                                "startSampleIndex", startSampleIndex,
-                                "endSampleIndexExclusive", endSampleIndexExclusive,
-                                "durationMs", samplesToMillis(endSampleIndexExclusive - startSampleIndex),
-                                "textChars", text.length(),
-                                "text", text));
-                        if (matchesCurrentSpeech) {
-                            transcribeResults.addLast(new TranscriptionResult(
-                                    transcriptionSpeechSequenceId,
-                                    startSampleIndex,
-                                    endSampleIndexExclusive,
-                                    kind,
-                                    transcription));
-                            appendTranscriptionPrompt(text);
-                        }
-                    } else {
-                        AudioDiagnostics.log("stt-empty-result", diagnosticsContext, AudioDiagnostics.fields(
-                                "speechSequenceId", transcriptionSpeechSequenceId,
-                                "kind", kind,
-                                "startSampleIndex", startSampleIndex,
-                                "endSampleIndexExclusive", endSampleIndexExclusive,
-                                "durationMs", samplesToMillis(endSampleIndexExclusive - startSampleIndex),
-                                "textChars", 0,
-                                "text", ""));
+                                kind,
+                                transcription));
+                        appendTranscriptionPrompt(text);
+                    }
+                } else {
+                    AudioDiagnostics.log("stt-empty-result", diagnosticsContext, AudioDiagnostics.fields(
+                            "speechSequenceId", transcriptionSpeechSequenceId,
+                            "kind", kind,
+                            "startSampleIndex", startSampleIndex,
+                            "endSampleIndexExclusive", endSampleIndexExclusive,
+                            "durationMs", samplesToMillis(endSampleIndexExclusive - startSampleIndex),
+                            "textChars", 0,
+                            "text", ""));
+                    if (matchesCurrentSpeech && kind == TranscriptionKind.FINAL) {
+                        transcribeResults.addLast(new TranscriptionResult(
+                                transcriptionSpeechSequenceId,
+                                startSampleIndex,
+                                endSampleIndexExclusive,
+                                kind,
+                                transcription));
                     }
                 }
                 if (kind == TranscriptionKind.FINAL && speechState == SpeechState.TRANSCRIBING && matchesCurrentSpeech) {
@@ -796,6 +820,21 @@ public class VadAudioProcessor {
             long endSampleIndexExclusive,
             TranscriptionKind kind,
             Transcription transcription) {
+    }
+
+    /**
+     * STT タスク投入を表す。
+     *
+     * @param speechSequenceId 発話区間ID
+     * @param startSampleIndex STT対象の先頭サンプル番号
+     * @param endSampleIndexExclusive STT対象の終端サンプル番号。この番号のサンプルは含まない
+     * @param kind 中間結果か最終結果か
+     */
+    public record TranscriptionStarted(
+            long speechSequenceId,
+            long startSampleIndex,
+            long endSampleIndexExclusive,
+            TranscriptionKind kind) {
     }
 
     /**

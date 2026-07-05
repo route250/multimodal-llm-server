@@ -239,7 +239,7 @@
     const localPauseConsecutiveVadFrames = 3;
     const localResumeVadThreshold = 35;
     const localResumeSilenceVadFrames = 8;
-    let events = connect();
+    let events = null;
     let audioContext = null;
     let micStream = null;
     let micSource = null;
@@ -262,11 +262,14 @@
     let queuedAudioDeltas = [];
     let currentPlayback = null;
     let pausedPlayback = null;
-    let playbackPaused = false;
+    let localVadPlaybackPaused = false;
+    let serverSttPlaybackPaused = false;
     let activeAssistantTurnId = 0;
     let activeAssistantMessage = null;
+    let browserLogSequence = 0;
     const canceledAssistantTurnIds = new Set();
     session.textContent = sessionLabel();
+    events = connect();
 
     groupInput.addEventListener("change", () => {
         events.close();
@@ -274,13 +277,14 @@
         activeAssistantMessage = null;
         session.textContent = sessionLabel();
         resetPlayback();
+        clientLog("group-change", { detail: groupInput.value });
         events = connect();
     });
 
 
     document.getElementById("chat-form").addEventListener("submit", async (event) => {
         event.preventDefault();
-        preparePlayback();
+        await preparePlayback();
         const message = messageInput.value.trim();
         if (!message) {
             return;
@@ -304,6 +308,7 @@
 
     function connect() {
         const source = new EventSource(`/chat/connect?group=${encodeURIComponent(groupInput.value)}&sessionId=${encodeURIComponent(sessionId)}`);
+        clientLog("event-source-create");
 
         source.addEventListener("system", (event) => {
             appendSystem(JSON.parse(event.data).message);
@@ -311,6 +316,7 @@
 
         source.addEventListener("user-message", (event) => {
             appendMessage("user", JSON.parse(event.data).message);
+            activeAssistantMessage = null;
         });
 
         source.addEventListener("message", (event) => {
@@ -326,22 +332,36 @@
         });
 
         source.addEventListener("message-done", () => {
+            clientLog("message-done-received");
             activeAssistantMessage = null;
             scrollToBottom();
         });
 
         source.addEventListener("audio-delta", (event) => {
             try {
-                queueAudioDelta(JSON.parse(JSON.parse(event.data).message));
+                const payload = JSON.parse(JSON.parse(event.data).message);
+                clientLog("audio-delta-received", {
+                    assistantTurnId: payload.assistantTurnId || 0,
+                    sampleRate: payload.sampleRate || 0,
+                    detail: `format=${payload.format || ""};base64Chars=${payload.data ? payload.data.length : 0}`
+                });
+                queueAudioDelta(payload);
             } catch (error) {
+                clientLog("audio-delta-parse-error", { error: error.message });
                 appendSystem(`audio parse error: ${error.message}`);
             }
         });
 
         source.addEventListener("audio-control", (event) => {
             try {
-                handleAudioControl(JSON.parse(JSON.parse(event.data).message));
+                const payload = JSON.parse(JSON.parse(event.data).message);
+                clientLog("audio-control-received", {
+                    assistantTurnId: payload.assistantTurnId || 0,
+                    detail: `action=${payload.action || ""};reason=${payload.reason || ""};speechSequenceId=${payload.speechSequenceId || 0}`
+                });
+                handleAudioControl(payload);
             } catch (error) {
+                clientLog("audio-control-parse-error", { error: error.message });
                 appendSystem(`audio control parse error: ${error.message}`);
             }
         });
@@ -386,6 +406,39 @@
         return `${groupInput.value}/${sessionId}`;
     }
 
+    function clientLog(event, fields = {}) {
+        const payload = {
+            event,
+            sequence: ++browserLogSequence,
+            activeAssistantTurnId,
+            clientMicSampleIndex,
+            queuedAudioDeltas: queuedAudioDeltas.length,
+            currentPlayback: Boolean(currentPlayback),
+            pausedPlayback: Boolean(pausedPlayback),
+            localVadPlaybackPaused,
+            serverSttPlaybackPaused,
+            playbackReady: Boolean(isPlaybackReady()),
+            audioContextState: playbackContext ? playbackContext.state : "none",
+            ...fields
+        };
+        const url = `/chat/client-log?group=${encodeURIComponent(groupInput.value)}&sessionId=${encodeURIComponent(sessionId)}`;
+        const body = JSON.stringify(payload);
+        if (navigator.sendBeacon) {
+            const sent = navigator.sendBeacon(url, new Blob([body], { type: "application/json; charset=utf-8" }));
+            if (sent) {
+                return;
+            }
+        }
+        fetch(url, {
+            method: "POST",
+            headers: {"Content-Type": "application/json; charset=utf-8"},
+            body,
+            keepalive: true
+        }).catch(() => {
+            // ログ送信失敗でチャット操作を止めない。
+        });
+    }
+
     async function startMicrophone() {
         if (audioContext) {
             return;
@@ -394,7 +447,7 @@
         micStart.disabled = true;
         micStatus.textContent = "requesting microphone";
         try {
-            preparePlayback();
+            await preparePlayback();
             await ensureTenVadReady();
             micStream = await navigator.mediaDevices.getUserMedia({
                 audio: {
@@ -584,18 +637,18 @@
         }
         for (const vadValue of vadBytes) {
             const speechValue = vadValue & 0x7f;
-            if (playbackPaused && pausedPlayback) {
+            if (localVadPlaybackPaused) {
                 quietVadFrameCount = speechValue < localResumeVadThreshold ? quietVadFrameCount + 1 : 0;
                 if (quietVadFrameCount >= localResumeSilenceVadFrames) {
                     quietVadFrameCount = 0;
                     loudVadFrameCount = 0;
-                    resumePlayback(activeAssistantTurnId);
+                    resumePlaybackForLocalVad(activeAssistantTurnId);
                     return;
                 }
             } else {
                 loudVadFrameCount = speechValue >= localPauseVadThreshold ? loudVadFrameCount + 1 : 0;
                 if (loudVadFrameCount >= localPauseConsecutiveVadFrames) {
-                    pausePlayback(activeAssistantTurnId);
+                    pausePlaybackForLocalVad(activeAssistantTurnId);
                     loudVadFrameCount = 0;
                     quietVadFrameCount = 0;
                     return;
@@ -725,21 +778,32 @@
         if (!playbackContext) {
             const AudioContextClass = window.AudioContext || window.webkitAudioContext;
             if (!AudioContextClass) {
+                clientLog("playback-context-unsupported");
                 throw new Error("AudioContext is not supported");
             }
             playbackContext = new AudioContextClass();
+            clientLog("playback-context-created", { audioContextState: playbackContext.state });
         }
         if (playbackContext.state !== "running") {
             await playbackContext.resume();
+            clientLog("playback-context-resumed", { audioContextState: playbackContext.state });
         }
     }
 
     function preparePlayback() {
-        return ensurePlaybackReady()
+        return withTimeout(ensurePlaybackReady(), 1500, "AudioContext resume timed out")
             .then(flushQueuedAudioDeltas)
             .catch((error) => {
                 appendSystem(`audio playback init error: ${error.message}`);
             });
+    }
+
+    function withTimeout(promise, timeoutMs, message) {
+        let timeoutId = 0;
+        const timeout = new Promise((resolve, reject) => {
+            timeoutId = setTimeout(() => reject(new Error(message)), timeoutMs);
+        });
+        return Promise.race([promise, timeout]).finally(() => clearTimeout(timeoutId));
     }
 
     function isPlaybackReady() {
@@ -749,41 +813,67 @@
     function queueAudioDelta(payload) {
         const turnId = payload.assistantTurnId || 0;
         if (canceledAssistantTurnIds.has(turnId) || turnId < activeAssistantTurnId) {
+            clientLog("audio-delta-dropped", {
+                assistantTurnId: turnId,
+                detail: `canceled=${canceledAssistantTurnIds.has(turnId)};older=${turnId < activeAssistantTurnId}`
+            });
             return;
         }
         activeAssistantTurnId = Math.max(activeAssistantTurnId, turnId);
         if (!isPlaybackReady()) {
             queuedAudioDeltas.push(payload);
+            clientLog("audio-delta-queued-waiting-context", {
+                assistantTurnId: turnId,
+                detail: `base64Chars=${payload.data ? payload.data.length : 0}`
+            });
             if (queuedAudioDeltas.length > 100) {
                 queuedAudioDeltas = queuedAudioDeltas.slice(-100);
+                clientLog("audio-delta-queue-trimmed", { assistantTurnId: turnId });
             }
             preparePlayback();
             return;
         }
         queuedAudioDeltas.push(payload);
+        clientLog("audio-delta-queued", {
+            assistantTurnId: turnId,
+            detail: `base64Chars=${payload.data ? payload.data.length : 0}`
+        });
         pumpPlayback();
     }
 
     function flushQueuedAudioDeltas() {
         if (!isPlaybackReady() || queuedAudioDeltas.length === 0) {
+            clientLog("flush-queued-audio-skipped", {
+                detail: `ready=${isPlaybackReady()};queued=${queuedAudioDeltas.length}`
+            });
             return;
         }
+        clientLog("flush-queued-audio");
         pumpPlayback();
     }
 
     function pumpPlayback() {
-        if (!isPlaybackReady() || playbackPaused || currentPlayback || queuedAudioDeltas.length === 0) {
+        if (!isPlaybackReady() || isPlaybackPaused() || currentPlayback || queuedAudioDeltas.length === 0) {
+            clientLog("pump-playback-blocked", {
+                detail: `ready=${isPlaybackReady()};paused=${isPlaybackPaused()};current=${Boolean(currentPlayback)};queued=${queuedAudioDeltas.length}`
+            });
             return;
         }
         const payload = queuedAudioDeltas.shift();
         const turnId = payload.assistantTurnId || 0;
         if (canceledAssistantTurnIds.has(turnId) || turnId < activeAssistantTurnId) {
+            clientLog("pump-playback-drop-payload", {
+                assistantTurnId: turnId,
+                detail: `canceled=${canceledAssistantTurnIds.has(turnId)};older=${turnId < activeAssistantTurnId}`
+            });
             pumpPlayback();
             return;
         }
         try {
+            clientLog("pump-playback-start", { assistantTurnId: turnId });
             startPlayback(payload, 0);
         } catch (error) {
+            clientLog("pump-playback-error", { assistantTurnId: turnId, error: error.message });
             appendSystem(`audio playback error: ${error.message}`);
             currentPlayback = null;
             pumpPlayback();
@@ -792,6 +882,7 @@
 
     function startPlayback(payload, offsetSeconds) {
         if (!payload.data) {
+            clientLog("start-playback-empty-payload", { assistantTurnId: payload.assistantTurnId || 0 });
             pumpPlayback();
             return;
         }
@@ -809,6 +900,10 @@
             startedAt: playbackContext.currentTime,
             stopRequested: false
         };
+        clientLog("playback-start", {
+            assistantTurnId: payload.assistantTurnId || 0,
+            detail: `offsetSeconds=${offsetSeconds};samples=${samples.length};duration=${buffer.duration}`
+        });
         reportPlayback(offsetSeconds > 0 ? "resume" : "start", payload.assistantTurnId || 0);
         source.onended = () => {
             const playback = currentPlayback;
@@ -817,34 +912,78 @@
             }
             currentPlayback = null;
             if (!playback.stopRequested) {
+                clientLog("playback-ended", { assistantTurnId: playback.payload.assistantTurnId || 0 });
                 reportPlayback("end", playback.payload.assistantTurnId || 0);
                 pumpPlayback();
+            } else {
+                clientLog("playback-ended-after-stop", { assistantTurnId: playback.payload.assistantTurnId || 0 });
             }
         };
         source.start(0, Math.min(offsetSeconds, buffer.duration));
     }
 
     function handleAudioControl(payload) {
-        activeAssistantTurnId = Math.max(activeAssistantTurnId, payload.assistantTurnId || 0);
+        const assistantTurnId = payload.assistantTurnId || 0;
+        if (assistantTurnId <= 0) {
+            clientLog("audio-control-ignored-without-assistant-turn", {
+                assistantTurnId,
+                detail: `action=${payload.action || ""}`
+            });
+            return;
+        }
+        activeAssistantTurnId = Math.max(activeAssistantTurnId, assistantTurnId);
         if (payload.action === "pause") {
-            pausePlayback(payload.assistantTurnId || 0);
+            pausePlaybackForServerSttWait(assistantTurnId);
             return;
         }
         if (payload.action === "resume") {
-            resumePlayback(payload.assistantTurnId || 0);
+            resumePlaybackForServerSttWait(assistantTurnId);
             return;
         }
         if (payload.action === "cancel") {
-            cancelPlayback(payload.assistantTurnId || 0);
+            cancelPlayback(assistantTurnId);
         }
     }
 
-    function pausePlayback(assistantTurnId) {
-        if (assistantTurnId !== activeAssistantTurnId || playbackPaused) {
+    function isPlaybackPaused() {
+        return localVadPlaybackPaused || serverSttPlaybackPaused;
+    }
+
+    function pausePlaybackForLocalVad(assistantTurnId) {
+        if (assistantTurnId !== activeAssistantTurnId) {
+            clientLog("local-vad-pause-ignored", {
+                assistantTurnId,
+                detail: `activeAssistantTurnId=${activeAssistantTurnId}`
+            });
             return;
         }
-        playbackPaused = true;
+        const wasPaused = isPlaybackPaused();
+        localVadPlaybackPaused = true;
+        clientLog("local-vad-pause-set", { assistantTurnId, detail: `wasPaused=${wasPaused}` });
+        pauseCurrentPlayback(assistantTurnId, wasPaused);
+    }
+
+    function pausePlaybackForServerSttWait(assistantTurnId) {
+        if (assistantTurnId !== activeAssistantTurnId) {
+            clientLog("server-stt-pause-ignored", {
+                assistantTurnId,
+                detail: `activeAssistantTurnId=${activeAssistantTurnId}`
+            });
+            return;
+        }
+        const wasPaused = isPlaybackPaused();
+        serverSttPlaybackPaused = true;
+        clientLog("server-stt-pause-set", { assistantTurnId, detail: `wasPaused=${wasPaused}` });
+        pauseCurrentPlayback(assistantTurnId, wasPaused);
+    }
+
+    function pauseCurrentPlayback(assistantTurnId, wasPaused) {
+        if (wasPaused) {
+            clientLog("pause-current-playback-already-paused", { assistantTurnId });
+            return;
+        }
         if (!currentPlayback || !playbackContext) {
+            clientLog("pause-current-playback-no-current", { assistantTurnId });
             return;
         }
         const elapsed = Math.max(0, playbackContext.currentTime - currentPlayback.startedAt);
@@ -855,40 +994,84 @@
             offsetSeconds: currentPlayback.offsetSeconds
         };
         currentPlayback.source.stop();
+        clientLog("pause-current-playback-stopped-source", {
+            assistantTurnId,
+            detail: `offsetSeconds=${currentPlayback.offsetSeconds};elapsed=${elapsed}`
+        });
         reportPlayback("pause", assistantTurnId);
     }
 
-    function resumePlayback(assistantTurnId) {
+    function resumePlaybackForLocalVad(assistantTurnId) {
         if (assistantTurnId !== activeAssistantTurnId || canceledAssistantTurnIds.has(assistantTurnId)) {
+            clientLog("local-vad-resume-ignored", {
+                assistantTurnId,
+                detail: `activeAssistantTurnId=${activeAssistantTurnId};canceled=${canceledAssistantTurnIds.has(assistantTurnId)}`
+            });
             return;
         }
-        playbackPaused = false;
+        localVadPlaybackPaused = false;
+        clientLog("local-vad-resume-set", { assistantTurnId });
+        resumePlaybackIfUnpaused(assistantTurnId);
+    }
+
+    function resumePlaybackForServerSttWait(assistantTurnId) {
+        if (assistantTurnId !== activeAssistantTurnId || canceledAssistantTurnIds.has(assistantTurnId)) {
+            clientLog("server-stt-resume-ignored", {
+                assistantTurnId,
+                detail: `activeAssistantTurnId=${activeAssistantTurnId};canceled=${canceledAssistantTurnIds.has(assistantTurnId)}`
+            });
+            return;
+        }
+        serverSttPlaybackPaused = false;
+        clientLog("server-stt-resume-set", { assistantTurnId });
+        resumePlaybackIfUnpaused(assistantTurnId);
+    }
+
+    function resumePlaybackIfUnpaused(assistantTurnId) {
+        if (isPlaybackPaused()) {
+            clientLog("resume-playback-still-paused", { assistantTurnId });
+            return;
+        }
         if (pausedPlayback) {
             const playback = pausedPlayback;
             pausedPlayback = null;
             try {
+                clientLog("resume-paused-playback", {
+                    assistantTurnId,
+                    detail: `offsetSeconds=${playback.offsetSeconds}`
+                });
                 startPlayback(playback.payload, playback.offsetSeconds);
                 return;
             } catch (error) {
+                clientLog("resume-playback-error", { assistantTurnId, error: error.message });
                 appendSystem(`audio resume error: ${error.message}`);
             }
         }
+        clientLog("resume-pump-playback", { assistantTurnId });
         pumpPlayback();
     }
 
     function cancelPlayback(assistantTurnId) {
         canceledAssistantTurnIds.add(assistantTurnId);
-        playbackPaused = false;
+        clientLog("cancel-playback-received", { assistantTurnId });
+        if (assistantTurnId === activeAssistantTurnId) {
+            localVadPlaybackPaused = false;
+            serverSttPlaybackPaused = false;
+            clientLog("cancel-playback-cleared-pauses", { assistantTurnId });
+        }
         queuedAudioDeltas = queuedAudioDeltas.filter((payload) => (payload.assistantTurnId || 0) !== assistantTurnId);
         if (pausedPlayback && (pausedPlayback.payload.assistantTurnId || 0) === assistantTurnId) {
             pausedPlayback = null;
+            clientLog("cancel-playback-cleared-paused-source", { assistantTurnId });
         }
         if (currentPlayback && (currentPlayback.payload.assistantTurnId || 0) === assistantTurnId) {
             currentPlayback.stopRequested = true;
             currentPlayback.source.stop();
             currentPlayback = null;
+            clientLog("cancel-playback-stopped-current-source", { assistantTurnId });
         }
         reportPlayback("cancel", assistantTurnId);
+        pumpPlayback();
     }
 
     function reportPlayback(state, assistantTurnId) {
@@ -930,7 +1113,8 @@
         queuedAudioDeltas = [];
         currentPlayback = null;
         pausedPlayback = null;
-        playbackPaused = false;
+        localVadPlaybackPaused = false;
+        serverSttPlaybackPaused = false;
         activeAssistantTurnId = 0;
         loudVadFrameCount = 0;
         quietVadFrameCount = 0;

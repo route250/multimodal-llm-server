@@ -18,6 +18,8 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
+import java.util.function.Predicate;
 import llm.ChatMessage;
 import llm.LanguageModel;
 import org.junit.jupiter.api.Test;
@@ -79,6 +81,10 @@ class ChatClientAudioProcessingTest {
         assertTrue(html.contains("localPauseConsecutiveVadFrames = 3"));
         assertTrue(html.contains("localResumeVadThreshold = 35"));
         assertTrue(html.contains("localResumeSilenceVadFrames = 8"));
+        assertTrue(html.contains("let localVadPlaybackPaused = false"));
+        assertTrue(html.contains("let serverSttPlaybackPaused = false"));
+        assertTrue(html.contains("return localVadPlaybackPaused || serverSttPlaybackPaused"));
+        assertTrue(html.contains("audio-control-ignored-without-assistant-turn"));
         assertTrue(html.contains("X-Client-Mic-Start-Sample"));
         assertTrue(html.contains("/chat/playback"));
         assertTrue(html.contains("import createVADModule from \"/tenvad/ten_vad.js\""));
@@ -88,6 +94,7 @@ class ChatClientAudioProcessingTest {
         assertTrue(html.contains("vadBytes[frameIndex] = (value & 0x7f) | playbackFlag"));
         assertTrue(html.contains("const speechValue = vadValue & 0x7f"));
         assertTrue(html.contains("analyzeLocalTenVad(vadBytes)"));
+        assertFalse(html.contains("let playbackPaused"));
     }
 
     @Test
@@ -168,13 +175,36 @@ class ChatClientAudioProcessingTest {
 
             processorClient.handle(audioRequest(new byte[]{0, 0}));
 
-            ServerEvent delta = client.events().poll(1, TimeUnit.SECONDS);
-            ServerEvent done = client.events().poll(1, TimeUnit.SECONDS);
+            ServerEvent delta = pollUntil(client, event -> "message-delta".equals(event.type()));
+            ServerEvent done = pollUntil(client, event -> "message-done".equals(event.type()));
             assertNotNull(delta);
             assertNotNull(done);
             assertEquals("message-delta", delta.type());
             assertEquals("llm response: hello", delta.message());
             assertEquals("message-done", done.type());
+        }
+    }
+
+    @Test
+    void firstSttStartWithoutAssistantTurnDoesNotPauseBrowserPlayback() throws Exception {
+        try (MlServer server = new MlServer(0)) {
+            ChatGroup group = new ChatGroup("group-test", server);
+            ChatClient listener = group.join("client-1");
+            ChatClient processorClient = new ChatClient(
+                    "processor",
+                    group,
+                    new SttStartedThenTranscriptAudioProcessor(
+                            "最初の発話",
+                            VadAudioProcessor.TranscriptionKind.FINAL),
+                    new StreamingLanguageModel("はい？"));
+            drainJoinEvents(listener);
+
+            processorClient.handle(audioRequest(new byte[]{0, 0}));
+
+            assertNotNull(pollUntil(listener, event -> "はい？".equals(event.message())));
+            assertNotNull(pollUntil(listener, event -> "message-done".equals(event.type())));
+            assertFalse(containsMessageFragment(listener, "\"assistantTurnId\":0"));
+            assertFalse(containsMessageFragment(listener, "\"reason\":\"stt-wait\""));
         }
     }
 
@@ -194,11 +224,11 @@ class ChatClientAudioProcessingTest {
 
             processorClient.handle(audioRequest(new byte[]{0, 0}));
 
-            ServerEvent text1 = listener.events().poll(1, TimeUnit.SECONDS);
-            ServerEvent audio1 = listener.events().poll(1, TimeUnit.SECONDS);
-            ServerEvent text2 = listener.events().poll(1, TimeUnit.SECONDS);
-            ServerEvent audio2 = listener.events().poll(1, TimeUnit.SECONDS);
-            ServerEvent done = listener.events().poll(1, TimeUnit.SECONDS);
+            ServerEvent text1 = pollUntil(listener, event -> "message-delta".equals(event.type()));
+            ServerEvent audio1 = pollUntil(listener, event -> "audio-delta".equals(event.type()));
+            ServerEvent text2 = pollUntil(listener, event -> "message-delta".equals(event.type()));
+            ServerEvent audio2 = pollUntil(listener, event -> "audio-delta".equals(event.type()));
+            ServerEvent done = pollUntil(listener, event -> "message-done".equals(event.type()));
             assertNotNull(text1);
             assertNotNull(audio1);
             assertNotNull(text2);
@@ -233,9 +263,9 @@ class ChatClientAudioProcessingTest {
 
             processorClient.handle(ChatRequest.from("text/plain; charset=utf-8", "こんにちは".getBytes()));
 
-            ServerEvent text = listener.events().poll(1, TimeUnit.SECONDS);
-            ServerEvent audio = listener.events().poll(1, TimeUnit.SECONDS);
-            ServerEvent done = listener.events().poll(1, TimeUnit.SECONDS);
+            ServerEvent text = pollUntil(listener, event -> "message-delta".equals(event.type()));
+            ServerEvent audio = pollUntil(listener, event -> "audio-delta".equals(event.type()));
+            ServerEvent done = pollUntil(listener, event -> "message-done".equals(event.type()));
             assertNotNull(text);
             assertNotNull(audio);
             assertNotNull(done);
@@ -248,7 +278,7 @@ class ChatClientAudioProcessingTest {
     }
 
     @Test
-    void vadDetectionPublishesAudioPauseControl() throws Exception {
+    void vadDetectionDoesNotPublishAudioPauseControl() throws Exception {
         try (MlServer server = new MlServer(0)) {
             ChatGroup group = new ChatGroup("group-test", server);
             ChatClient listener = group.join("client-1");
@@ -260,11 +290,43 @@ class ChatClientAudioProcessingTest {
 
             processorClient.handle(audioRequest(new byte[]{0, 0}));
 
-            ServerEvent pause = listener.events().poll(1, TimeUnit.SECONDS);
+            ServerEvent event = listener.events().poll(100, TimeUnit.MILLISECONDS);
+            assertFalse(event != null && event.message().contains("\"reason\":\"vad\""));
+        }
+    }
+
+    @Test
+    void sttStartPausesAndEmptyFinalResumesWithoutCallingLlm() throws Exception {
+        try (MlServer server = new MlServer(0)) {
+            ChatGroup group = new ChatGroup("group-test", server);
+            ChatClient listener = group.join("client-1");
+            BlockingTextToSpeech textToSpeech = new BlockingTextToSpeech();
+            SttStartedThenTranscriptAudioProcessor processor = new SttStartedThenTranscriptAudioProcessor(
+                    "",
+                    VadAudioProcessor.TranscriptionKind.FINAL);
+            CountingLanguageModel languageModel = new CountingLanguageModel("応答。");
+            ChatClient processorClient = new ChatClient(
+                    "processor",
+                    group,
+                    processor,
+                    languageModel,
+                    textToSpeech);
+            drainJoinEvents(listener);
+
+            processorClient.handle(ChatRequest.from("text/plain; charset=utf-8", "開始".getBytes()));
+            assertNotNull(pollUntil(listener, event -> "message-delta".equals(event.type())));
+            assertTrue(textToSpeech.started.await(1, TimeUnit.SECONDS));
+
+            processorClient.handle(audioRequest(new byte[]{0, 0}));
+
+            ServerEvent pause = pollUntil(listener, event -> event.message().contains("\"reason\":\"stt-wait\""));
+            ServerEvent resume = pollUntil(listener, event -> event.message().contains("\"reason\":\"empty-stt\""));
             assertNotNull(pause);
-            assertEquals("audio-control", pause.type());
+            assertNotNull(resume);
             assertTrue(pause.message().contains("\"action\":\"pause\""));
-            assertTrue(pause.message().contains("\"reason\":\"vad\""));
+            assertTrue(resume.message().contains("\"action\":\"resume\""));
+            assertEquals(1, languageModel.calls);
+            textToSpeech.release();
         }
     }
 
@@ -283,13 +345,13 @@ class ChatClientAudioProcessingTest {
             drainJoinEvents(listener);
 
             processorClient.handle(ChatRequest.from("text/plain; charset=utf-8", "開始".getBytes()));
-            ServerEvent text = listener.events().poll(1, TimeUnit.SECONDS);
+            ServerEvent text = pollUntil(listener, event -> "message-delta".equals(event.type()));
             assertNotNull(text);
             assertEquals("message-delta", text.type());
             assertTrue(textToSpeech.started.await(1, TimeUnit.SECONDS));
 
             processorClient.handle(audioRequest(new byte[]{0, 0}));
-            ServerEvent cancel = listener.events().poll(1, TimeUnit.SECONDS);
+            ServerEvent cancel = pollUntil(listener, event -> event.message().contains("\"action\":\"cancel\""));
             assertNotNull(cancel);
             assertEquals("audio-control", cancel.type());
             assertTrue(cancel.message().contains("\"action\":\"cancel\""));
@@ -297,6 +359,51 @@ class ChatClientAudioProcessingTest {
             textToSpeech.release();
             Thread.sleep(100);
             assertFalse(containsMessageFragment(listener, "\"assistantTurnId\":1"));
+        }
+    }
+
+    @Test
+    void consecutiveNonEmptySttResultsKeepOnlyLatestAssistantTurn() throws Exception {
+        try (MlServer server = new MlServer(0)) {
+            ChatGroup group = new ChatGroup("group-test", server);
+            ChatClient listener = group.join("client-1");
+            QueuedSttStartedTranscriptAudioProcessor processor = new QueuedSttStartedTranscriptAudioProcessor(
+                    "最初の割り込み",
+                    "次の割り込み");
+            RecordingConversationLanguageModel languageModel = new RecordingConversationLanguageModel(
+                    "初期応答。",
+                    "最初の応答。",
+                    "次の応答。");
+            BlockingTextToSpeech textToSpeech = new BlockingTextToSpeech();
+            ChatClient processorClient = new ChatClient(
+                    "processor",
+                    group,
+                    processor,
+                    languageModel,
+                    textToSpeech);
+            drainJoinEvents(listener);
+
+            processorClient.handle(ChatRequest.from("text/plain; charset=utf-8", "開始".getBytes()));
+            assertNotNull(pollUntil(listener, event -> "初期応答。".equals(event.message())));
+            assertTrue(textToSpeech.started.await(1, TimeUnit.SECONDS));
+
+            processorClient.handle(audioRequest(new byte[]{0, 0}));
+            ServerEvent firstCancel = pollUntil(listener, event -> event.message().contains("\"assistantTurnId\":1")
+                    && event.message().contains("\"action\":\"cancel\""));
+            assertNotNull(firstCancel);
+            assertNotNull(pollUntil(listener, event -> "最初の応答。".equals(event.message())));
+
+            processorClient.handle(audioRequest(new byte[]{0, 0}));
+            ServerEvent secondCancel = pollUntil(listener, event -> event.message().contains("\"assistantTurnId\":2")
+                    && event.message().contains("\"action\":\"cancel\""));
+            assertNotNull(secondCancel);
+
+            textToSpeech.release();
+            assertNotNull(pollUntil(listener, event -> "次の応答。".equals(event.message())));
+            assertFalse(containsAudioDeltaForTurn(listener, 1));
+            assertFalse(containsAudioDeltaForTurn(listener, 2));
+            assertEquals(3, languageModel.calls.size());
+            assertEquals("user:次の割り込み", languageModel.calls.get(2).getLast());
         }
     }
 
@@ -318,11 +425,11 @@ class ChatClientAudioProcessingTest {
             drainJoinEvents(listener);
 
             processorClient.handle(ChatRequest.from("text/plain; charset=utf-8", "開始".getBytes()));
-            assertNotNull(listener.events().poll(1, TimeUnit.SECONDS));
+            assertNotNull(pollUntil(listener, event -> "message-delta".equals(event.type())));
             assertTrue(textToSpeech.started.await(1, TimeUnit.SECONDS));
 
             processorClient.handle(audioRequest(new byte[]{0, 0}));
-            assertNotNull(listener.events().poll(1, TimeUnit.SECONDS));
+            assertFalse(containsMessageFragment(listener, "\"reason\":\"vad\""));
 
             assertEquals(0, processor.ignoredBeforeSampleIndex);
             textToSpeech.release();
@@ -344,11 +451,11 @@ class ChatClientAudioProcessingTest {
             drainJoinEvents(listener);
 
             processorClient.handle(ChatRequest.from("text/plain; charset=utf-8", "私の名前は太郎です".getBytes()));
-            assertNotNull(listener.events().poll(1, TimeUnit.SECONDS));
-            assertNotNull(listener.events().poll(1, TimeUnit.SECONDS));
+            assertNotNull(pollUntil(listener, event -> "message-delta".equals(event.type())));
+            assertNotNull(pollUntil(listener, event -> "message-done".equals(event.type())));
             processorClient.handle(ChatRequest.from("text/plain; charset=utf-8", "私の名前は何ですか".getBytes()));
-            assertNotNull(listener.events().poll(1, TimeUnit.SECONDS));
-            assertNotNull(listener.events().poll(1, TimeUnit.SECONDS));
+            assertNotNull(pollUntil(listener, event -> "message-delta".equals(event.type())));
+            assertNotNull(pollUntil(listener, event -> "message-done".equals(event.type())));
 
             assertEquals(2, languageModel.calls.size());
             assertEquals(List.of("user:私の名前は太郎です"), languageModel.calls.get(0));
@@ -371,9 +478,9 @@ class ChatClientAudioProcessingTest {
             processorClient.handle(audioRequest(new byte[]{0, 0}));
             processorClient.handle(audioRequest(new byte[]{1, 0}));
 
-            ServerEvent failure = client.events().poll(1, TimeUnit.SECONDS);
-            ServerEvent delta = client.events().poll(1, TimeUnit.SECONDS);
-            ServerEvent done = client.events().poll(1, TimeUnit.SECONDS);
+            ServerEvent failure = pollUntil(client, event -> "system".equals(event.type()));
+            ServerEvent delta = pollUntil(client, event -> "message-delta".equals(event.type()));
+            ServerEvent done = pollUntil(client, event -> "message-done".equals(event.type()));
             assertNotNull(failure);
             assertNotNull(delta);
             assertNotNull(done);
@@ -452,6 +559,23 @@ class ChatClientAudioProcessingTest {
 
     private static boolean containsMessageFragment(ChatClient client, String fragment) {
         return client.events().stream().anyMatch(event -> event.message().contains(fragment));
+    }
+
+    private static boolean containsAudioDeltaForTurn(ChatClient client, long assistantTurnId) {
+        String fragment = "\"assistantTurnId\":" + assistantTurnId;
+        return client.events().stream()
+                .anyMatch(event -> "audio-delta".equals(event.type()) && event.message().contains(fragment));
+    }
+
+    private static ServerEvent pollUntil(ChatClient client, Predicate<ServerEvent> predicate) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+        while (System.nanoTime() < deadline) {
+            ServerEvent event = client.events().poll(50, TimeUnit.MILLISECONDS);
+            if (event != null && predicate.test(event)) {
+                return event;
+            }
+        }
+        return null;
     }
 
     private static SpeechToText emptySpeechToText() {
@@ -565,6 +689,77 @@ class ChatClientAudioProcessingTest {
         }
     }
 
+    private static class SttStartedThenTranscriptAudioProcessor extends VadAudioProcessor {
+        private final String transcript;
+        private final TranscriptionKind kind;
+        private Consumer<VadAudioProcessor.TranscriptionStarted> listener = started -> {
+        };
+
+        SttStartedThenTranscriptAudioProcessor(String transcript, TranscriptionKind kind) {
+            super(samples -> true, emptySpeechToText(), Runnable::run);
+            this.transcript = transcript;
+            this.kind = kind;
+        }
+
+        @Override
+        public synchronized void setTranscriptionStartedListener(Consumer<VadAudioProcessor.TranscriptionStarted> listener) {
+            this.listener = listener == null ? started -> {
+            } : listener;
+        }
+
+        @Override
+        public Optional<VadAudioProcessor.TranscriptionResult> acceptPcm16LeWithVadDetailed(byte[] bytes, byte[] vadBytes) {
+            listener.accept(new VadAudioProcessor.TranscriptionStarted(1, 0, 0, kind));
+            Transcription transcription = transcript.isBlank()
+                    ? Transcription.empty()
+                    : Transcription.singleSegment(transcript, 0, 16_000);
+            return Optional.of(new VadAudioProcessor.TranscriptionResult(
+                    1,
+                    0,
+                    0,
+                    kind,
+                    transcription));
+        }
+    }
+
+    private static class QueuedSttStartedTranscriptAudioProcessor extends VadAudioProcessor {
+        private final List<String> transcripts;
+        private int nextTranscript;
+        private long nextSpeechSequenceId = 1;
+        private Consumer<VadAudioProcessor.TranscriptionStarted> listener = started -> {
+        };
+
+        QueuedSttStartedTranscriptAudioProcessor(String... transcripts) {
+            super(samples -> true, emptySpeechToText(), Runnable::run);
+            this.transcripts = List.of(transcripts);
+        }
+
+        @Override
+        public synchronized void setTranscriptionStartedListener(Consumer<VadAudioProcessor.TranscriptionStarted> listener) {
+            this.listener = listener == null ? started -> {
+            } : listener;
+        }
+
+        @Override
+        public synchronized Optional<VadAudioProcessor.TranscriptionResult> acceptPcm16LeWithVadDetailed(
+                byte[] bytes,
+                byte[] vadBytes) {
+            long speechSequenceId = nextSpeechSequenceId++;
+            String transcript = transcripts.get(nextTranscript++);
+            listener.accept(new VadAudioProcessor.TranscriptionStarted(
+                    speechSequenceId,
+                    0,
+                    0,
+                    VadAudioProcessor.TranscriptionKind.PARTIAL));
+            return Optional.of(new VadAudioProcessor.TranscriptionResult(
+                    speechSequenceId,
+                    0,
+                    0,
+                    VadAudioProcessor.TranscriptionKind.PARTIAL,
+                    Transcription.singleSegment(transcript, 0, 16_000)));
+        }
+    }
+
     private static class TranscriptAudioProcessor extends VadAudioProcessor {
         private final String transcript;
 
@@ -663,12 +858,21 @@ class ChatClientAudioProcessingTest {
     }
 
     private static class CountingLanguageModel implements LanguageModel {
+        private final String response;
         private int calls;
+
+        CountingLanguageModel() {
+            this("");
+        }
+
+        CountingLanguageModel(String response) {
+            this.response = response;
+        }
 
         @Override
         public String respond(String userText) {
             calls++;
-            return userText;
+            return response.isBlank() ? userText : response;
         }
     }
 

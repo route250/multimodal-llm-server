@@ -34,6 +34,7 @@ public class MlServer implements AutoCloseable {
         httpServer = HttpServer.create(new InetSocketAddress(port), 0);
         httpServer.createContext("/chat/request", this::handleChatRequest);
         httpServer.createContext("/chat/playback", this::handleChatPlayback);
+        httpServer.createContext("/chat/client-log", this::handleChatClientLog);
         httpServer.createContext("/chat/connect", this::handleChatConnect);
         httpServer.createContext("/", this::handleStaticFile);
         executor = Executors.newVirtualThreadPerTaskExecutor();
@@ -186,6 +187,40 @@ public class MlServer implements AutoCloseable {
         sendText(exchange, 202, "application/json; charset=utf-8", "{\"status\":\"accepted\"}\n");
     }
 
+    private void handleChatClientLog(HttpExchange exchange) throws IOException {
+        if (!"POST".equals(exchange.getRequestMethod())) {
+            exchange.getResponseHeaders().set("Allow", "POST");
+            exchange.sendResponseHeaders(405, -1);
+            return;
+        }
+
+        String sessionId = sessionId(exchange);
+        ChatGroup chatGroup = chatGroup(exchange);
+        if (chatGroup == null) {
+            sendText(exchange, 404, "application/json; charset=utf-8", "{\"error\":\"chat group not found\"}\n");
+            return;
+        }
+
+        String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+        String event = jsonStringOrDefault(body, "event", "unknown");
+        AudioDiagnostics.log("browser-" + event, AudioDiagnostics.context(chatGroup.id(), sessionId),
+                AudioDiagnostics.fields(
+                        "assistantTurnId", jsonLongOrNull(body, "assistantTurnId"),
+                        "activeAssistantTurnId", jsonLongOrNull(body, "activeAssistantTurnId"),
+                        "clientMicSampleIndex", jsonLongOrNull(body, "clientMicSampleIndex"),
+                        "queuedAudioDeltas", jsonLongOrNull(body, "queuedAudioDeltas"),
+                        "currentPlayback", jsonBooleanOrNull(body, "currentPlayback"),
+                        "pausedPlayback", jsonBooleanOrNull(body, "pausedPlayback"),
+                        "localVadPlaybackPaused", jsonBooleanOrNull(body, "localVadPlaybackPaused"),
+                        "serverSttPlaybackPaused", jsonBooleanOrNull(body, "serverSttPlaybackPaused"),
+                        "playbackReady", jsonBooleanOrNull(body, "playbackReady"),
+                        "audioContextState", jsonStringOrNull(body, "audioContextState"),
+                        "detail", jsonStringOrNull(body, "detail"),
+                        "error", jsonStringOrNull(body, "error")));
+
+        sendText(exchange, 202, "application/json; charset=utf-8", "{\"status\":\"accepted\"}\n");
+    }
+
     private void handleChatConnect(HttpExchange exchange) throws IOException {
         if (!"GET".equals(exchange.getRequestMethod())) {
             exchange.getResponseHeaders().set("Allow", "GET");
@@ -213,6 +248,7 @@ public class MlServer implements AutoCloseable {
                 if (event == null) {
                     responseBody.write(": keep-alive\n\n".getBytes(StandardCharsets.UTF_8));
                 } else {
+                    logSseEvent(chatGroup.id(), sessionId, event);
                     writeEvent(responseBody, event);
                 }
                 responseBody.flush();
@@ -366,12 +402,38 @@ public class MlServer implements AutoCloseable {
         }
     }
 
+    private static void logSseEvent(String groupId, String sessionId, ServerEvent event) {
+        if (!"audio-delta".equals(event.type())
+                && !"audio-control".equals(event.type())
+                && !"message-done".equals(event.type())) {
+            return;
+        }
+        AudioDiagnostics.log("sse-send-" + event.type(), AudioDiagnostics.context(groupId, sessionId),
+                AudioDiagnostics.fields(
+                        "messageChars", event.message().length(),
+                        "assistantTurnId", jsonLongOrNull(event.message(), "assistantTurnId"),
+                        "action", jsonStringOrNull(event.message(), "action"),
+                        "sampleRate", jsonLongOrNull(event.message(), "sampleRate")));
+    }
+
     private static long jsonLong(String json, String name) {
         String value = jsonField(json, name);
         try {
             return Long.parseLong(value);
         } catch (NumberFormatException e) {
             throw new IllegalArgumentException(name + " must be a number");
+        }
+    }
+
+    private static Long jsonLongOrNull(String json, String name) {
+        String value = jsonFieldOrNull(json, name);
+        if (value == null || "null".equals(value)) {
+            return null;
+        }
+        try {
+            return Long.parseLong(value);
+        } catch (NumberFormatException e) {
+            return null;
         }
     }
 
@@ -385,22 +447,62 @@ public class MlServer implements AutoCloseable {
         throw new IllegalArgumentException(name + " must be a string");
     }
 
+    private static String jsonStringOrDefault(String json, String name, String defaultValue) {
+        String value = jsonStringOrNull(json, name);
+        return value == null || value.isBlank() ? defaultValue : value;
+    }
+
+    private static String jsonStringOrNull(String json, String name) {
+        String value = jsonFieldOrNull(json, name);
+        if (value == null || "null".equals(value)) {
+            return null;
+        }
+        if (value.length() >= 2 && value.startsWith("\"") && value.endsWith("\"")) {
+            return value.substring(1, value.length() - 1)
+                    .replace("\\n", "\n")
+                    .replace("\\r", "\r")
+                    .replace("\\t", "\t")
+                    .replace("\\\"", "\"")
+                    .replace("\\\\", "\\");
+        }
+        return null;
+    }
+
+    private static Boolean jsonBooleanOrNull(String json, String name) {
+        String value = jsonFieldOrNull(json, name);
+        if ("true".equals(value)) {
+            return Boolean.TRUE;
+        }
+        if ("false".equals(value)) {
+            return Boolean.FALSE;
+        }
+        return null;
+    }
+
     private static String jsonField(String json, String name) {
+        String value = jsonFieldOrNull(json, name);
+        if (value == null) {
+            throw new IllegalArgumentException(name + " is required");
+        }
+        return value;
+    }
+
+    private static String jsonFieldOrNull(String json, String name) {
         String key = "\"" + name + "\"";
         int keyStart = json.indexOf(key);
         if (keyStart < 0) {
-            throw new IllegalArgumentException(name + " is required");
+            return null;
         }
         int colon = json.indexOf(':', keyStart + key.length());
         if (colon < 0) {
-            throw new IllegalArgumentException(name + " is required");
+            return null;
         }
         int valueStart = colon + 1;
         while (valueStart < json.length() && Character.isWhitespace(json.charAt(valueStart))) {
             valueStart++;
         }
         if (valueStart >= json.length()) {
-            throw new IllegalArgumentException(name + " is required");
+            return null;
         }
         if (json.charAt(valueStart) == '"') {
             int valueEnd = valueStart + 1;
@@ -416,7 +518,7 @@ public class MlServer implements AutoCloseable {
                 }
                 valueEnd++;
             }
-            throw new IllegalArgumentException(name + " string is not closed");
+            return null;
         }
         int valueEnd = valueStart;
         while (valueEnd < json.length()) {

@@ -23,4 +23,28 @@ class StreamingTextChunkerTest {
         assertEquals(List.of("abcd"), chunker.append("abcde"));
         assertEquals(List.of("e"), chunker.finish());
     }
+
+    @Test
+    void joinsSeparatorChunksWithTwoOrFewerSpeechCharsToNextChunk() {
+        StreamingTextChunker chunker = new StreamingTextChunker(80);
+
+        assertEquals(List.of(), chunker.append("あ、"));
+        assertEquals(List.of("あ、次です。"), chunker.append("次です。"));
+    }
+
+    @Test
+    void keepsSeparatorChunksWithThreeSpeechChars() {
+        StreamingTextChunker chunker = new StreamingTextChunker(80);
+
+        assertEquals(List.of("ある日、"), chunker.append("ある日、"));
+    }
+
+    @Test
+    void skipsMarkdownSymbolOnlyChunks() {
+        StreamingTextChunker chunker = new StreamingTextChunker(80);
+
+        assertEquals(List.of(), chunker.append("---\n"));
+        assertEquals(List.of(), chunker.append("**"));
+        assertEquals(List.of(), chunker.finish());
+    }
 }
