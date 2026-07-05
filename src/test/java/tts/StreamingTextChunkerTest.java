@@ -40,11 +40,20 @@ class StreamingTextChunkerTest {
     }
 
     @Test
-    void skipsMarkdownSymbolOnlyChunks() {
+    void keepsMarkdownSymbolOnlyChunksForLaterText() {
         StreamingTextChunker chunker = new StreamingTextChunker(80);
 
         assertEquals(List.of(), chunker.append("---\n"));
         assertEquals(List.of(), chunker.append("**"));
-        assertEquals(List.of(), chunker.finish());
+        assertEquals(List.of("---\n**次です。"), chunker.append("次です。"));
+    }
+
+    @Test
+    void returnsTrailingMarkdownSymbolOnlyChunkForTextOnlyDisplay() {
+        StreamingTextChunker chunker = new StreamingTextChunker(80);
+
+        assertEquals(List.of(), chunker.append("---\n"));
+        assertEquals(List.of(), chunker.append("**"));
+        assertEquals(List.of("---\n**"), chunker.finish());
     }
 }

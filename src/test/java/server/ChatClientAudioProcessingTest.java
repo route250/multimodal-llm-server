@@ -175,12 +175,12 @@ class ChatClientAudioProcessingTest {
 
             processorClient.handle(audioRequest(new byte[]{0, 0}));
 
-            ServerEvent delta = pollUntil(client, event -> "message-delta".equals(event.type()));
+            ServerEvent delta = pollUntil(client, event -> "assistant-audio-chunk".equals(event.type()));
             ServerEvent done = pollUntil(client, event -> "message-done".equals(event.type()));
             assertNotNull(delta);
             assertNotNull(done);
-            assertEquals("message-delta", delta.type());
-            assertEquals("llm response: hello", delta.message());
+            assertEquals("assistant-audio-chunk", delta.type());
+            assertTrue(delta.message().contains("\"text\":"));
             assertEquals("message-done", done.type());
         }
     }
@@ -201,7 +201,7 @@ class ChatClientAudioProcessingTest {
 
             processorClient.handle(audioRequest(new byte[]{0, 0}));
 
-            assertNotNull(pollUntil(listener, event -> "はい？".equals(event.message())));
+            assertNotNull(pollUntil(listener, event -> event.message().contains("\"text\":\"はい？\"")));
             assertNotNull(pollUntil(listener, event -> "message-done".equals(event.type())));
             assertFalse(containsMessageFragment(listener, "\"assistantTurnId\":0"));
             assertFalse(containsMessageFragment(listener, "\"reason\":\"stt-wait\""));
@@ -224,24 +224,20 @@ class ChatClientAudioProcessingTest {
 
             processorClient.handle(audioRequest(new byte[]{0, 0}));
 
-            ServerEvent text1 = pollUntil(listener, event -> "message-delta".equals(event.type()));
-            ServerEvent audio1 = pollUntil(listener, event -> "audio-delta".equals(event.type()));
-            ServerEvent text2 = pollUntil(listener, event -> "message-delta".equals(event.type()));
-            ServerEvent audio2 = pollUntil(listener, event -> "audio-delta".equals(event.type()));
+            ServerEvent chunk1 = pollUntil(listener, event -> "assistant-audio-chunk".equals(event.type()));
+            ServerEvent chunk2 = pollUntil(listener, event -> "assistant-audio-chunk".equals(event.type()));
             ServerEvent done = pollUntil(listener, event -> "message-done".equals(event.type()));
-            assertNotNull(text1);
-            assertNotNull(audio1);
-            assertNotNull(text2);
-            assertNotNull(audio2);
+            assertNotNull(chunk1);
+            assertNotNull(chunk2);
             assertNotNull(done);
-            assertEquals("message-delta", text1.type());
-            assertEquals("こんにちは。", text1.message());
-            assertEquals("audio-delta", audio1.type());
-            assertTrue(audio1.message().contains("\"data\":\"AAAA\""));
-            assertTrue(audio1.message().contains("\"sampleRate\":24000"));
-            assertEquals("message-delta", text2.type());
-            assertEquals("次です", text2.message());
-            assertEquals("audio-delta", audio2.type());
+            assertEquals("assistant-audio-chunk", chunk1.type());
+            assertTrue(chunk1.message().contains("\"text\":\"こんにちは。\""));
+            assertTrue(chunk1.message().contains("\"data\":\"AAAA\""));
+            assertTrue(chunk1.message().contains("\"sampleRate\":24000"));
+            assertTrue(chunk1.message().contains("\"chunkId\":1"));
+            assertEquals("assistant-audio-chunk", chunk2.type());
+            assertTrue(chunk2.message().contains("\"text\":\"次です\""));
+            assertTrue(chunk2.message().contains("\"chunkId\":2"));
             assertEquals("message-done", done.type());
             assertEquals(List.of("こんにちは。", "次です"), textToSpeech.texts);
         }
@@ -263,15 +259,13 @@ class ChatClientAudioProcessingTest {
 
             processorClient.handle(ChatRequest.from("text/plain; charset=utf-8", "こんにちは".getBytes()));
 
-            ServerEvent text = pollUntil(listener, event -> "message-delta".equals(event.type()));
-            ServerEvent audio = pollUntil(listener, event -> "audio-delta".equals(event.type()));
+            ServerEvent chunk = pollUntil(listener, event -> "assistant-audio-chunk".equals(event.type()));
             ServerEvent done = pollUntil(listener, event -> "message-done".equals(event.type()));
-            assertNotNull(text);
-            assertNotNull(audio);
+            assertNotNull(chunk);
             assertNotNull(done);
-            assertEquals("message-delta", text.type());
-            assertEquals("テキスト応答。", text.message());
-            assertEquals("audio-delta", audio.type());
+            assertEquals("assistant-audio-chunk", chunk.type());
+            assertTrue(chunk.message().contains("\"text\":\"テキスト応答。\""));
+            assertTrue(chunk.message().contains("\"audioDeltas\":[{\"data\":\"AAAA\""));
             assertEquals("message-done", done.type());
             assertEquals(List.of("テキスト応答。"), textToSpeech.texts);
         }
@@ -296,6 +290,27 @@ class ChatClientAudioProcessingTest {
     }
 
     @Test
+    void vadStateChangePublishesSpeechStateEvent() throws Exception {
+        try (MlServer server = new MlServer(0)) {
+            ChatGroup group = new ChatGroup("group-test", server);
+            ChatClient listener = group.join("client-1");
+            StateChangeAudioProcessor processor = new StateChangeAudioProcessor(
+                    VadAudioProcessor.SpeechState.UNDETECTED,
+                    VadAudioProcessor.SpeechState.DETECTED);
+            ChatClient processorClient = new ChatClient("processor", group, processor);
+            drainJoinEvents(listener);
+
+            processorClient.handle(audioRequest(new byte[]{0, 0}));
+
+            ServerEvent event = pollUntil(listener, item -> "speech-state".equals(item.type()));
+            assertNotNull(event);
+            assertTrue(event.message().contains("\"previousState\":\"UNDETECTED\""));
+            assertTrue(event.message().contains("\"currentState\":\"DETECTED\""));
+            assertTrue(event.message().contains("\"speechSequenceId\":1"));
+        }
+    }
+
+    @Test
     void sttStartPausesAndEmptyFinalResumesWithoutCallingLlm() throws Exception {
         try (MlServer server = new MlServer(0)) {
             ChatGroup group = new ChatGroup("group-test", server);
@@ -314,7 +329,6 @@ class ChatClientAudioProcessingTest {
             drainJoinEvents(listener);
 
             processorClient.handle(ChatRequest.from("text/plain; charset=utf-8", "開始".getBytes()));
-            assertNotNull(pollUntil(listener, event -> "message-delta".equals(event.type())));
             assertTrue(textToSpeech.started.await(1, TimeUnit.SECONDS));
 
             processorClient.handle(audioRequest(new byte[]{0, 0}));
@@ -345,9 +359,6 @@ class ChatClientAudioProcessingTest {
             drainJoinEvents(listener);
 
             processorClient.handle(ChatRequest.from("text/plain; charset=utf-8", "開始".getBytes()));
-            ServerEvent text = pollUntil(listener, event -> "message-delta".equals(event.type()));
-            assertNotNull(text);
-            assertEquals("message-delta", text.type());
             assertTrue(textToSpeech.started.await(1, TimeUnit.SECONDS));
 
             processorClient.handle(audioRequest(new byte[]{0, 0}));
@@ -384,14 +395,12 @@ class ChatClientAudioProcessingTest {
             drainJoinEvents(listener);
 
             processorClient.handle(ChatRequest.from("text/plain; charset=utf-8", "開始".getBytes()));
-            assertNotNull(pollUntil(listener, event -> "初期応答。".equals(event.message())));
             assertTrue(textToSpeech.started.await(1, TimeUnit.SECONDS));
 
             processorClient.handle(audioRequest(new byte[]{0, 0}));
             ServerEvent firstCancel = pollUntil(listener, event -> event.message().contains("\"assistantTurnId\":1")
                     && event.message().contains("\"action\":\"cancel\""));
             assertNotNull(firstCancel);
-            assertNotNull(pollUntil(listener, event -> "最初の応答。".equals(event.message())));
 
             processorClient.handle(audioRequest(new byte[]{0, 0}));
             ServerEvent secondCancel = pollUntil(listener, event -> event.message().contains("\"assistantTurnId\":2")
@@ -399,7 +408,7 @@ class ChatClientAudioProcessingTest {
             assertNotNull(secondCancel);
 
             textToSpeech.release();
-            assertNotNull(pollUntil(listener, event -> "次の応答。".equals(event.message())));
+            assertNotNull(pollUntil(listener, event -> event.message().contains("\"text\":\"次の応答。\"")));
             assertFalse(containsAudioDeltaForTurn(listener, 1));
             assertFalse(containsAudioDeltaForTurn(listener, 2));
             assertEquals(3, languageModel.calls.size());
@@ -425,7 +434,6 @@ class ChatClientAudioProcessingTest {
             drainJoinEvents(listener);
 
             processorClient.handle(ChatRequest.from("text/plain; charset=utf-8", "開始".getBytes()));
-            assertNotNull(pollUntil(listener, event -> "message-delta".equals(event.type())));
             assertTrue(textToSpeech.started.await(1, TimeUnit.SECONDS));
 
             processorClient.handle(audioRequest(new byte[]{0, 0}));
@@ -451,10 +459,11 @@ class ChatClientAudioProcessingTest {
             drainJoinEvents(listener);
 
             processorClient.handle(ChatRequest.from("text/plain; charset=utf-8", "私の名前は太郎です".getBytes()));
-            assertNotNull(pollUntil(listener, event -> "message-delta".equals(event.type())));
+            assertNotNull(pollUntil(listener, event -> "assistant-audio-chunk".equals(event.type())));
+            processorClient.handlePlayback(new ChatClient.PlaybackEvent(1, 1, "end", true, 0, 0, 0));
             assertNotNull(pollUntil(listener, event -> "message-done".equals(event.type())));
             processorClient.handle(ChatRequest.from("text/plain; charset=utf-8", "私の名前は何ですか".getBytes()));
-            assertNotNull(pollUntil(listener, event -> "message-delta".equals(event.type())));
+            assertNotNull(pollUntil(listener, event -> "assistant-audio-chunk".equals(event.type())));
             assertNotNull(pollUntil(listener, event -> "message-done".equals(event.type())));
 
             assertEquals(2, languageModel.calls.size());
@@ -463,6 +472,119 @@ class ChatClientAudioProcessingTest {
                     "user:私の名前は太郎です",
                     "assistant:太郎です",
                     "user:私の名前は何ですか"), languageModel.calls.get(1));
+        }
+    }
+
+    @Test
+    void assistantChunkIsNotSentToHistoryBeforePlaybackRecognition() throws Exception {
+        try (MlServer server = new MlServer(0)) {
+            ChatGroup group = new ChatGroup("group-test", server);
+            ChatClient listener = group.join("client-1");
+            RecordingConversationLanguageModel languageModel = new RecordingConversationLanguageModel("太郎です", "太郎です");
+            ChatClient processorClient = new ChatClient(
+                    "processor",
+                    group,
+                    new TranscriptAudioProcessor("unused"),
+                    languageModel,
+                    new RecordingTextToSpeech());
+            drainJoinEvents(listener);
+
+            processorClient.handle(ChatRequest.from("text/plain; charset=utf-8", "私の名前は太郎です".getBytes()));
+            assertNotNull(pollUntil(listener, event -> "assistant-audio-chunk".equals(event.type())));
+            assertNotNull(pollUntil(listener, event -> "message-done".equals(event.type())));
+            processorClient.handle(ChatRequest.from("text/plain; charset=utf-8", "私の名前は何ですか".getBytes()));
+            assertNotNull(pollUntil(listener, event -> "assistant-audio-chunk".equals(event.type())));
+
+            assertEquals(2, languageModel.calls.size());
+            assertEquals(List.of("user:私の名前は太郎です"), languageModel.calls.get(0));
+            assertEquals(List.of("user:私の名前は何ですか"), languageModel.calls.get(1));
+        }
+    }
+
+    @Test
+    void recognizedAssistantChunkIsSentToNextLlmHistory() throws Exception {
+        try (MlServer server = new MlServer(0)) {
+            ChatGroup group = new ChatGroup("group-test", server);
+            ChatClient listener = group.join("client-1");
+            RecordingConversationLanguageModel languageModel = new RecordingConversationLanguageModel("太郎です", "太郎です");
+            ChatClient processorClient = new ChatClient(
+                    "processor",
+                    group,
+                    new TranscriptAudioProcessor("unused"),
+                    languageModel,
+                    new RecordingTextToSpeech());
+            drainJoinEvents(listener);
+
+            processorClient.handle(ChatRequest.from("text/plain; charset=utf-8", "私の名前は太郎です".getBytes()));
+            ServerEvent chunk = pollUntil(listener, event -> "assistant-audio-chunk".equals(event.type()));
+            assertNotNull(chunk);
+            processorClient.handlePlayback(new ChatClient.PlaybackEvent(1, 1, "end", true, 0.4, 1.0, 0));
+            assertNotNull(pollUntil(listener, event -> "message-done".equals(event.type())));
+
+            processorClient.handle(ChatRequest.from("text/plain; charset=utf-8", "私の名前は何ですか".getBytes()));
+            assertNotNull(pollUntil(listener, event -> "assistant-audio-chunk".equals(event.type())));
+
+            assertEquals(2, languageModel.calls.size());
+            assertEquals(List.of(
+                    "user:私の名前は太郎です",
+                    "assistant:太郎です",
+                    "user:私の名前は何ですか"), languageModel.calls.get(1));
+        }
+    }
+
+    @Test
+    void markdownSymbolPrefixIsMergedIntoNextSpokenChunk() throws Exception {
+        try (MlServer server = new MlServer(0)) {
+            ChatGroup group = new ChatGroup("group-test", server);
+            ChatClient listener = group.join("client-1");
+            RecordingTextToSpeech textToSpeech = new RecordingTextToSpeech();
+            ChatClient processorClient = new ChatClient(
+                    "processor",
+                    group,
+                    new TranscriptAudioProcessor("unused"),
+                    new StreamingLanguageModel("---\n", "本文。"),
+                    textToSpeech);
+            drainJoinEvents(listener);
+
+            processorClient.handle(ChatRequest.from("text/plain; charset=utf-8", "開始".getBytes()));
+
+            ServerEvent chunk = pollUntil(listener, event -> "assistant-audio-chunk".equals(event.type()));
+            assertNotNull(chunk);
+            assertTrue(chunk.message().contains("---\\n本文。"));
+            assertEquals(List.of("---\n本文。"), textToSpeech.texts);
+        }
+    }
+
+    @Test
+    void trailingTextOnlyChunkIsPublishedAndRemembered() throws Exception {
+        try (MlServer server = new MlServer(0)) {
+            ChatGroup group = new ChatGroup("group-test", server);
+            ChatClient listener = group.join("client-1");
+            RecordingConversationLanguageModel languageModel = new RecordingConversationLanguageModel(
+                    "本文です。```",
+                    "次です。");
+            ChatClient processorClient = new ChatClient(
+                    "processor",
+                    group,
+                    new TranscriptAudioProcessor("unused"),
+                    languageModel,
+                    new RecordingTextToSpeech());
+            drainJoinEvents(listener);
+
+            processorClient.handle(ChatRequest.from("text/plain; charset=utf-8", "開始".getBytes()));
+            ServerEvent spoken = pollUntil(listener, event -> event.message().contains("\"text\":\"本文です。\""));
+            ServerEvent textOnly = pollUntil(listener, event -> event.message().contains("\"text\":\"```\""));
+            assertNotNull(spoken);
+            assertNotNull(textOnly);
+            assertTrue(textOnly.message().contains("\"audioDeltas\":[]"));
+            processorClient.handlePlayback(new ChatClient.PlaybackEvent(1, 2, "end", true, 0, 0, 0));
+            assertNotNull(pollUntil(listener, event -> "message-done".equals(event.type())));
+
+            processorClient.handle(ChatRequest.from("text/plain; charset=utf-8", "次".getBytes()));
+            assertNotNull(pollUntil(listener, event -> "assistant-audio-chunk".equals(event.type())));
+
+            assertEquals(2, languageModel.calls.size());
+            assertTrue(languageModel.calls.get(1).contains("assistant:```"));
         }
     }
 
@@ -479,15 +601,15 @@ class ChatClientAudioProcessingTest {
             processorClient.handle(audioRequest(new byte[]{1, 0}));
 
             ServerEvent failure = pollUntil(client, event -> "system".equals(event.type()));
-            ServerEvent delta = pollUntil(client, event -> "message-delta".equals(event.type()));
+            ServerEvent delta = pollUntil(client, event -> "assistant-audio-chunk".equals(event.type()));
             ServerEvent done = pollUntil(client, event -> "message-done".equals(event.type()));
             assertNotNull(failure);
             assertNotNull(delta);
             assertNotNull(done);
             assertEquals("system", failure.type());
             assertEquals("audio processing failed: boom", failure.message());
-            assertEquals("message-delta", delta.type());
-            assertEquals("llm response: after failure", delta.message());
+            assertEquals("assistant-audio-chunk", delta.type());
+            assertTrue(delta.message().contains("\"text\":"));
             assertEquals("message-done", done.type());
         }
     }

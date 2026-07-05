@@ -176,7 +176,11 @@ public class MlServer implements AutoCloseable {
         try {
             client.handlePlayback(new ChatClient.PlaybackEvent(
                     jsonLong(body, "assistantTurnId"),
+                    jsonLongOrDefault(body, "chunkId", 0),
                     jsonString(body, "state"),
+                    jsonBooleanOrDefault(body, "recognized", false),
+                    jsonDoubleOrDefault(body, "playedSeconds", 0),
+                    jsonDoubleOrDefault(body, "durationSeconds", 0),
                     jsonLong(body, "clientMicSampleIndex")));
         } catch (IllegalArgumentException e) {
             sendText(exchange, 400, "application/json; charset=utf-8",
@@ -206,6 +210,7 @@ public class MlServer implements AutoCloseable {
         AudioDiagnostics.log("browser-" + event, AudioDiagnostics.context(chatGroup.id(), sessionId),
                 AudioDiagnostics.fields(
                         "assistantTurnId", jsonLongOrNull(body, "assistantTurnId"),
+                        "chunkId", jsonLongOrNull(body, "chunkId"),
                         "activeAssistantTurnId", jsonLongOrNull(body, "activeAssistantTurnId"),
                         "clientMicSampleIndex", jsonLongOrNull(body, "clientMicSampleIndex"),
                         "queuedAudioDeltas", jsonLongOrNull(body, "queuedAudioDeltas"),
@@ -404,6 +409,7 @@ public class MlServer implements AutoCloseable {
 
     private static void logSseEvent(String groupId, String sessionId, ServerEvent event) {
         if (!"audio-delta".equals(event.type())
+                && !"assistant-audio-chunk".equals(event.type())
                 && !"audio-control".equals(event.type())
                 && !"message-done".equals(event.type())) {
             return;
@@ -412,6 +418,7 @@ public class MlServer implements AutoCloseable {
                 AudioDiagnostics.fields(
                         "messageChars", event.message().length(),
                         "assistantTurnId", jsonLongOrNull(event.message(), "assistantTurnId"),
+                        "chunkId", jsonLongOrNull(event.message(), "chunkId"),
                         "action", jsonStringOrNull(event.message(), "action"),
                         "sampleRate", jsonLongOrNull(event.message(), "sampleRate")));
     }
@@ -434,6 +441,23 @@ public class MlServer implements AutoCloseable {
             return Long.parseLong(value);
         } catch (NumberFormatException e) {
             return null;
+        }
+    }
+
+    private static long jsonLongOrDefault(String json, String name, long defaultValue) {
+        Long value = jsonLongOrNull(json, name);
+        return value == null ? defaultValue : value;
+    }
+
+    private static double jsonDoubleOrDefault(String json, String name, double defaultValue) {
+        String value = jsonFieldOrNull(json, name);
+        if (value == null || "null".equals(value)) {
+            return defaultValue;
+        }
+        try {
+            return Double.parseDouble(value);
+        } catch (NumberFormatException e) {
+            return defaultValue;
         }
     }
 
@@ -477,6 +501,11 @@ public class MlServer implements AutoCloseable {
             return Boolean.FALSE;
         }
         return null;
+    }
+
+    private static boolean jsonBooleanOrDefault(String json, String name, boolean defaultValue) {
+        Boolean value = jsonBooleanOrNull(json, name);
+        return value == null ? defaultValue : value;
     }
 
     private static String jsonField(String json, String name) {

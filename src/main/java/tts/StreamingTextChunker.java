@@ -50,8 +50,11 @@ public class StreamingTextChunker {
 
     private void addPending(List<String> chunks, boolean force) {
         String chunk = pending.toString().trim();
-        if (chunk.isBlank() || isMarkdownSymbolsOnly(chunk)) {
+        if (chunk.isBlank()) {
             pending.setLength(0);
+            return;
+        }
+        if (!force && isMarkdownSymbolsOnly(chunk)) {
             return;
         }
         if (!force && speechCharCount(chunk) < MIN_CHARS_BEFORE_SEPARATOR_SPLIT) {
@@ -76,6 +79,10 @@ public class StreamingTextChunker {
                 || c == ';'
                 || c == '：'
                 || c == ':';
+    }
+
+    public static boolean hasSpeechText(String chunk) {
+        return chunk != null && !chunk.isBlank() && !isMarkdownSymbolsOnly(chunk);
     }
 
     private static int speechCharCount(String chunk) {

@@ -2,7 +2,9 @@ package server;
 
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.nio.file.Path;
 import java.util.Optional;
 import java.util.Set;
@@ -21,11 +23,13 @@ import onnx.OnnxModelException;
 import stt.Lfm2AudioSpeechToText;
 import stt.SpeechToTextException;
 import stt.Transcription;
+import tts.AudioDelta;
 import tts.Lfm2AudioTextToSpeech;
 import tts.StreamingTextChunker;
 import tts.TextToSpeech;
 import tts.TextToSpeechException;
 import vad.VadAudioProcessor;
+import vad.VadAudioProcessor.SpeechStateChange;
 import vad.VadAudioProcessor.TranscriptionKind;
 import vad.VadAudioProcessor.TranscriptionResult;
 import vad.VadAudioProcessor.TranscriptionStarted;
@@ -47,9 +51,12 @@ public class ChatClient {
     private final Object playbackControlLock = new Object();
     private final List<ChatMessage> conversationHistory = new ArrayList<>();
     private final Set<Long> canceledAssistantTurnIds = new HashSet<>();
+    private final Map<AssistantChunkKey, PendingAssistantChunk> pendingAssistantChunks = new LinkedHashMap<>();
     private CompletableFuture<Void> audioTaskTail = CompletableFuture.completedFuture(null);
     private Future<?> activeAssistantTask;
     private long currentAssistantTurnId;
+    private long nextAssistantChunkId;
+    private long rememberedUserAssistantTurnId;
     private long currentInterruptionId;
     private long activePlaybackAssistantTurnId;
     private long activePlaybackStartSampleIndex = Long.MIN_VALUE;
@@ -89,6 +96,7 @@ public class ChatClient {
         this.languageModel = languageModel;
         this.textToSpeech = textToSpeech;
         this.audioProcessor.setDiagnosticsContext(chatGroup.id(), id);
+        this.audioProcessor.setSpeechStateListener(this::handleSpeechStateChange);
         this.audioProcessor.setTranscriptionStartedListener(this::handleTranscriptionStarted);
     }
 
@@ -197,6 +205,9 @@ public class ChatClient {
                 finishPlaybackTracking(playbackEvent.assistantTurnId(), playbackEvent.clientMicSampleIndex());
             }
         }
+        if (playbackEvent.recognized()) {
+            rememberRecognizedChunk(playbackEvent.assistantTurnId(), playbackEvent.chunkId());
+        }
     }
 
     private void finishPlaybackTracking(long assistantTurnId, long clientMicSampleIndex) {
@@ -235,6 +246,14 @@ public class ChatClient {
                 "speechSequenceId", started.speechSequenceId(),
                 "reason", "stt-wait"));
         sendToGroupIfOpen(event);
+    }
+
+    private void handleSpeechStateChange(SpeechStateChange change) {
+        sendToGroupIfOpen(ServerEvent.speechState(
+                change.previousState().name(),
+                change.currentState().name(),
+                change.speechSequenceId(),
+                change.sampleIndex()));
     }
 
     private void resumePlaybackForEmptyTranscript(long speechSequenceId) {
@@ -313,6 +332,11 @@ public class ChatClient {
         if (taskToCancel != null) {
             taskToCancel.cancel(true);
         }
+        if (canceledTurnId > 0) {
+            synchronized (conversationLock) {
+                pendingAssistantChunks.keySet().removeIf(key -> key.assistantTurnId() == canceledTurnId);
+            }
+        }
         if (event != null) {
             sendToGroupIfOpen(event);
         }
@@ -344,30 +368,26 @@ public class ChatClient {
         }
         synchronized (conversationLock) {
             StreamingTextChunker chunker = new StreamingTextChunker();
-            StringBuilder assistantText = new StringBuilder();
             ChatMessage userMessage = new ChatMessage("user", transcript);
             List<ChatMessage> requestMessages = requestMessages(userMessage);
             try {
                 sendToGroupIfOpen(ServerEvent.userMessage(transcript));
+                sendToGroupIfOpen(ServerEvent.assistantState("LLM"));
                 languageModel.respondStreaming(requestMessages, delta -> {
                     if (!isAssistantTurnActive(assistantTurnId)) {
                         return;
                     }
-                    assistantText.append(delta);
                     AudioDiagnostics.log("llm-message-delta", diagnosticsContext, AudioDiagnostics.fields(
                             "assistantTurnId", assistantTurnId,
                             "deltaChars", delta.length()));
-                    sendToGroupIfOpen(ServerEvent.messageDelta(delta));
-                    speak(assistantTurnId, chunker.append(delta));
+                    speak(assistantTurnId, userMessage, chunker.append(delta));
                 });
-                speak(assistantTurnId, chunker.finish());
+                speak(assistantTurnId, userMessage, chunker.finish());
                 if (!isAssistantTurnActive(assistantTurnId)) {
                     return;
                 }
-                remember(userMessage, assistantText.toString());
                 AudioDiagnostics.log("assistant-turn-message-done", diagnosticsContext, AudioDiagnostics.fields(
-                        "assistantTurnId", assistantTurnId,
-                        "assistantTextChars", assistantText.length()));
+                        "assistantTurnId", assistantTurnId));
                 sendToGroupIfOpen(ServerEvent.messageDone());
                 finishAssistantTurn(assistantTurnId);
             } catch (LanguageModelException e) {
@@ -380,6 +400,8 @@ public class ChatClient {
                     sendToGroupIfOpen(ServerEvent.system("tts request failed: " + e.getMessage()));
                 }
                 finishAssistantTurn(assistantTurnId);
+            } finally {
+                sendToGroupIfOpen(ServerEvent.assistantState("IDLE"));
             }
         }
     }
@@ -417,51 +439,99 @@ public class ChatClient {
         return List.copyOf(messages);
     }
 
-    private void remember(ChatMessage userMessage, String assistantText) {
-        String responseText = assistantText.trim();
-        if (responseText.isBlank()) {
-            return;
+    private void rememberRecognizedChunk(long assistantTurnId, long chunkId) {
+        PendingAssistantChunk chunk;
+        synchronized (conversationLock) {
+            chunk = pendingAssistantChunks.remove(new AssistantChunkKey(assistantTurnId, chunkId));
+            if (chunk == null || chunk.text().isBlank()) {
+                return;
+            }
+            if (rememberedUserAssistantTurnId != assistantTurnId) {
+                conversationHistory.add(chunk.userMessage());
+                rememberedUserAssistantTurnId = assistantTurnId;
+            }
+            conversationHistory.add(new ChatMessage("assistant", chunk.text()));
+            trimConversationHistory();
         }
-        conversationHistory.add(userMessage);
-        conversationHistory.add(new ChatMessage("assistant", responseText));
+        AudioDiagnostics.log("assistant-chunk-recognized", diagnosticsContext, AudioDiagnostics.fields(
+                "assistantTurnId", assistantTurnId,
+                "chunkId", chunkId,
+                "textChars", chunk.text().length()));
+    }
+
+    private void trimConversationHistory() {
         while (conversationHistory.size() > MAX_HISTORY_MESSAGES) {
             conversationHistory.removeFirst();
         }
     }
 
-    private void speak(long assistantTurnId, Iterable<String> chunks) {
+    private void speak(long assistantTurnId, ChatMessage userMessage, Iterable<String> chunks) {
         for (String chunk : chunks) {
             if (!isAssistantTurnActive(assistantTurnId)) {
                 return;
             }
+            long chunkId = nextAssistantChunkId();
+            List<AudioDelta> audioDeltas = new ArrayList<>();
             AudioDiagnostics.log("tts-chunk-start", diagnosticsContext, AudioDiagnostics.fields(
                     "assistantTurnId", assistantTurnId,
+                    "chunkId", chunkId,
                     "textChars", chunk.length(),
                     "text", chunk));
-            final int[] audioDeltaCount = {0};
-            final long[] audioBase64Chars = {0};
-            textToSpeech.synthesizeStreaming(chunk, audio -> {
-                if (isAssistantTurnActive(assistantTurnId)) {
-                    audioDeltaCount[0]++;
-                    audioBase64Chars[0] += audio.data().length();
-                    AudioDiagnostics.log("tts-audio-delta", diagnosticsContext, AudioDiagnostics.fields(
-                            "assistantTurnId", assistantTurnId,
-                            "deltaIndex", audioDeltaCount[0],
-                            "base64Chars", audio.data().length(),
-                            "format", audio.format(),
-                            "sampleRate", audio.sampleRate()));
-                    sendToGroupIfOpen(ServerEvent.audioDelta(
-                            audio.data(),
-                            audio.format(),
-                            audio.sampleRate(),
-                            assistantTurnId));
-                }
-            });
+            sendToGroupIfOpen(ServerEvent.assistantState("TTS"));
+            if (StreamingTextChunker.hasSpeechText(chunk)) {
+                textToSpeech.synthesizeStreaming(chunk, audio -> {
+                    if (isAssistantTurnActive(assistantTurnId)) {
+                        audioDeltas.add(audio);
+                        AudioDiagnostics.log("tts-audio-delta", diagnosticsContext, AudioDiagnostics.fields(
+                                "assistantTurnId", assistantTurnId,
+                                "chunkId", chunkId,
+                                "deltaIndex", audioDeltas.size(),
+                                "base64Chars", audio.data().length(),
+                                "format", audio.format(),
+                                "sampleRate", audio.sampleRate()));
+                    }
+                });
+            }
+            if (!isAssistantTurnActive(assistantTurnId)) {
+                return;
+            }
+            double durationSeconds = audioDurationSeconds(audioDeltas);
+            pendingAssistantChunks.put(
+                    new AssistantChunkKey(assistantTurnId, chunkId),
+                    new PendingAssistantChunk(userMessage, chunk));
+            sendToGroupIfOpen(ServerEvent.assistantAudioChunk(
+                    assistantTurnId,
+                    chunkId,
+                    chunk,
+                    audioDeltas,
+                    durationSeconds));
             AudioDiagnostics.log("tts-chunk-done", diagnosticsContext, AudioDiagnostics.fields(
                     "assistantTurnId", assistantTurnId,
-                    "audioDeltaCount", audioDeltaCount[0],
-                    "audioBase64Chars", audioBase64Chars[0]));
+                    "chunkId", chunkId,
+                    "audioDeltaCount", audioDeltas.size(),
+                    "audioBase64Chars", audioDeltas.stream().mapToLong(audio -> audio.data().length()).sum(),
+                    "audioDurationSeconds", durationSeconds));
+            if (isAssistantTurnActive(assistantTurnId)) {
+                sendToGroupIfOpen(ServerEvent.assistantState("LLM"));
+            }
         }
+    }
+
+    private long nextAssistantChunkId() {
+        synchronized (playbackControlLock) {
+            return ++nextAssistantChunkId;
+        }
+    }
+
+    private static double audioDurationSeconds(List<AudioDelta> audioDeltas) {
+        double seconds = 0;
+        for (AudioDelta audio : audioDeltas) {
+            if ("pcm".equals(audio.format())) {
+                int byteLength = java.util.Base64.getDecoder().decode(audio.data()).length;
+                seconds += (byteLength / 2.0) / audio.sampleRate();
+            }
+        }
+        return seconds;
     }
 
     private void sendAudioProcessingFailure(RuntimeException e) {
@@ -498,6 +568,9 @@ public class ChatClient {
             assistantTurnActive = false;
             sttWaitActive = false;
         }
+        synchronized (conversationLock) {
+            pendingAssistantChunks.clear();
+        }
         if (taskToCancel != null) {
             taskToCancel.cancel(true);
         }
@@ -517,12 +590,29 @@ public class ChatClient {
         return new Lfm2AudioTextToSpeech();
     }
 
-    public record PlaybackEvent(long assistantTurnId, String state, long clientMicSampleIndex) {
+    public record PlaybackEvent(
+            long assistantTurnId,
+            long chunkId,
+            String state,
+            boolean recognized,
+            double playedSeconds,
+            double durationSeconds,
+            long clientMicSampleIndex) {
+        public PlaybackEvent(long assistantTurnId, String state, long clientMicSampleIndex) {
+            this(assistantTurnId, 0, state, false, 0, 0, clientMicSampleIndex);
+        }
+
         public PlaybackEvent {
             if (state == null || state.isBlank()) {
                 throw new IllegalArgumentException("playback state is required");
             }
             state = state.trim().toLowerCase();
         }
+    }
+
+    private record AssistantChunkKey(long assistantTurnId, long chunkId) {
+    }
+
+    private record PendingAssistantChunk(ChatMessage userMessage, String text) {
     }
 }
