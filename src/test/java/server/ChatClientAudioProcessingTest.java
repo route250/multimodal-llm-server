@@ -3,6 +3,7 @@ package server;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -341,6 +342,112 @@ class ChatClientAudioProcessingTest {
             assertTrue(resume.message().contains("\"action\":\"resume\""));
             assertEquals(1, languageModel.calls);
             textToSpeech.release();
+        }
+    }
+
+    @Test
+    void nonEmptyPartialCancelsPlaybackWithoutStartingLlm() throws Exception {
+        try (MlServer server = new MlServer(0)) {
+            ChatGroup group = new ChatGroup("group-test", server);
+            ChatClient listener = group.join("client-1");
+            BlockingTextToSpeech textToSpeech = new BlockingTextToSpeech();
+            CountingLanguageModel languageModel = new CountingLanguageModel("応答。");
+            ChatClient processorClient = new ChatClient(
+                    "processor",
+                    group,
+                    new SttStartedThenTranscriptAudioProcessor(
+                            "途中です",
+                            AudioProcessor.TranscriptionKind.PARTIAL),
+                    languageModel,
+                    textToSpeech);
+            drainJoinEvents(listener);
+
+            processorClient.handle(ChatRequest.from("text/plain; charset=utf-8", "開始".getBytes()));
+            assertTrue(textToSpeech.started.await(1, TimeUnit.SECONDS));
+
+            processorClient.handle(audioRequest(new byte[]{0, 0}));
+
+            ServerEvent cancel = pollUntil(listener, event -> event.message().contains("\"action\":\"cancel\""));
+            assertNotNull(cancel);
+            assertTrue(cancel.message().contains("\"reason\":\"user-transcript\""));
+            assertEquals(1, languageModel.calls);
+            assertNull(pollUntil(listener, event -> "assistant-audio-chunk".equals(event.type())));
+            textToSpeech.release();
+        }
+    }
+
+    @Test
+    void finalStartsLlmWithPartialAndFinalTranscript() throws Exception {
+        try (MlServer server = new MlServer(0)) {
+            ChatGroup group = new ChatGroup("group-test", server);
+            ChatClient listener = group.join("client-1");
+            RecordingConversationLanguageModel languageModel = new RecordingConversationLanguageModel("応答。");
+            ChatClient processorClient = new ChatClient(
+                    "processor",
+                    group,
+                    new ScriptedTranscriptionAudioProcessor(
+                            new ScriptedTranscription(1, AudioProcessor.TranscriptionKind.PARTIAL, "今日は"),
+                            new ScriptedTranscription(1, AudioProcessor.TranscriptionKind.FINAL, "天気です")),
+                    languageModel,
+                    TextToSpeech.disabled());
+            drainJoinEvents(listener);
+
+            processorClient.handle(audioRequest(new byte[]{0, 0}));
+            processorClient.handle(audioRequest(new byte[]{0, 0}));
+
+            assertNotNull(pollUntil(listener, event -> "assistant-audio-chunk".equals(event.type())));
+            assertEquals(1, languageModel.calls.size());
+            assertEquals(List.of("user:今日は天気です"), languageModel.calls.getFirst());
+        }
+    }
+
+    @Test
+    void finalStartsLlmWithOverlappedPartialAndFinalTranscript() throws Exception {
+        try (MlServer server = new MlServer(0)) {
+            ChatGroup group = new ChatGroup("group-test", server);
+            ChatClient listener = group.join("client-1");
+            RecordingConversationLanguageModel languageModel = new RecordingConversationLanguageModel("応答。");
+            ChatClient processorClient = new ChatClient(
+                    "processor",
+                    group,
+                    new ScriptedTranscriptionAudioProcessor(
+                            new ScriptedTranscription(1, AudioProcessor.TranscriptionKind.PARTIAL, "今日は天気"),
+                            new ScriptedTranscription(1, AudioProcessor.TranscriptionKind.FINAL, "天気です")),
+                    languageModel,
+                    TextToSpeech.disabled());
+            drainJoinEvents(listener);
+
+            processorClient.handle(audioRequest(new byte[]{0, 0}));
+            processorClient.handle(audioRequest(new byte[]{0, 0}));
+
+            assertNotNull(pollUntil(listener, event -> "assistant-audio-chunk".equals(event.type())));
+            assertEquals(1, languageModel.calls.size());
+            assertEquals(List.of("user:今日は天気です"), languageModel.calls.getFirst());
+        }
+    }
+
+    @Test
+    void emptyFinalAfterNonEmptyPartialStartsLlmWithPartialTranscript() throws Exception {
+        try (MlServer server = new MlServer(0)) {
+            ChatGroup group = new ChatGroup("group-test", server);
+            ChatClient listener = group.join("client-1");
+            RecordingConversationLanguageModel languageModel = new RecordingConversationLanguageModel("応答。");
+            ChatClient processorClient = new ChatClient(
+                    "processor",
+                    group,
+                    new ScriptedTranscriptionAudioProcessor(
+                            new ScriptedTranscription(1, AudioProcessor.TranscriptionKind.PARTIAL, "途中です"),
+                            new ScriptedTranscription(1, AudioProcessor.TranscriptionKind.FINAL, "")),
+                    languageModel,
+                    TextToSpeech.disabled());
+            drainJoinEvents(listener);
+
+            processorClient.handle(audioRequest(new byte[]{0, 0}));
+            processorClient.handle(audioRequest(new byte[]{0, 0}));
+
+            assertNotNull(pollUntil(listener, event -> "assistant-audio-chunk".equals(event.type())));
+            assertEquals(1, languageModel.calls.size());
+            assertEquals(List.of("user:途中です"), languageModel.calls.getFirst());
         }
     }
 
@@ -872,13 +979,58 @@ class ChatClientAudioProcessingTest {
                     speechSequenceId,
                     0,
                     0,
-                    AudioProcessor.TranscriptionKind.PARTIAL));
+                    AudioProcessor.TranscriptionKind.FINAL));
             return Optional.of(new AudioProcessor.TranscriptionResult(
                     speechSequenceId,
                     0,
                     0,
-                    AudioProcessor.TranscriptionKind.PARTIAL,
+                    AudioProcessor.TranscriptionKind.FINAL,
                     Transcription.singleSegment(transcript, 0, 16_000)));
+        }
+    }
+
+    private record ScriptedTranscription(
+            long speechSequenceId,
+            AudioProcessor.TranscriptionKind kind,
+            String transcript) {
+    }
+
+    private static class ScriptedTranscriptionAudioProcessor extends AudioProcessor {
+        private final List<ScriptedTranscription> transcriptions;
+        private int nextTranscription;
+        private Consumer<AudioProcessor.TranscriptionStarted> listener = started -> {
+        };
+
+        ScriptedTranscriptionAudioProcessor(ScriptedTranscription... transcriptions) {
+            super(samples -> true, emptySpeechToText(), Runnable::run);
+            this.transcriptions = List.of(transcriptions);
+        }
+
+        @Override
+        public synchronized void setTranscriptionStartedListener(Consumer<AudioProcessor.TranscriptionStarted> listener) {
+            this.listener = listener == null ? started -> {
+            } : listener;
+        }
+
+        @Override
+        public synchronized Optional<AudioProcessor.TranscriptionResult> acceptPcm16LeWithVadDetailed(
+                byte[] bytes,
+                byte[] vadBytes) {
+            ScriptedTranscription result = transcriptions.get(nextTranscription++);
+            listener.accept(new AudioProcessor.TranscriptionStarted(
+                    result.speechSequenceId(),
+                    0,
+                    0,
+                    result.kind()));
+            Transcription transcription = result.transcript().isBlank()
+                    ? Transcription.empty()
+                    : Transcription.singleSegment(result.transcript(), 0, 16_000);
+            return Optional.of(new AudioProcessor.TranscriptionResult(
+                    result.speechSequenceId(),
+                    0,
+                    0,
+                    result.kind(),
+                    transcription));
         }
     }
 

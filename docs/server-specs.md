@@ -229,12 +229,23 @@ Async audio processing failures are sent to connected clients as SSE `system` ev
 The receive buffer stores PCM samples and browser VAD values in 256 sample units.
 Browser VAD values are applied once per 256 samples, which is 16 ms at 16 kHz.
 
-Speech spike detection starts when the VAD value is at least `0.5`.
-Speech starts when the VAD value then stays above `0.35` for at least 1,600 samples, which is 100 ms at 16 kHz.
+Speech spike detection starts when the VAD value is at least `0.65`.
+Speech starts when the VAD value then stays above `0.35` for at least 3,200 samples, which is 200 ms at 16 kHz.
 When speech starts, the target range includes the previous 0.6 seconds of audio.
-Speech ends when the VAD value stays at or below `0.35` for 0.6 seconds.
-On speech end, the speech range is appended to the STT buffer using PCM sample indexes so overlapping ranges are not duplicated.
-STT の結果が空文字でない場合、サーバは OpenAI Responses API 互換エンドポイントへ `stream:true` で送信し、LLM の応答差分を `message-delta` イベントとして配信します。
+When VAD becomes at most `0.35`, the processor enters trailing silence.
+After trailing silence reaches 9,600 samples, which is 600 ms at 16 kHz, SmartTurn is evaluated every
+9,600 samples. If SmartTurn returns incomplete, trailing silence continues. If VAD becomes greater than
+`0.35` before SmartTurn returns complete, the same speech returns to detected state and no FINAL STT is queued.
+If SmartTurn still returns incomplete after trailing silence reaches 19,200 samples, which is 1,200 ms,
+the server queues a `FINAL` STT task anyway.
+発話継続中は 76,800 サンプル、つまり 4.8 秒ごとに `PARTIAL` STT を実行します。
+`PARTIAL` の非空結果は現在の AI 音声と生成中 turn を cancel しますが、LLM と TTS は開始しません。
+`FINAL` では同じ `speechSequenceId` の過去 `PARTIAL` 結果と `FINAL` 結果を結合します。
+`FINAL` の対象範囲が空の場合、STT 結果は空文字として扱います。
+結合後テキストが空文字でない場合、サーバは OpenAI Responses API 互換エンドポイントへ `stream:true`
+で送信し、LLM の応答差分を `message-delta` イベントとして配信します。結合後テキストが空文字の場合は、
+一時停止中の AI 音声再生を再開します。FINAL STT 実行中に新しい発話で `speechSequenceId` が変わった場合、
+古い FINAL 結果は破棄します。
 LLM 応答差分は、以下の条件で TTS へ送信する単位に分割します。
 
 - 句読点: `。`、`、`、`，`、`,`、`.`、`！`、`!`、`？`、`?`、`；`、`;`、`：`、`:`
@@ -250,8 +261,8 @@ STT タスクが投入された場合、サーバは `audio-control` イベン�
 
 ```text
 pause   STT 結果待ちに入ったため、対象の AI 音声再生を一時停止する。reason は stt-wait。
-resume  FINAL STT 結果が空文字だったため、同じ AI 音声再生を再開する。reason は empty-stt。
-cancel  PARTIAL または FINAL STT 結果が非空だったため、対象の AI 音声再生と古い応答出力を破棄する。reason は user-transcript。
+resume  FINAL の結合後テキストが空文字だったため、同じ AI 音声再生を再開する。reason は empty-stt。
+cancel  PARTIAL または FINAL の結合後テキストが非空だったため、対象の AI 音声再生と古い応答出力を破棄する。reason は user-transcript。
 ```
 VAD による短時間の再生停止と再開はブラウザだけで完結させ、サーバは VAD 検出を理由に `audio-control`
 を配信しません。

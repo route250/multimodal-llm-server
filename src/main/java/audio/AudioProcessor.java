@@ -47,6 +47,8 @@ public class AudioProcessor {
     public static final int MIN_TURN_DETECTION_SILENCE_SAMPLES = END_SILENCE_SAMPLES;
     /** SmartTurn によるターン検出を再試行する間隔のサンプル数。 */
     public static final int TURN_DETECTION_INTERVAL_SAMPLES = 9_600;
+    /** SmartTurn が未完了でも発話終了を確定する最大無音区間。19,200 サンプルは 16 kHz で 1,200 ms。 */
+    public static final int MAX_TURN_DETECTION_SILENCE_SAMPLES = 19_200;
     /** 非発話状態から発話状態へ切り替える VAD 確率の下限値。 */
     public static final float START_THRESHOLD = 0.65f;
     /** 発話状態を継続する VAD 確率の下限値。 */
@@ -357,7 +359,8 @@ public class AudioProcessor {
                     return;
                 }
                 setState(frameStartSampleIndex, SpeechState.TURN_DETECTING, probability);
-                if (!detectTurn(speechEndSampleIndex)) {
+                boolean forceFinal = frameEndSampleIndex - lastSpeechSampleIndex >= MAX_TURN_DETECTION_SILENCE_SAMPLES;
+                if (!detectTurn(speechEndSampleIndex) && !forceFinal) {
                     setState(frameStartSampleIndex, SpeechState.TRAILING_SILENCE, probability);
                     return;
                 }
@@ -477,8 +480,8 @@ public class AudioProcessor {
         long transcriptionStartSampleIndex = Math.max(
                 transcriptionRangeStartSampleIndex(speechEndSampleIndex),
                 nextPartialTranscriptionStartSampleIndex);
-        if (speechEndSampleIndex <= transcriptionStartSampleIndex) {
-            return;
+        if (transcriptionStartSampleIndex > speechEndSampleIndex) {
+            transcriptionStartSampleIndex = speechEndSampleIndex;
         }
         long transcriptionSpeechSequenceId = speechSequenceId;
         transcribeSpeech(

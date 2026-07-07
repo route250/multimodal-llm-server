@@ -101,6 +101,65 @@ class AudioProcessorTest {
     }
 
     @Test
+    void incompleteTurnDetectionForcesFinalAfterMaxSilence() {
+        SequenceTurnDetector turnDetector = new SequenceTurnDetector();
+        RecordingSpeechToText speechToText = new RecordingSpeechToText("forced final");
+        AudioProcessor processor = new AudioProcessor(turnDetector, speechToText, Runnable::run);
+
+        acceptSpeechStart(processor);
+
+        turnDetector.add(false);
+        for (int i = 0; i < silenceFramesForTurnDetection(); i++) {
+            assertTrue(acceptFrame(processor, 0).isEmpty());
+        }
+        assertEquals(1, turnDetector.calls);
+        assertEquals(0, speechToText.calls);
+
+        turnDetector.add(false);
+        Optional<Transcription> transcript = Optional.empty();
+        for (int i = silenceFramesForTurnDetection(); i < silenceFramesForForcedFinal(); i++) {
+            transcript = acceptFrame(processor, 0);
+        }
+
+        assertTranscriptText("forced final", transcript);
+        assertEquals(2, turnDetector.calls);
+        assertEquals(1, speechToText.calls);
+    }
+
+    @Test
+    void incompleteTurnDetectionDoesNotForceFinalBeforeMaxSilence() {
+        SequenceTurnDetector turnDetector = new SequenceTurnDetector();
+        RecordingSpeechToText speechToText = new RecordingSpeechToText("too early");
+        AudioProcessor processor = new AudioProcessor(turnDetector, speechToText, Runnable::run);
+
+        acceptSpeechStart(processor);
+
+        turnDetector.add(false);
+        for (int i = 0; i < silenceFramesForTurnDetection(); i++) {
+            assertTrue(acceptFrame(processor, 0).isEmpty());
+        }
+        for (int i = silenceFramesForTurnDetection(); i < silenceFramesForForcedFinal() - 1; i++) {
+            assertTrue(acceptFrame(processor, 0).isEmpty());
+        }
+
+        assertEquals(1, turnDetector.calls);
+        assertEquals(0, speechToText.calls);
+    }
+
+    @Test
+    void emptyFinalRangeStillCallsSpeechToText() {
+        RecordingSpeechToText speechToText = new RecordingSpeechToText("empty range");
+        AudioProcessor processor = new AudioProcessor(samples -> true, speechToText, Runnable::run);
+
+        acceptSpeechStart(processor);
+        processor.ignoreTranscriptionBefore(Long.MAX_VALUE);
+        acceptCompleteSpeechSilence(processor);
+
+        assertEquals(1, speechToText.calls);
+        assertEquals(speechToText.startSampleIndex, speechToText.endSampleIndexExclusive);
+    }
+
+    @Test
     void asynchronousTranscriptionDoesNotBlockLaterAudioFrames() throws Exception {
         ExecutorService transcriptionExecutor = Executors.newSingleThreadExecutor();
         try {
@@ -429,6 +488,18 @@ class AudioProcessorTest {
 
     private static int silenceFramesForTurnDetection() {
         return AudioProcessor.MIN_TURN_DETECTION_SILENCE_SAMPLES / AudioProcessor.VAD_FRAME_SAMPLES + 1;
+    }
+
+    private static int silenceFramesForForcedFinal() {
+        return AudioProcessor.MAX_TURN_DETECTION_SILENCE_SAMPLES / AudioProcessor.VAD_FRAME_SAMPLES + 1;
+    }
+
+    private static Optional<Transcription> acceptCompleteSpeechSilence(AudioProcessor processor) {
+        Optional<Transcription> transcript = Optional.empty();
+        for (int i = 0; i < silenceFramesForTurnDetection(); i++) {
+            transcript = acceptFrame(processor, 0);
+        }
+        return transcript;
     }
 
     private static void assertTranscriptText(String expected, Optional<Transcription> actual) {

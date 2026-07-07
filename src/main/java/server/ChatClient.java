@@ -50,9 +50,11 @@ public class ChatClient {
     private final Object lifecycleLock = new Object();
     private final Object conversationLock = new Object();
     private final Object playbackControlLock = new Object();
+    private final Object partialTranscriptLock = new Object();
     private final List<ChatMessage> conversationHistory = new ArrayList<>();
     private final Set<Long> canceledAssistantTurnIds = new HashSet<>();
     private final Map<AssistantChunkKey, PendingAssistantChunk> pendingAssistantChunks = new LinkedHashMap<>();
+    private final Map<Long, String> partialTranscripts = new LinkedHashMap<>();
     private CompletableFuture<Void> audioTaskTail = CompletableFuture.completedFuture(null);
     private Future<?> activeAssistantTask;
     private long currentAssistantTurnId;
@@ -287,14 +289,60 @@ public class ChatClient {
     private void handleTranscriptionResult(TranscriptionResult result) {
         String text = result.transcription().text();
         String transcript = text == null ? "" : text.trim();
-        if (transcript.isBlank()) {
-            if (result.kind() == TranscriptionKind.FINAL) {
-                resumePlaybackForEmptyTranscript(result.speechSequenceId());
+        if (result.kind() == TranscriptionKind.PARTIAL) {
+            if (!transcript.isBlank()) {
+                rememberPartialTranscript(result.speechSequenceId(), transcript);
+                cancelCurrentAssistantTurnForTranscript(result.speechSequenceId());
             }
             return;
         }
+
+        String finalTranscript = takeFinalTranscript(result.speechSequenceId(), transcript);
+        if (finalTranscript.isBlank()) {
+            resumePlaybackForEmptyTranscript(result.speechSequenceId());
+            return;
+        }
+
         cancelCurrentAssistantTurnForTranscript(result.speechSequenceId());
-        startAssistantReply(transcript);
+        startAssistantReply(finalTranscript);
+    }
+
+    private void rememberPartialTranscript(long speechSequenceId, String transcript) {
+        synchronized (partialTranscriptLock) {
+            partialTranscripts.keySet().removeIf(id -> id < speechSequenceId);
+            String current = partialTranscripts.getOrDefault(speechSequenceId, "");
+            partialTranscripts.put(speechSequenceId, mergeTranscriptText(current, transcript));
+        }
+    }
+
+    private String takeFinalTranscript(long speechSequenceId, String transcript) {
+        synchronized (partialTranscriptLock) {
+            String partial = partialTranscripts.remove(speechSequenceId);
+            return mergeTranscriptText(partial == null ? "" : partial, transcript);
+        }
+    }
+
+    private static String mergeTranscriptText(String current, String next) {
+        String left = current == null ? "" : current.trim();
+        String right = next == null ? "" : next.trim();
+        if (left.isEmpty()) {
+            return right;
+        }
+        if (right.isEmpty()) {
+            return left;
+        }
+        int overlap = longestSuffixPrefixOverlap(left, right);
+        return left + right.substring(overlap);
+    }
+
+    private static int longestSuffixPrefixOverlap(String left, String right) {
+        int max = Math.min(left.length(), right.length());
+        for (int length = max; length > 0; length--) {
+            if (left.regionMatches(left.length() - length, right, 0, length)) {
+                return length;
+            }
+        }
+        return 0;
     }
 
     private void cancelCurrentAssistantTurnForTranscript(long speechSequenceId) {
@@ -568,6 +616,9 @@ public class ChatClient {
             activeAssistantTask = null;
             assistantTurnActive = false;
             sttWaitActive = false;
+        }
+        synchronized (partialTranscriptLock) {
+            partialTranscripts.clear();
         }
         synchronized (conversationLock) {
             pendingAssistantChunks.clear();
