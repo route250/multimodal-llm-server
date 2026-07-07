@@ -106,9 +106,10 @@ public class Lfm2AudioSpeechToText implements SpeechToText {
      */
     private String requestBody(byte[] wav, String prompt) {
         String instruction = systemPrompt;
-        if (prompt != null && !prompt.isBlank()) {
-            instruction = instruction + "\n" + prompt;
-        }
+        // LFMでは、promptを渡しても悪影響がある。もしくは下記はプロンプトの渡し方をまちがえている。
+        // if (prompt != null && !prompt.isBlank()) {
+        //     instruction = instruction + "\n" + prompt;
+        // }
         String audio = Base64.getEncoder().encodeToString(wav);
         return """
                 {"model":"%s","messages":[{"role":"system","content":"%s"},{"role":"user","content":[{"type":"input_audio","input_audio":{"data":"%s","format":"wav"}}]}],"temperature":0,"stream":true}

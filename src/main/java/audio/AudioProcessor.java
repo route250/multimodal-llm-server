@@ -83,6 +83,7 @@ public class AudioProcessor {
     private TranscriptionReference previousTranscription;
     /** Whisper の prompt に渡す直近の文字起こしテキスト。 */
     private String transcriptionPrompt = "";
+    private long transcriptionLastSampleIndex = 0;
     /** 現在の発話区間を識別する番号。古い STT タスクの結果を捨てるために使う。 */
     private long speechSequenceId;
     /** 次に受信する PCM チャンクの先頭サンプル番号。 */
@@ -501,10 +502,6 @@ public class AudioProcessor {
             TranscriptionKind kind) {
         AudioBuffer transcriptionAudio = copyTranscriptionAudio(transcriptionStartSampleIndex, endSampleIndexExclusive);
         float rms = rms(transcriptionAudio, transcriptionStartSampleIndex, endSampleIndexExclusive);
-        boolean suppressPrompt = shouldSuppressPrompt(
-                endSampleIndexExclusive - transcriptionStartSampleIndex,
-                rms);
-        String prompt = suppressPrompt ? "" : transcriptionPrompt;
         AudioDiagnostics.log("stt-queued", diagnosticsContext, Json.fields(
                 "speechSequenceId", transcriptionSpeechSequenceId,
                 "kind", kind,
@@ -512,9 +509,7 @@ public class AudioProcessor {
                 "endSampleIndexExclusive", endSampleIndexExclusive,
                 "durationMs", samplesToMillis(endSampleIndexExclusive - transcriptionStartSampleIndex),
                 "pcmBytes", (endSampleIndexExclusive - transcriptionStartSampleIndex) * Short.BYTES,
-                "rms", rms,
-                "promptSuppressed", suppressPrompt,
-                "promptChars", prompt.length()));
+                "rms", rms));
         transcriptionStartedListener.accept(new TranscriptionStarted(
                 transcriptionSpeechSequenceId,
                 transcriptionStartSampleIndex,
@@ -528,7 +523,6 @@ public class AudioProcessor {
                                     transcriptionAudio,
                                     transcriptionStartSampleIndex,
                                     endSampleIndexExclusive,
-                                    prompt,
                                     kind),
                             transcriptionExecutor);
         }
@@ -542,9 +536,14 @@ public class AudioProcessor {
             AudioBuffer transcriptionAudio,
             long startSampleIndex,
             long endSampleIndexExclusive,
-            String prompt,
             TranscriptionKind kind) {
         try {
+            String prompt = "";
+            synchronized(this) {
+                if( startSampleIndex < transcriptionLastSampleIndex+8000 ) {
+                    prompt = transcriptionPrompt;
+                }
+            }
             AudioDiagnostics.SavedAudioFiles savedAudioFiles = AudioDiagnostics.saveWav(
                             diagnosticsContext,
                             transcriptionSpeechSequenceId,
@@ -570,6 +569,7 @@ public class AudioProcessor {
                     prompt);
             String text = transcription.text() == null ? "" : transcription.text().trim();
             synchronized (this) {
+                appendTranscriptionPrompt(startSampleIndex,endSampleIndexExclusive,text);
                 boolean matchesCurrentSpeech = this.speechSequenceId == transcriptionSpeechSequenceId;
                 if (!text.isEmpty()) {
                     updateTranscriptionStartFloor(
@@ -592,7 +592,6 @@ public class AudioProcessor {
                                 endSampleIndexExclusive,
                                 kind,
                                 transcription));
-                        appendTranscriptionPrompt(text);
                     }
                 } else {
                     AudioDiagnostics.log("stt-empty-result", diagnosticsContext, Json.fields(
@@ -641,11 +640,6 @@ public class AudioProcessor {
         }
     }
 
-    private static boolean shouldSuppressPrompt(long sampleCount, float rms) {
-        return sampleCount < SHORT_AUDIO_PROMPT_SUPPRESSION_SAMPLES
-                && rms < LOW_RMS_PROMPT_SUPPRESSION_THRESHOLD;
-    }
-
     private static float rms(AudioBuffer audioBuffer, long startSampleIndex, long endSampleIndexExclusive) {
         if (endSampleIndexExclusive <= startSampleIndex) {
             return 0.0f;
@@ -688,11 +682,19 @@ public class AudioProcessor {
     /**
      * Whisper の prompt 用に直近テキストだけを保持する。
      */
-    private void appendTranscriptionPrompt(String text) {
-        transcriptionPrompt = (transcriptionPrompt + "\n" + text).trim();
-        if (transcriptionPrompt.length() > TRANSCRIPTION_PROMPT_MAX_CHARS) {
-            transcriptionPrompt = transcriptionPrompt.substring(
-                    transcriptionPrompt.length() - TRANSCRIPTION_PROMPT_MAX_CHARS);
+    private void appendTranscriptionPrompt(long s,long e,String text) {
+        if( s<transcriptionLastSampleIndex+8000) {
+            if( text.trim().length()>0) {
+                transcriptionPrompt = (transcriptionPrompt + "\n" + text).trim();
+                if (transcriptionPrompt.length() > TRANSCRIPTION_PROMPT_MAX_CHARS) {
+                    transcriptionPrompt = transcriptionPrompt.substring(
+                            transcriptionPrompt.length() - TRANSCRIPTION_PROMPT_MAX_CHARS);
+                }
+                transcriptionLastSampleIndex=e;
+            }
+        } else {
+            transcriptionPrompt = text.trim();
+            transcriptionLastSampleIndex=e;
         }
     }
 
