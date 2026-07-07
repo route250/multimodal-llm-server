@@ -25,13 +25,13 @@ import llm.LanguageModel;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
-import stt.SpeechToText;
-import stt.Transcription;
-import tts.AudioDelta;
-import tts.TextToSpeech;
-import vad.VadAudioProcessor;
-import vad.VadAudioProcessor.SpeechState;
-import vad.VadAudioProcessor.SpeechStateChange;
+import audio.stt.SpeechToText;
+import audio.stt.Transcription;
+import audio.tts.AudioDelta;
+import audio.tts.TextToSpeech;
+import audio.AudioProcessor;
+import audio.AudioProcessor.SpeechState;
+import audio.AudioProcessor.SpeechStateChange;
 
 @Timeout(5)
 class ChatClientAudioProcessingTest {
@@ -133,7 +133,7 @@ class ChatClientAudioProcessingTest {
             RecordingBodyAudioProcessor processor = new RecordingBodyAudioProcessor();
             ChatClient client = new ChatClient("client-1", group, processor);
 
-            client.handle(audioRequest(new byte[VadAudioProcessor.VAD_FRAME_SAMPLES * Short.BYTES], new byte[] {(byte) 0x80}));
+            client.handle(audioRequest(new byte[AudioProcessor.VAD_FRAME_SAMPLES * Short.BYTES], new byte[] {(byte) 0x80}));
 
             assertTrue(processor.awaitCalls(1));
             assertEquals(List.of(0x80), processor.receivedVadBytes());
@@ -195,7 +195,7 @@ class ChatClientAudioProcessingTest {
                     group,
                     new SttStartedThenTranscriptAudioProcessor(
                             "最初の発話",
-                            VadAudioProcessor.TranscriptionKind.FINAL),
+                            AudioProcessor.TranscriptionKind.FINAL),
                     new StreamingLanguageModel("はい？"));
             drainJoinEvents(listener);
 
@@ -277,8 +277,8 @@ class ChatClientAudioProcessingTest {
             ChatGroup group = new ChatGroup("group-test", server);
             ChatClient listener = group.join("client-1");
             StateChangeAudioProcessor processor = new StateChangeAudioProcessor(
-                    VadAudioProcessor.SpeechState.UNDETECTED,
-                    VadAudioProcessor.SpeechState.DETECTED);
+                    AudioProcessor.SpeechState.UNDETECTED,
+                    AudioProcessor.SpeechState.DETECTED);
             ChatClient processorClient = new ChatClient("processor", group, processor);
             drainJoinEvents(listener);
 
@@ -295,8 +295,8 @@ class ChatClientAudioProcessingTest {
             ChatGroup group = new ChatGroup("group-test", server);
             ChatClient listener = group.join("client-1");
             StateChangeAudioProcessor processor = new StateChangeAudioProcessor(
-                    VadAudioProcessor.SpeechState.UNDETECTED,
-                    VadAudioProcessor.SpeechState.DETECTED);
+                    AudioProcessor.SpeechState.UNDETECTED,
+                    AudioProcessor.SpeechState.DETECTED);
             ChatClient processorClient = new ChatClient("processor", group, processor);
             drainJoinEvents(listener);
 
@@ -318,7 +318,7 @@ class ChatClientAudioProcessingTest {
             BlockingTextToSpeech textToSpeech = new BlockingTextToSpeech();
             SttStartedThenTranscriptAudioProcessor processor = new SttStartedThenTranscriptAudioProcessor(
                     "",
-                    VadAudioProcessor.TranscriptionKind.FINAL);
+                    AudioProcessor.TranscriptionKind.FINAL);
             CountingLanguageModel languageModel = new CountingLanguageModel("応答。");
             ChatClient processorClient = new ChatClient(
                     "processor",
@@ -423,8 +423,8 @@ class ChatClientAudioProcessingTest {
             ChatClient listener = group.join("client-1");
             BlockingTextToSpeech textToSpeech = new BlockingTextToSpeech();
             StateChangeAudioProcessor processor = new StateChangeAudioProcessor(
-                    VadAudioProcessor.SpeechState.UNDETECTED,
-                    VadAudioProcessor.SpeechState.DETECTED);
+                    AudioProcessor.SpeechState.UNDETECTED,
+                    AudioProcessor.SpeechState.DETECTED);
             ChatClient processorClient = new ChatClient(
                     "processor",
                     group,
@@ -637,7 +637,7 @@ class ChatClientAudioProcessingTest {
     }
 
     private static ChatRequest audioRequest(byte[] body) {
-        byte[] vadBytes = new byte[body.length / (VadAudioProcessor.VAD_FRAME_SAMPLES * Short.BYTES)];
+        byte[] vadBytes = new byte[body.length / (AudioProcessor.VAD_FRAME_SAMPLES * Short.BYTES)];
         return audioRequest(body, vadBytes);
     }
 
@@ -659,7 +659,7 @@ class ChatClientAudioProcessingTest {
         buffer.putShort((short) 1);
         buffer.putShort((short) 1);
         buffer.putInt(pcm.length / Short.BYTES);
-        buffer.putInt(VadAudioProcessor.VAD_FRAME_SAMPLES);
+        buffer.putInt(AudioProcessor.VAD_FRAME_SAMPLES);
         buffer.putInt(vadBytes.length);
         buffer.putInt(0);
         buffer.put(pcm);
@@ -713,7 +713,7 @@ class ChatClientAudioProcessingTest {
         };
     }
 
-    private static class RecordingAudioProcessor extends VadAudioProcessor {
+    private static class RecordingAudioProcessor extends AudioProcessor {
         private final List<Integer> firstBytes = new ArrayList<>();
         private final CountDownLatch calls = new CountDownLatch(3);
 
@@ -723,11 +723,11 @@ class ChatClientAudioProcessingTest {
 
         @Override
         public synchronized Optional<Transcription> acceptPcm16Le(byte[] bytes) {
-            return acceptPcm16LeWithVadDetailed(bytes, new byte[bytes.length / (VadAudioProcessor.VAD_FRAME_SAMPLES * Short.BYTES)]).map(VadAudioProcessor.TranscriptionResult::transcription);
+            return acceptPcm16LeWithVadDetailed(bytes, new byte[bytes.length / (AudioProcessor.VAD_FRAME_SAMPLES * Short.BYTES)]).map(AudioProcessor.TranscriptionResult::transcription);
         }
 
         @Override
-        public synchronized Optional<VadAudioProcessor.TranscriptionResult> acceptPcm16LeWithVadDetailed(byte[] bytes, byte[] vadBytes) {
+        public synchronized Optional<AudioProcessor.TranscriptionResult> acceptPcm16LeWithVadDetailed(byte[] bytes, byte[] vadBytes) {
             firstBytes.add(bytes[0] & 0xff);
             calls.countDown();
             return Optional.empty();
@@ -742,7 +742,7 @@ class ChatClientAudioProcessingTest {
         }
     }
 
-    private static class RecordingBodyAudioProcessor extends VadAudioProcessor {
+    private static class RecordingBodyAudioProcessor extends AudioProcessor {
         private final CountDownLatch calls = new CountDownLatch(1);
         private byte[] receivedBytes = new byte[0];
         private byte[] receivedVadBytes = new byte[0];
@@ -752,7 +752,7 @@ class ChatClientAudioProcessingTest {
         }
 
         @Override
-        public synchronized Optional<VadAudioProcessor.TranscriptionResult> acceptPcm16LeWithVadDetailed(byte[] bytes, byte[] vadBytes) {
+        public synchronized Optional<AudioProcessor.TranscriptionResult> acceptPcm16LeWithVadDetailed(byte[] bytes, byte[] vadBytes) {
             receivedBytes = bytes.clone();
             receivedVadBytes = vadBytes.clone();
             calls.countDown();
@@ -780,7 +780,7 @@ class ChatClientAudioProcessingTest {
         }
     }
 
-    private static class StateChangeAudioProcessor extends VadAudioProcessor {
+    private static class StateChangeAudioProcessor extends AudioProcessor {
         private final SpeechState previousState;
         private final SpeechState currentState;
         private long ignoredBeforeSampleIndex;
@@ -800,7 +800,7 @@ class ChatClientAudioProcessingTest {
         }
 
         @Override
-        public synchronized Optional<VadAudioProcessor.TranscriptionResult> acceptPcm16LeWithVadDetailed(byte[] bytes, byte[] vadBytes) {
+        public synchronized Optional<AudioProcessor.TranscriptionResult> acceptPcm16LeWithVadDetailed(byte[] bytes, byte[] vadBytes) {
             listener.accept(new SpeechStateChange(previousState, currentState, 1, 0));
             return Optional.empty();
         }
@@ -811,10 +811,10 @@ class ChatClientAudioProcessingTest {
         }
     }
 
-    private static class SttStartedThenTranscriptAudioProcessor extends VadAudioProcessor {
+    private static class SttStartedThenTranscriptAudioProcessor extends AudioProcessor {
         private final String transcript;
         private final TranscriptionKind kind;
-        private Consumer<VadAudioProcessor.TranscriptionStarted> listener = started -> {
+        private Consumer<AudioProcessor.TranscriptionStarted> listener = started -> {
         };
 
         SttStartedThenTranscriptAudioProcessor(String transcript, TranscriptionKind kind) {
@@ -824,18 +824,18 @@ class ChatClientAudioProcessingTest {
         }
 
         @Override
-        public synchronized void setTranscriptionStartedListener(Consumer<VadAudioProcessor.TranscriptionStarted> listener) {
+        public synchronized void setTranscriptionStartedListener(Consumer<AudioProcessor.TranscriptionStarted> listener) {
             this.listener = listener == null ? started -> {
             } : listener;
         }
 
         @Override
-        public Optional<VadAudioProcessor.TranscriptionResult> acceptPcm16LeWithVadDetailed(byte[] bytes, byte[] vadBytes) {
-            listener.accept(new VadAudioProcessor.TranscriptionStarted(1, 0, 0, kind));
+        public Optional<AudioProcessor.TranscriptionResult> acceptPcm16LeWithVadDetailed(byte[] bytes, byte[] vadBytes) {
+            listener.accept(new AudioProcessor.TranscriptionStarted(1, 0, 0, kind));
             Transcription transcription = transcript.isBlank()
                     ? Transcription.empty()
                     : Transcription.singleSegment(transcript, 0, 16_000);
-            return Optional.of(new VadAudioProcessor.TranscriptionResult(
+            return Optional.of(new AudioProcessor.TranscriptionResult(
                     1,
                     0,
                     0,
@@ -844,11 +844,11 @@ class ChatClientAudioProcessingTest {
         }
     }
 
-    private static class QueuedSttStartedTranscriptAudioProcessor extends VadAudioProcessor {
+    private static class QueuedSttStartedTranscriptAudioProcessor extends AudioProcessor {
         private final List<String> transcripts;
         private int nextTranscript;
         private long nextSpeechSequenceId = 1;
-        private Consumer<VadAudioProcessor.TranscriptionStarted> listener = started -> {
+        private Consumer<AudioProcessor.TranscriptionStarted> listener = started -> {
         };
 
         QueuedSttStartedTranscriptAudioProcessor(String... transcripts) {
@@ -857,32 +857,32 @@ class ChatClientAudioProcessingTest {
         }
 
         @Override
-        public synchronized void setTranscriptionStartedListener(Consumer<VadAudioProcessor.TranscriptionStarted> listener) {
+        public synchronized void setTranscriptionStartedListener(Consumer<AudioProcessor.TranscriptionStarted> listener) {
             this.listener = listener == null ? started -> {
             } : listener;
         }
 
         @Override
-        public synchronized Optional<VadAudioProcessor.TranscriptionResult> acceptPcm16LeWithVadDetailed(
+        public synchronized Optional<AudioProcessor.TranscriptionResult> acceptPcm16LeWithVadDetailed(
                 byte[] bytes,
                 byte[] vadBytes) {
             long speechSequenceId = nextSpeechSequenceId++;
             String transcript = transcripts.get(nextTranscript++);
-            listener.accept(new VadAudioProcessor.TranscriptionStarted(
+            listener.accept(new AudioProcessor.TranscriptionStarted(
                     speechSequenceId,
                     0,
                     0,
-                    VadAudioProcessor.TranscriptionKind.PARTIAL));
-            return Optional.of(new VadAudioProcessor.TranscriptionResult(
+                    AudioProcessor.TranscriptionKind.PARTIAL));
+            return Optional.of(new AudioProcessor.TranscriptionResult(
                     speechSequenceId,
                     0,
                     0,
-                    VadAudioProcessor.TranscriptionKind.PARTIAL,
+                    AudioProcessor.TranscriptionKind.PARTIAL,
                     Transcription.singleSegment(transcript, 0, 16_000)));
         }
     }
 
-    private static class TranscriptAudioProcessor extends VadAudioProcessor {
+    private static class TranscriptAudioProcessor extends AudioProcessor {
         private final String transcript;
 
         TranscriptAudioProcessor(String transcript) {
@@ -892,22 +892,22 @@ class ChatClientAudioProcessingTest {
 
         @Override
         public Optional<Transcription> acceptPcm16Le(byte[] bytes) {
-            return acceptPcm16LeWithVadDetailed(bytes, new byte[bytes.length / (VadAudioProcessor.VAD_FRAME_SAMPLES * Short.BYTES)]).map(VadAudioProcessor.TranscriptionResult::transcription);
+            return acceptPcm16LeWithVadDetailed(bytes, new byte[bytes.length / (AudioProcessor.VAD_FRAME_SAMPLES * Short.BYTES)]).map(AudioProcessor.TranscriptionResult::transcription);
         }
 
         @Override
-        public Optional<VadAudioProcessor.TranscriptionResult> acceptPcm16LeWithVadDetailed(byte[] bytes, byte[] vadBytes) {
+        public Optional<AudioProcessor.TranscriptionResult> acceptPcm16LeWithVadDetailed(byte[] bytes, byte[] vadBytes) {
             Transcription transcription = Transcription.singleSegment(transcript, 0, 16_000);
-            return Optional.of(new VadAudioProcessor.TranscriptionResult(
+            return Optional.of(new AudioProcessor.TranscriptionResult(
                     1,
                     0,
                     0,
-                    VadAudioProcessor.TranscriptionKind.FINAL,
+                    AudioProcessor.TranscriptionKind.FINAL,
                     transcription));
         }
     }
 
-    private static class FailingThenTranscriptAudioProcessor extends VadAudioProcessor {
+    private static class FailingThenTranscriptAudioProcessor extends AudioProcessor {
         private int calls;
 
         FailingThenTranscriptAudioProcessor() {
@@ -916,25 +916,25 @@ class ChatClientAudioProcessingTest {
 
         @Override
         public synchronized Optional<Transcription> acceptPcm16Le(byte[] bytes) {
-            return acceptPcm16LeWithVadDetailed(bytes, new byte[bytes.length / (VadAudioProcessor.VAD_FRAME_SAMPLES * Short.BYTES)]).map(VadAudioProcessor.TranscriptionResult::transcription);
+            return acceptPcm16LeWithVadDetailed(bytes, new byte[bytes.length / (AudioProcessor.VAD_FRAME_SAMPLES * Short.BYTES)]).map(AudioProcessor.TranscriptionResult::transcription);
         }
 
         @Override
-        public synchronized Optional<VadAudioProcessor.TranscriptionResult> acceptPcm16LeWithVadDetailed(byte[] bytes, byte[] vadBytes) {
+        public synchronized Optional<AudioProcessor.TranscriptionResult> acceptPcm16LeWithVadDetailed(byte[] bytes, byte[] vadBytes) {
             calls++;
             if (calls == 1) {
                 throw new IllegalArgumentException("boom");
             }
-            return Optional.of(new VadAudioProcessor.TranscriptionResult(
+            return Optional.of(new AudioProcessor.TranscriptionResult(
                     1,
                     0,
                     0,
-                    VadAudioProcessor.TranscriptionKind.FINAL,
+                    AudioProcessor.TranscriptionKind.FINAL,
                     Transcription.singleSegment("after failure", 0, 16_000)));
         }
     }
 
-    private static class BlockingAudioProcessor extends VadAudioProcessor {
+    private static class BlockingAudioProcessor extends AudioProcessor {
         private final CountDownLatch started = new CountDownLatch(1);
         private final CountDownLatch release = new CountDownLatch(1);
         private final CountDownLatch finished = new CountDownLatch(1);
@@ -951,20 +951,20 @@ class ChatClientAudioProcessingTest {
 
         @Override
         public Optional<Transcription> acceptPcm16Le(byte[] bytes) {
-            return acceptPcm16LeWithVadDetailed(bytes, new byte[bytes.length / (VadAudioProcessor.VAD_FRAME_SAMPLES * Short.BYTES)]).map(VadAudioProcessor.TranscriptionResult::transcription);
+            return acceptPcm16LeWithVadDetailed(bytes, new byte[bytes.length / (AudioProcessor.VAD_FRAME_SAMPLES * Short.BYTES)]).map(AudioProcessor.TranscriptionResult::transcription);
         }
 
         @Override
-        public Optional<VadAudioProcessor.TranscriptionResult> acceptPcm16LeWithVadDetailed(byte[] bytes, byte[] vadBytes) {
+        public Optional<AudioProcessor.TranscriptionResult> acceptPcm16LeWithVadDetailed(byte[] bytes, byte[] vadBytes) {
             started.countDown();
             try {
                 release.await(1, TimeUnit.SECONDS);
                 return Optional.ofNullable(transcript)
-                        .map(value -> new VadAudioProcessor.TranscriptionResult(
+                        .map(value -> new AudioProcessor.TranscriptionResult(
                                 1,
                                 0,
                                 0,
-                                VadAudioProcessor.TranscriptionKind.FINAL,
+                                AudioProcessor.TranscriptionKind.FINAL,
                                 Transcription.singleSegment(value, 0, 16_000)));
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();

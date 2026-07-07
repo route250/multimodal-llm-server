@@ -21,20 +21,20 @@ import llm.LanguageModelException;
 import llm.OpenAiResponsesLanguageModel;
 import model.download.SmartTurnV3ModelDownloader;
 import onnx.OnnxModelException;
-import stt.Lfm2AudioSpeechToText;
-import stt.SpeechToTextException;
-import stt.Transcription;
-import tts.AudioDelta;
-import tts.Lfm2AudioTextToSpeech;
-import tts.StreamingTextChunker;
-import tts.TextToSpeech;
-import tts.TextToSpeechException;
-import vad.VadAudioProcessor;
-import vad.VadAudioProcessor.SpeechStateChange;
-import vad.VadAudioProcessor.TranscriptionKind;
-import vad.VadAudioProcessor.TranscriptionResult;
-import vad.VadAudioProcessor.TranscriptionStarted;
-import vad.smartturn.LazySmartTurnV3;
+import audio.stt.Lfm2AudioSpeechToText;
+import audio.stt.SpeechToTextException;
+import audio.stt.Transcription;
+import audio.tts.AudioDelta;
+import audio.tts.Lfm2AudioTextToSpeech;
+import audio.tts.StreamingTextChunker;
+import audio.tts.TextToSpeech;
+import audio.tts.TextToSpeechException;
+import audio.AudioProcessor;
+import audio.AudioProcessor.SpeechStateChange;
+import audio.AudioProcessor.TranscriptionKind;
+import audio.AudioProcessor.TranscriptionResult;
+import audio.AudioProcessor.TranscriptionStarted;
+import audio.vad.smartturn.LazySmartTurnV3;
 
 public class ChatClient {
     private static final int MAX_HISTORY_MESSAGES = 20;
@@ -42,7 +42,7 @@ public class ChatClient {
     private final String id;
     private final ChatGroup chatGroup;
     private final LinkedBlockingQueue<ServerEvent> events = new LinkedBlockingQueue<>();
-    private final VadAudioProcessor audioProcessor;
+    private final AudioProcessor audioProcessor;
     private final AudioDiagnostics.Context diagnosticsContext;
     private final LanguageModel languageModel;
     private final TextToSpeech textToSpeech;
@@ -68,7 +68,7 @@ public class ChatClient {
     private boolean closed;
 
     public ChatClient(String id, ChatGroup chatGroup) {
-        this(id, chatGroup, new VadAudioProcessor(
+        this(id, chatGroup, new AudioProcessor(
                 new LazySmartTurnV3(smartTurnModelPath()),
                 new Lfm2AudioSpeechToText(),
                 chatGroup::execute),
@@ -76,18 +76,18 @@ public class ChatClient {
                 defaultTextToSpeech());
     }
 
-    ChatClient(String id, ChatGroup chatGroup, VadAudioProcessor audioProcessor) {
+    ChatClient(String id, ChatGroup chatGroup, AudioProcessor audioProcessor) {
         this(id, chatGroup, audioProcessor, new OpenAiResponsesLanguageModel(), TextToSpeech.disabled());
     }
 
-    ChatClient(String id, ChatGroup chatGroup, VadAudioProcessor audioProcessor, LanguageModel languageModel) {
+    ChatClient(String id, ChatGroup chatGroup, AudioProcessor audioProcessor, LanguageModel languageModel) {
         this(id, chatGroup, audioProcessor, languageModel, TextToSpeech.disabled());
     }
 
     ChatClient(
             String id,
             ChatGroup chatGroup,
-            VadAudioProcessor audioProcessor,
+            AudioProcessor audioProcessor,
             LanguageModel languageModel,
             TextToSpeech textToSpeech) {
         this.id = id;

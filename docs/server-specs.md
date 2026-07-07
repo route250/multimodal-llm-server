@@ -224,7 +224,7 @@ Each `ChatClient` keeps a 6 second receive buffer and a 30 second STT buffer.
 Audio requests return `202 Accepted` after the chunk is queued.
 PCM decoding and VAD run asynchronously in request order for each `ChatClient`.
 STT runs on a separate asynchronous task after a speech turn is confirmed, so later audio chunks can continue PCM decoding and VAD while transcription is still running.
-STT tasks are queued in speech-confirmation order for each `VadAudioProcessor`.
+STT tasks are queued in speech-confirmation order for each `AudioProcessor`.
 Async audio processing failures are sent to connected clients as SSE `system` events.
 The receive buffer stores PCM samples and browser VAD values in 256 sample units.
 Browser VAD values are applied once per 256 samples, which is 16 ms at 16 kHz.

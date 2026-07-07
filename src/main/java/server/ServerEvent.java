@@ -4,7 +4,7 @@ import json.Json;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
-import tts.AudioDelta;
+import audio.tts.AudioDelta;
 
 public record ServerEvent(String type, String message, Instant timestamp) {
     public static ServerEvent message(String message) {
