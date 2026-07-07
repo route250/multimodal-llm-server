@@ -1,5 +1,6 @@
 package audio;
 
+import json.Json;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -10,7 +11,6 @@ import java.nio.file.StandardOpenOption;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 
@@ -70,19 +70,8 @@ public final class AudioDiagnostics {
         }
     }
 
-    public static Map<String, Object> fields(Object... pairs) {
-        if (pairs.length % 2 != 0) {
-            throw new IllegalArgumentException("field pairs must be even");
-        }
-        Map<String, Object> fields = new LinkedHashMap<>();
-        for (int i = 0; i < pairs.length; i += 2) {
-            fields.put(String.valueOf(pairs[i]), pairs[i + 1]);
-        }
-        return fields;
-    }
-
     public static void log(String event, Context context, Map<String, Object> fields) {
-        Map<String, Object> line = new LinkedHashMap<>();
+        Map<String, Object> line = Json.fields();
         line.put("timestamp", OffsetDateTime.now().format(LOG_TIMESTAMP));
         line.put("event", event);
         if (context != null) {
@@ -124,7 +113,7 @@ public final class AudioDiagnostics {
                     wavPath.toAbsolutePath().normalize(),
                     vadPath.toAbsolutePath().normalize()));
         } catch (RuntimeException | IOException e) {
-            log("diagnostics-error", context, fields(
+            log("diagnostics-error", context, Json.fields(
                     "speechSequenceId", speechSequenceId,
                     "kind", kind,
                     "startSampleIndex", startSampleIndex,
@@ -143,7 +132,7 @@ public final class AudioDiagnostics {
     }
 
     private static void appendDiagnosticsError(String originalEvent, Exception error) {
-        Map<String, Object> line = new LinkedHashMap<>();
+        Map<String, Object> line = Json.fields();
         line.put("timestamp", OffsetDateTime.now().format(LOG_TIMESTAMP));
         line.put("event", "diagnostics-error");
         line.put("errorClass", error.getClass().getName());
@@ -167,7 +156,7 @@ public final class AudioDiagnostics {
         Files.createDirectories(ROOT);
         Files.writeString(
                 LOG_FILE,
-                toJson(line) + System.lineSeparator(),
+                Json.object(line) + System.lineSeparator(),
                 StandardCharsets.UTF_8,
                 StandardOpenOption.CREATE,
                 StandardOpenOption.APPEND);
@@ -265,56 +254,6 @@ public final class AudioDiagnostics {
         if (value != null) {
             fields.put(key, value);
         }
-    }
-
-    private static String toJson(Map<String, Object> fields) {
-        StringBuilder json = new StringBuilder();
-        json.append('{');
-        boolean first = true;
-        for (Map.Entry<String, Object> entry : fields.entrySet()) {
-            if (!first) {
-                json.append(',');
-            }
-            first = false;
-            json.append('"').append(jsonEscape(entry.getKey())).append('"').append(':');
-            appendJsonValue(json, entry.getValue());
-        }
-        json.append('}');
-        return json.toString();
-    }
-
-    private static void appendJsonValue(StringBuilder json, Object value) {
-        if (value == null) {
-            json.append("null");
-        } else if (value instanceof Number || value instanceof Boolean) {
-            json.append(value);
-        } else {
-            json.append('"').append(jsonEscape(String.valueOf(value))).append('"');
-        }
-    }
-
-    private static String jsonEscape(String value) {
-        StringBuilder escaped = new StringBuilder(value.length() + 16);
-        for (int i = 0; i < value.length(); i++) {
-            char c = value.charAt(i);
-            switch (c) {
-                case '\\' -> escaped.append("\\\\");
-                case '"' -> escaped.append("\\\"");
-                case '\n' -> escaped.append("\\n");
-                case '\r' -> escaped.append("\\r");
-                case '\t' -> escaped.append("\\t");
-                case '\b' -> escaped.append("\\b");
-                case '\f' -> escaped.append("\\f");
-                default -> {
-                    if (c < 0x20) {
-                        escaped.append("\\u%04x".formatted((int) c));
-                    } else {
-                        escaped.append(c);
-                    }
-                }
-            }
-        }
-        return escaped.toString();
     }
 
     public record Context(String groupId, String sessionId) {

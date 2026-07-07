@@ -1,5 +1,6 @@
 package server;
 
+import json.Json;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
@@ -23,9 +24,7 @@ public record ServerEvent(String type, String message, Instant timestamp) {
     }
 
     public static ServerEvent assistantState(String state) {
-        String json = """
-                {"state":"%s"}
-                """.formatted(jsonEscape(state));
+        String json = Json.object(Json.fields("state", state));
         return new ServerEvent("assistant-state", json.strip(), Instant.now());
     }
 
@@ -34,9 +33,11 @@ public record ServerEvent(String type, String message, Instant timestamp) {
     }
 
     public static ServerEvent audioDelta(String data, String format, int sampleRate, long assistantTurnId) {
-        String json = """
-                {"data":"%s","format":"%s","sampleRate":%d,"assistantTurnId":%d}
-                """.formatted(jsonEscape(data), jsonEscape(format), sampleRate, assistantTurnId);
+        String json = Json.object(Json.fields(
+                "data", data,
+                "format", format,
+                "sampleRate", sampleRate,
+                "assistantTurnId", assistantTurnId));
         return new ServerEvent("audio-delta", json.strip(), Instant.now());
     }
 
@@ -53,19 +54,18 @@ public record ServerEvent(String type, String message, Instant timestamp) {
             if (i > 0) {
                 audio.append(",");
             }
-            audio.append("""
-                    {"data":"%s","format":"%s","sampleRate":%d}
-                    """.formatted(jsonEscape(delta.data()), jsonEscape(delta.format()), delta.sampleRate()).strip());
+            audio.append(Json.object(Json.fields(
+                    "data", delta.data(),
+                    "format", delta.format(),
+                    "sampleRate", delta.sampleRate())));
         }
         audio.append("]");
-        String json = String.format(Locale.ROOT, """
-                {"assistantTurnId":%d,"chunkId":%d,"text":"%s","audioDeltas":%s,"audioDurationSeconds":%.6f}
-                """,
-                assistantTurnId,
-                chunkId,
-                jsonEscape(text),
-                audio,
-                audioDurationSeconds);
+        String json = Json.object(Json.fields(
+                "assistantTurnId", assistantTurnId,
+                "chunkId", chunkId,
+                "text", text,
+                "audioDeltas", Json.raw(audio.toString()),
+                "audioDurationSeconds", Json.raw(String.format(Locale.ROOT, "%.6f", audioDurationSeconds))));
         return new ServerEvent("assistant-audio-chunk", json.strip(), Instant.now());
     }
 
@@ -75,14 +75,12 @@ public record ServerEvent(String type, String message, Instant timestamp) {
             long interruptionId,
             long speechSequenceId,
             String reason) {
-        String json = """
-                {"action":"%s","assistantTurnId":%d,"interruptionId":%d,"speechSequenceId":%d,"reason":"%s"}
-                """.formatted(
-                jsonEscape(action),
-                assistantTurnId,
-                interruptionId,
-                speechSequenceId,
-                jsonEscape(reason));
+        String json = Json.object(Json.fields(
+                "action", action,
+                "assistantTurnId", assistantTurnId,
+                "interruptionId", interruptionId,
+                "speechSequenceId", speechSequenceId,
+                "reason", reason));
         return new ServerEvent("audio-control", json.strip(), Instant.now());
     }
 
@@ -91,25 +89,15 @@ public record ServerEvent(String type, String message, Instant timestamp) {
             String currentState,
             long speechSequenceId,
             long sampleIndex) {
-        String json = """
-                {"previousState":"%s","currentState":"%s","speechSequenceId":%d,"sampleIndex":%d}
-                """.formatted(
-                jsonEscape(previousState),
-                jsonEscape(currentState),
-                speechSequenceId,
-                sampleIndex);
+        String json = Json.object(Json.fields(
+                "previousState", previousState,
+                "currentState", currentState,
+                "speechSequenceId", speechSequenceId,
+                "sampleIndex", sampleIndex));
         return new ServerEvent("speech-state", json.strip(), Instant.now());
     }
 
     public static ServerEvent system(String message) {
         return new ServerEvent("system", message, Instant.now());
-    }
-
-    private static String jsonEscape(String value) {
-        return value.replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\n", "\\n")
-                .replace("\r", "\\r")
-                .replace("\t", "\\t");
     }
 }

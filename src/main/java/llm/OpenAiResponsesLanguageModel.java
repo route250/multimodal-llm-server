@@ -1,5 +1,6 @@
 package llm;
 
+import json.Json;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
@@ -126,7 +127,7 @@ public class OpenAiResponsesLanguageModel implements LanguageModel {
     private String requestBody(List<ChatMessage> messages, boolean stream) {
         return """
                 {"model":"%s","input":[%s],"stream":%s}
-                """.formatted(jsonEscape(resolveModel()), inputMessages(messages), stream);
+                """.formatted(Json.escape(resolveModel()), inputMessages(messages), stream);
     }
 
     private String inputMessages(List<ChatMessage> messages) {
@@ -142,7 +143,7 @@ public class OpenAiResponsesLanguageModel implements LanguageModel {
     private static String inputMessage(String role, String contentType, String text) {
         return """
                 {"role":"%s","content":[{"type":"%s","text":"%s"}]}\
-                """.formatted(jsonEscape(role), jsonEscape(contentType), jsonEscape(text));
+                """.formatted(Json.escape(role), Json.escape(contentType), Json.escape(text));
     }
 
     /**
@@ -225,7 +226,7 @@ public class OpenAiResponsesLanguageModel implements LanguageModel {
         Matcher matcher = MODEL_ID_PATTERN.matcher(body);
         List<String> models = new ArrayList<>();
         while (matcher.find()) {
-            models.add(jsonUnescape(matcher.group(1)));
+            models.add(Json.unescape(matcher.group(1)));
         }
         return models;
     }
@@ -233,7 +234,7 @@ public class OpenAiResponsesLanguageModel implements LanguageModel {
     private static Optional<String> firstJsonString(String body, Pattern pattern) {
         Matcher matcher = pattern.matcher(body);
         if (matcher.find()) {
-            return Optional.of(jsonUnescape(matcher.group(1)));
+            return Optional.of(Json.unescape(matcher.group(1)));
         }
         return Optional.empty();
     }
@@ -270,62 +271,6 @@ public class OpenAiResponsesLanguageModel implements LanguageModel {
             return defaultValue;
         }
         return value;
-    }
-
-    private static String jsonEscape(String value) {
-        StringBuilder escaped = new StringBuilder(value.length() + 16);
-        for (int i = 0; i < value.length(); i++) {
-            char c = value.charAt(i);
-            switch (c) {
-                case '\\' -> escaped.append("\\\\");
-                case '"' -> escaped.append("\\\"");
-                case '\n' -> escaped.append("\\n");
-                case '\r' -> escaped.append("\\r");
-                case '\t' -> escaped.append("\\t");
-                case '\b' -> escaped.append("\\b");
-                case '\f' -> escaped.append("\\f");
-                default -> {
-                    if (c < 0x20) {
-                        escaped.append("\\u%04x".formatted((int) c));
-                    } else {
-                        escaped.append(c);
-                    }
-                }
-            }
-        }
-        return escaped.toString();
-    }
-
-    private static String jsonUnescape(String value) {
-        StringBuilder unescaped = new StringBuilder(value.length());
-        for (int i = 0; i < value.length(); i++) {
-            char c = value.charAt(i);
-            if (c != '\\' || i + 1 >= value.length()) {
-                unescaped.append(c);
-                continue;
-            }
-            char escaped = value.charAt(++i);
-            switch (escaped) {
-                case '\\' -> unescaped.append('\\');
-                case '"' -> unescaped.append('"');
-                case '/' -> unescaped.append('/');
-                case 'n' -> unescaped.append('\n');
-                case 'r' -> unescaped.append('\r');
-                case 't' -> unescaped.append('\t');
-                case 'b' -> unescaped.append('\b');
-                case 'f' -> unescaped.append('\f');
-                case 'u' -> {
-                    if (i + 4 >= value.length()) {
-                        throw new LanguageModelException("invalid JSON unicode escape");
-                    }
-                    String hex = value.substring(i + 1, i + 5);
-                    unescaped.append((char) Integer.parseInt(hex, 16));
-                    i += 4;
-                }
-                default -> unescaped.append(escaped);
-            }
-        }
-        return unescaped.toString();
     }
 
     public record Config(URI baseUri, String model, String systemPrompt, Duration timeout) {

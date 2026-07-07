@@ -3,6 +3,7 @@ package vad;
 import audio.AudioBuffer;
 import audio.AudioDiagnostics;
 import audio.Pcm16Le;
+import json.Json;
 
 import java.time.Duration;
 import java.nio.file.Path;
@@ -131,7 +132,7 @@ public class VadAudioProcessor {
         if (speechState != newState) {
             SpeechState previousState = speechState;
             speechState = newState;
-            AudioDiagnostics.log("vad-state-change", diagnosticsContext, AudioDiagnostics.fields(
+            AudioDiagnostics.log("vad-state-change", diagnosticsContext, Json.fields(
                     "speechSequenceId", speechSequenceId,
                     "startSampleIndex", pos,
                     "durationMs", sampleIndexToMillis(pos),
@@ -503,7 +504,7 @@ public class VadAudioProcessor {
                 endSampleIndexExclusive - transcriptionStartSampleIndex,
                 rms);
         String prompt = suppressPrompt ? "" : transcriptionPrompt;
-        AudioDiagnostics.log("stt-queued", diagnosticsContext, AudioDiagnostics.fields(
+        AudioDiagnostics.log("stt-queued", diagnosticsContext, Json.fields(
                 "speechSequenceId", transcriptionSpeechSequenceId,
                 "kind", kind,
                 "startSampleIndex", transcriptionStartSampleIndex,
@@ -551,7 +552,7 @@ public class VadAudioProcessor {
                             endSampleIndexExclusive,
                             transcriptionAudio)
                     .orElse(null);
-            AudioDiagnostics.log("stt-start", diagnosticsContext, AudioDiagnostics.fields(
+            AudioDiagnostics.log("stt-start", diagnosticsContext, Json.fields(
                     "speechSequenceId", transcriptionSpeechSequenceId,
                     "kind", kind,
                     "startSampleIndex", startSampleIndex,
@@ -575,7 +576,7 @@ public class VadAudioProcessor {
                             endSampleIndexExclusive,
                             transcription,
                             kind == TranscriptionKind.PARTIAL && matchesCurrentSpeech);
-                    AudioDiagnostics.log("stt-result", diagnosticsContext, AudioDiagnostics.fields(
+                    AudioDiagnostics.log("stt-result", diagnosticsContext, Json.fields(
                             "speechSequenceId", transcriptionSpeechSequenceId,
                             "kind", kind,
                             "startSampleIndex", startSampleIndex,
@@ -593,7 +594,7 @@ public class VadAudioProcessor {
                         appendTranscriptionPrompt(text);
                     }
                 } else {
-                    AudioDiagnostics.log("stt-empty-result", diagnosticsContext, AudioDiagnostics.fields(
+                    AudioDiagnostics.log("stt-empty-result", diagnosticsContext, Json.fields(
                             "speechSequenceId", transcriptionSpeechSequenceId,
                             "kind", kind,
                             "startSampleIndex", startSampleIndex,
@@ -615,7 +616,7 @@ public class VadAudioProcessor {
                 }
             }
         } catch (RuntimeException e) {
-            AudioDiagnostics.log("stt-error", diagnosticsContext, AudioDiagnostics.fields(
+            AudioDiagnostics.log("stt-error", diagnosticsContext, Json.fields(
                     "speechSequenceId", transcriptionSpeechSequenceId,
                     "kind", kind,
                     "startSampleIndex", startSampleIndex,

@@ -1,5 +1,7 @@
 package tts;
 
+import json.Json;
+import json.JsonFields;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
@@ -76,7 +78,7 @@ public class Lfm2AudioTextToSpeech implements TextToSpeech {
     private String requestBody(String text) {
         return """
                 {"model":"%s","messages":[{"role":"system","content":"%s"},{"role":"user","content":"%s"}],"temperature":0,"stream":true}
-                """.formatted(jsonEscape(model), jsonEscape(systemPrompt), jsonEscape(text));
+                """.formatted(Json.escape(model), Json.escape(systemPrompt), Json.escape(text));
     }
 
     private static void readStreamingResponse(InputStream body, Consumer<AudioDelta> onDelta) throws IOException {
@@ -100,77 +102,14 @@ public class Lfm2AudioTextToSpeech implements TextToSpeech {
         if (audioStart < 0) {
             return Optional.empty();
         }
-        String data = jsonStringField(body, "\"data\"", audioStart).orElse("");
+        String data = JsonFields.string(body, "data", audioStart).orElse("");
         if (data.isEmpty()) {
             return Optional.empty();
         }
-        String format = jsonStringField(body, "\"format\"", audioStart).orElse("pcm");
-        int sampleRate = intField(body, "\"sample_rate\"", audioStart).orElse(24_000);
+        String format = JsonFields.string(body, "format", audioStart).orElse("pcm");
+        Long sampleRateValue = JsonFields.longOrNull(body, "sample_rate", audioStart);
+        int sampleRate = Math.toIntExact(sampleRateValue == null ? 24_000 : sampleRateValue);
         return Optional.of(new AudioDelta(data, format, sampleRate));
-    }
-
-    private static Optional<String> jsonStringField(String body, String key, int startIndex) {
-        int keyIndex = body.indexOf(key, startIndex);
-        if (keyIndex < 0) {
-            return Optional.empty();
-        }
-        int colonIndex = body.indexOf(':', keyIndex + key.length());
-        if (colonIndex < 0) {
-            return Optional.empty();
-        }
-        int quoteIndex = nextNonWhitespace(body, colonIndex + 1);
-        if (quoteIndex < 0 || body.charAt(quoteIndex) != '"') {
-            return Optional.empty();
-        }
-
-        StringBuilder value = new StringBuilder();
-        boolean escaped = false;
-        for (int i = quoteIndex + 1; i < body.length(); i++) {
-            char c = body.charAt(i);
-            if (escaped) {
-                value.append('\\').append(c);
-                escaped = false;
-            } else if (c == '\\') {
-                escaped = true;
-            } else if (c == '"') {
-                return Optional.of(jsonUnescape(value.toString()));
-            } else {
-                value.append(c);
-            }
-        }
-        return Optional.empty();
-    }
-
-    private static Optional<Integer> intField(String body, String key, int startIndex) {
-        int keyIndex = body.indexOf(key, startIndex);
-        if (keyIndex < 0) {
-            return Optional.empty();
-        }
-        int colonIndex = body.indexOf(':', keyIndex + key.length());
-        if (colonIndex < 0) {
-            return Optional.empty();
-        }
-        int valueStart = nextNonWhitespace(body, colonIndex + 1);
-        if (valueStart < 0) {
-            return Optional.empty();
-        }
-        int valueEnd = valueStart;
-        while (valueEnd < body.length() && Character.isDigit(body.charAt(valueEnd))) {
-            valueEnd++;
-        }
-        if (valueEnd == valueStart) {
-            return Optional.empty();
-        }
-        return Optional.of(Integer.parseInt(body.substring(valueStart, valueEnd)));
-    }
-
-    private static int nextNonWhitespace(String value, int startIndex) {
-        for (int i = startIndex; i < value.length(); i++) {
-            if (!Character.isWhitespace(value.charAt(i))) {
-                return i;
-            }
-        }
-        return -1;
     }
 
     private static String requireText(String value, String name) {
@@ -186,68 +125,6 @@ public class Lfm2AudioTextToSpeech implements TextToSpeech {
             return defaultValue;
         }
         return value;
-    }
-
-    private static String jsonEscape(String value) {
-        StringBuilder escaped = new StringBuilder(value.length() + 16);
-        for (int i = 0; i < value.length(); i++) {
-            char c = value.charAt(i);
-            switch (c) {
-                case '\\' -> escaped.append("\\\\");
-                case '"' -> escaped.append("\\\"");
-                case '\n' -> escaped.append("\\n");
-                case '\r' -> escaped.append("\\r");
-                case '\t' -> escaped.append("\\t");
-                case '\b' -> escaped.append("\\b");
-                case '\f' -> escaped.append("\\f");
-                default -> {
-                    if (c < 0x20) {
-                        escaped.append("\\u%04x".formatted((int) c));
-                    } else {
-                        escaped.append(c);
-                    }
-                }
-            }
-        }
-        return escaped.toString();
-    }
-
-    private static String jsonUnescape(String value) {
-        StringBuilder unescaped = new StringBuilder(value.length());
-        for (int i = 0; i < value.length(); i++) {
-            char c = value.charAt(i);
-            if (c != '\\' || i + 1 >= value.length()) {
-                unescaped.append(c);
-                continue;
-            }
-            char escaped = value.charAt(++i);
-            switch (escaped) {
-                case '\\' -> unescaped.append('\\');
-                case '"' -> unescaped.append('"');
-                case '/' -> unescaped.append('/');
-                case 'b' -> unescaped.append('\b');
-                case 'f' -> unescaped.append('\f');
-                case 'n' -> unescaped.append('\n');
-                case 'r' -> unescaped.append('\r');
-                case 't' -> unescaped.append('\t');
-                case 'u' -> {
-                    if (i + 4 >= value.length()) {
-                        unescaped.append("\\u");
-                        continue;
-                    }
-                    String hex = value.substring(i + 1, i + 5);
-                    try {
-                        unescaped.append((char) Integer.parseInt(hex, 16));
-                        i += 4;
-                    } catch (NumberFormatException e) {
-                        unescaped.append("\\u").append(hex);
-                        i += 4;
-                    }
-                }
-                default -> unescaped.append(escaped);
-            }
-        }
-        return unescaped.toString();
     }
 
     public record Config(URI endpoint, String model, String systemPrompt, Duration timeout) {

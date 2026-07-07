@@ -1,6 +1,7 @@
 package stt;
 
 import audio.AudioBuffer;
+import json.Json;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
@@ -111,7 +112,7 @@ public class Lfm2AudioSpeechToText implements SpeechToText {
         String audio = Base64.getEncoder().encodeToString(wav);
         return """
                 {"model":"%s","messages":[{"role":"system","content":"%s"},{"role":"user","content":[{"type":"input_audio","input_audio":{"data":"%s","format":"wav"}}]}],"temperature":0,"stream":true}
-                """.formatted(jsonEscape(model), jsonEscape(instruction), audio);
+                """.formatted(Json.escape(model), Json.escape(instruction), audio);
     }
 
     private static String readStreamingResponse(InputStream body) throws IOException {
@@ -135,7 +136,7 @@ public class Lfm2AudioSpeechToText implements SpeechToText {
     static Optional<String> streamingText(String body) {
         Matcher matcher = CHAT_DELTA_CONTENT_PATTERN.matcher(body);
         if (matcher.find()) {
-            return Optional.of(jsonUnescape(matcher.group(1)));
+            return Optional.of(Json.unescape(matcher.group(1)));
         }
         return Optional.empty();
     }
@@ -179,68 +180,6 @@ public class Lfm2AudioSpeechToText implements SpeechToText {
             return defaultValue;
         }
         return value;
-    }
-
-    private static String jsonEscape(String value) {
-        StringBuilder escaped = new StringBuilder(value.length() + 16);
-        for (int i = 0; i < value.length(); i++) {
-            char c = value.charAt(i);
-            switch (c) {
-                case '\\' -> escaped.append("\\\\");
-                case '"' -> escaped.append("\\\"");
-                case '\n' -> escaped.append("\\n");
-                case '\r' -> escaped.append("\\r");
-                case '\t' -> escaped.append("\\t");
-                case '\b' -> escaped.append("\\b");
-                case '\f' -> escaped.append("\\f");
-                default -> {
-                    if (c < 0x20) {
-                        escaped.append("\\u%04x".formatted((int) c));
-                    } else {
-                        escaped.append(c);
-                    }
-                }
-            }
-        }
-        return escaped.toString();
-    }
-
-    private static String jsonUnescape(String value) {
-        StringBuilder unescaped = new StringBuilder(value.length());
-        for (int i = 0; i < value.length(); i++) {
-            char c = value.charAt(i);
-            if (c != '\\' || i + 1 >= value.length()) {
-                unescaped.append(c);
-                continue;
-            }
-            char escaped = value.charAt(++i);
-            switch (escaped) {
-                case '\\' -> unescaped.append('\\');
-                case '"' -> unescaped.append('"');
-                case '/' -> unescaped.append('/');
-                case 'b' -> unescaped.append('\b');
-                case 'f' -> unescaped.append('\f');
-                case 'n' -> unescaped.append('\n');
-                case 'r' -> unescaped.append('\r');
-                case 't' -> unescaped.append('\t');
-                case 'u' -> {
-                    if (i + 4 >= value.length()) {
-                        unescaped.append("\\u");
-                        continue;
-                    }
-                    String hex = value.substring(i + 1, i + 5);
-                    try {
-                        unescaped.append((char) Integer.parseInt(hex, 16));
-                        i += 4;
-                    } catch (NumberFormatException e) {
-                        unescaped.append("\\u").append(hex);
-                        i += 4;
-                    }
-                }
-                default -> unescaped.append(escaped);
-            }
-        }
-        return unescaped.toString();
     }
 
     public record Config(URI endpoint, String model, String systemPrompt, Duration timeout) {

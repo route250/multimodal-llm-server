@@ -14,6 +14,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.LinkedBlockingQueue;
 import audio.AudioDiagnostics;
+import json.Json;
 import llm.ChatMessage;
 import llm.LanguageModel;
 import llm.LanguageModelException;
@@ -171,7 +172,7 @@ public class ChatClient {
             return;
         }
         try {
-            AudioDiagnostics.log("audio-chunk-process", diagnosticsContext, AudioDiagnostics.fields(
+            AudioDiagnostics.log("audio-chunk-process", diagnosticsContext, Json.fields(
                     "startSampleIndex", clientStartSampleIndex == Long.MIN_VALUE ? null : clientStartSampleIndex,
                     "endSampleIndexExclusive", clientEndSampleIndexExclusive == Long.MIN_VALUE ? null : clientEndSampleIndexExclusive,
                     "pcmBytes", body.length,
@@ -190,7 +191,7 @@ public class ChatClient {
     }
 
     public void handlePlayback(PlaybackEvent playbackEvent) {
-        AudioDiagnostics.log("playback-report", diagnosticsContext, AudioDiagnostics.fields(
+        AudioDiagnostics.log("playback-report", diagnosticsContext, Json.fields(
                 "assistantTurnId", playbackEvent.assistantTurnId(),
                 "state", playbackEvent.state(),
                 "clientMicSampleIndex", playbackEvent.clientMicSampleIndex()));
@@ -239,7 +240,7 @@ public class ChatClient {
                     started.speechSequenceId(),
                     "stt-wait");
         }
-        AudioDiagnostics.log("audio-control-send", diagnosticsContext, AudioDiagnostics.fields(
+        AudioDiagnostics.log("audio-control-send", diagnosticsContext, Json.fields(
                 "action", "pause",
                 "assistantTurnId", event == null ? null : sttWaitAssistantTurnId,
                 "interruptionId", currentInterruptionId,
@@ -274,7 +275,7 @@ public class ChatClient {
                     "empty-stt");
             sttWaitActive = false;
         }
-        AudioDiagnostics.log("audio-control-send", diagnosticsContext, AudioDiagnostics.fields(
+        AudioDiagnostics.log("audio-control-send", diagnosticsContext, Json.fields(
                 "action", "resume",
                 "assistantTurnId", event == null ? null : sttWaitAssistantTurnId,
                 "interruptionId", currentInterruptionId,
@@ -322,7 +323,7 @@ public class ChatClient {
             }
         }
         if (event != null) {
-            AudioDiagnostics.log("audio-control-send", diagnosticsContext, AudioDiagnostics.fields(
+            AudioDiagnostics.log("audio-control-send", diagnosticsContext, Json.fields(
                     "action", "cancel",
                     "assistantTurnId", canceledTurnId,
                     "interruptionId", currentInterruptionId,
@@ -344,7 +345,7 @@ public class ChatClient {
 
     private void startAssistantReply(String transcript) {
         long assistantTurnId = beginAssistantTurn();
-        AudioDiagnostics.log("assistant-turn-start", diagnosticsContext, AudioDiagnostics.fields(
+        AudioDiagnostics.log("assistant-turn-start", diagnosticsContext, Json.fields(
                 "assistantTurnId", assistantTurnId,
                 "transcriptChars", transcript.length(),
                 "transcript", transcript));
@@ -377,7 +378,7 @@ public class ChatClient {
                     if (!isAssistantTurnActive(assistantTurnId)) {
                         return;
                     }
-                    AudioDiagnostics.log("llm-message-delta", diagnosticsContext, AudioDiagnostics.fields(
+                    AudioDiagnostics.log("llm-message-delta", diagnosticsContext, Json.fields(
                             "assistantTurnId", assistantTurnId,
                             "deltaChars", delta.length()));
                     speak(assistantTurnId, userMessage, chunker.append(delta));
@@ -386,7 +387,7 @@ public class ChatClient {
                 if (!isAssistantTurnActive(assistantTurnId)) {
                     return;
                 }
-                AudioDiagnostics.log("assistant-turn-message-done", diagnosticsContext, AudioDiagnostics.fields(
+                AudioDiagnostics.log("assistant-turn-message-done", diagnosticsContext, Json.fields(
                         "assistantTurnId", assistantTurnId));
                 sendToGroupIfOpen(ServerEvent.messageDone());
                 finishAssistantTurn(assistantTurnId);
@@ -453,7 +454,7 @@ public class ChatClient {
             conversationHistory.add(new ChatMessage("assistant", chunk.text()));
             trimConversationHistory();
         }
-        AudioDiagnostics.log("assistant-chunk-recognized", diagnosticsContext, AudioDiagnostics.fields(
+        AudioDiagnostics.log("assistant-chunk-recognized", diagnosticsContext, Json.fields(
                 "assistantTurnId", assistantTurnId,
                 "chunkId", chunkId,
                 "textChars", chunk.text().length()));
@@ -472,7 +473,7 @@ public class ChatClient {
             }
             long chunkId = nextAssistantChunkId();
             List<AudioDelta> audioDeltas = new ArrayList<>();
-            AudioDiagnostics.log("tts-chunk-start", diagnosticsContext, AudioDiagnostics.fields(
+            AudioDiagnostics.log("tts-chunk-start", diagnosticsContext, Json.fields(
                     "assistantTurnId", assistantTurnId,
                     "chunkId", chunkId,
                     "textChars", chunk.length(),
@@ -482,7 +483,7 @@ public class ChatClient {
                 textToSpeech.synthesizeStreaming(chunk, audio -> {
                     if (isAssistantTurnActive(assistantTurnId)) {
                         audioDeltas.add(audio);
-                        AudioDiagnostics.log("tts-audio-delta", diagnosticsContext, AudioDiagnostics.fields(
+                        AudioDiagnostics.log("tts-audio-delta", diagnosticsContext, Json.fields(
                                 "assistantTurnId", assistantTurnId,
                                 "chunkId", chunkId,
                                 "deltaIndex", audioDeltas.size(),
@@ -505,7 +506,7 @@ public class ChatClient {
                     chunk,
                     audioDeltas,
                     durationSeconds));
-            AudioDiagnostics.log("tts-chunk-done", diagnosticsContext, AudioDiagnostics.fields(
+            AudioDiagnostics.log("tts-chunk-done", diagnosticsContext, Json.fields(
                     "assistantTurnId", assistantTurnId,
                     "chunkId", chunkId,
                     "audioDeltaCount", audioDeltas.size(),
@@ -535,7 +536,7 @@ public class ChatClient {
     }
 
     private void sendAudioProcessingFailure(RuntimeException e) {
-        AudioDiagnostics.log("audio-processing-error", diagnosticsContext, AudioDiagnostics.fields(
+        AudioDiagnostics.log("audio-processing-error", diagnosticsContext, Json.fields(
                 "errorClass", e.getClass().getName(),
                 "errorMessage", e.getMessage()));
         sendToGroupIfOpen(ServerEvent.system("audio processing failed: " + e.getMessage()));

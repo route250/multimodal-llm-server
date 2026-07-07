@@ -3,6 +3,8 @@ package server;
 import audio.AudioDiagnostics;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import json.Json;
+import json.JsonFields;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
@@ -126,7 +128,7 @@ public class MlServer implements AutoCloseable {
                 long clientStartSampleIndex = longHeader(exchange, "X-Client-Mic-Start-Sample");
                 long clientEndSampleIndexExclusive = longHeader(exchange, "X-Client-Mic-End-Sample");
                 AudioDiagnostics.log("http-audio-received", AudioDiagnostics.context(chatGroup.id(), sessionId),
-                        AudioDiagnostics.fields(
+                        Json.fields(
                                 "startSampleIndex", clientStartSampleIndex == Long.MIN_VALUE ? null : clientStartSampleIndex,
                                 "endSampleIndexExclusive", clientEndSampleIndexExclusive == Long.MIN_VALUE
                                         ? null
@@ -143,13 +145,16 @@ public class MlServer implements AutoCloseable {
             }
         } catch (HttpRequestException e) {
             sendText(exchange, e.status(), "application/json; charset=utf-8",
-                    "{\"error\":\"" + jsonEscape(e.getMessage()) + "\"}\n");
+                    errorJson(e.getMessage()));
             return;
         }
 
-        String json = """
-                {"status":"accepted","groupId":"%s","sessionId":"%s","type":"%s","bytes":%d}
-                """.formatted(jsonEscape(chatGroup.id()), jsonEscape(sessionId), jsonEscape(request.type()), body.length);
+        String json = Json.object(Json.fields(
+                "status", "accepted",
+                "groupId", chatGroup.id(),
+                "sessionId", sessionId,
+                "type", request.type(),
+                "bytes", body.length)) + "\n";
         sendText(exchange, 202, "application/json; charset=utf-8", json);
     }
 
@@ -175,16 +180,16 @@ public class MlServer implements AutoCloseable {
         String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
         try {
             client.handlePlayback(new ChatClient.PlaybackEvent(
-                    jsonLong(body, "assistantTurnId"),
-                    jsonLongOrDefault(body, "chunkId", 0),
-                    jsonString(body, "state"),
-                    jsonBooleanOrDefault(body, "recognized", false),
-                    jsonDoubleOrDefault(body, "playedSeconds", 0),
-                    jsonDoubleOrDefault(body, "durationSeconds", 0),
-                    jsonLong(body, "clientMicSampleIndex")));
+                    JsonFields.longValue(body, "assistantTurnId"),
+                    JsonFields.longOrDefault(body, "chunkId", 0),
+                    JsonFields.string(body, "state"),
+                    JsonFields.booleanOrDefault(body, "recognized", false),
+                    JsonFields.doubleOrDefault(body, "playedSeconds", 0),
+                    JsonFields.doubleOrDefault(body, "durationSeconds", 0),
+                    JsonFields.longValue(body, "clientMicSampleIndex")));
         } catch (IllegalArgumentException e) {
             sendText(exchange, 400, "application/json; charset=utf-8",
-                    "{\"error\":\"" + jsonEscape(e.getMessage()) + "\"}\n");
+                    errorJson(e.getMessage()));
             return;
         }
 
@@ -206,22 +211,22 @@ public class MlServer implements AutoCloseable {
         }
 
         String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-        String event = jsonStringOrDefault(body, "event", "unknown");
+        String event = JsonFields.stringOrDefault(body, "event", "unknown");
         AudioDiagnostics.log("browser-" + event, AudioDiagnostics.context(chatGroup.id(), sessionId),
-                AudioDiagnostics.fields(
-                        "assistantTurnId", jsonLongOrNull(body, "assistantTurnId"),
-                        "chunkId", jsonLongOrNull(body, "chunkId"),
-                        "activeAssistantTurnId", jsonLongOrNull(body, "activeAssistantTurnId"),
-                        "clientMicSampleIndex", jsonLongOrNull(body, "clientMicSampleIndex"),
-                        "queuedAudioDeltas", jsonLongOrNull(body, "queuedAudioDeltas"),
-                        "currentPlayback", jsonBooleanOrNull(body, "currentPlayback"),
-                        "pausedPlayback", jsonBooleanOrNull(body, "pausedPlayback"),
-                        "localVadPlaybackPaused", jsonBooleanOrNull(body, "localVadPlaybackPaused"),
-                        "serverSttPlaybackPaused", jsonBooleanOrNull(body, "serverSttPlaybackPaused"),
-                        "playbackReady", jsonBooleanOrNull(body, "playbackReady"),
-                        "audioContextState", jsonStringOrNull(body, "audioContextState"),
-                        "detail", jsonStringOrNull(body, "detail"),
-                        "error", jsonStringOrNull(body, "error")));
+                Json.fields(
+                        "assistantTurnId", JsonFields.longOrNull(body, "assistantTurnId"),
+                        "chunkId", JsonFields.longOrNull(body, "chunkId"),
+                        "activeAssistantTurnId", JsonFields.longOrNull(body, "activeAssistantTurnId"),
+                        "clientMicSampleIndex", JsonFields.longOrNull(body, "clientMicSampleIndex"),
+                        "queuedAudioDeltas", JsonFields.longOrNull(body, "queuedAudioDeltas"),
+                        "currentPlayback", JsonFields.booleanOrNull(body, "currentPlayback"),
+                        "pausedPlayback", JsonFields.booleanOrNull(body, "pausedPlayback"),
+                        "localVadPlaybackPaused", JsonFields.booleanOrNull(body, "localVadPlaybackPaused"),
+                        "serverSttPlaybackPaused", JsonFields.booleanOrNull(body, "serverSttPlaybackPaused"),
+                        "playbackReady", JsonFields.booleanOrNull(body, "playbackReady"),
+                        "audioContextState", JsonFields.stringOrNull(body, "audioContextState"),
+                        "detail", JsonFields.stringOrNull(body, "detail"),
+                        "error", JsonFields.stringOrNull(body, "error")));
 
         sendText(exchange, 202, "application/json; charset=utf-8", "{\"status\":\"accepted\"}\n");
     }
@@ -359,9 +364,11 @@ public class MlServer implements AutoCloseable {
     private static void writeEvent(OutputStream responseBody, ServerEvent event) throws IOException {
         String payload = """
                 event: %s
-                data: {"message":"%s","timestamp":"%s"}
+                data: %s
 
-                """.formatted(event.type(), jsonEscape(event.message()), event.timestamp());
+                """.formatted(event.type(), Json.object(Json.fields(
+                "message", event.message(),
+                "timestamp", event.timestamp().toString())));
         responseBody.write(payload.getBytes(StandardCharsets.UTF_8));
     }
 
@@ -415,157 +422,16 @@ public class MlServer implements AutoCloseable {
             return;
         }
         AudioDiagnostics.log("sse-send-" + event.type(), AudioDiagnostics.context(groupId, sessionId),
-                AudioDiagnostics.fields(
+                Json.fields(
                         "messageChars", event.message().length(),
-                        "assistantTurnId", jsonLongOrNull(event.message(), "assistantTurnId"),
-                        "chunkId", jsonLongOrNull(event.message(), "chunkId"),
-                        "action", jsonStringOrNull(event.message(), "action"),
-                        "sampleRate", jsonLongOrNull(event.message(), "sampleRate")));
+                        "assistantTurnId", JsonFields.longOrNull(event.message(), "assistantTurnId"),
+                        "chunkId", JsonFields.longOrNull(event.message(), "chunkId"),
+                        "action", JsonFields.stringOrNull(event.message(), "action"),
+                        "sampleRate", JsonFields.longOrNull(event.message(), "sampleRate")));
     }
 
-    private static long jsonLong(String json, String name) {
-        String value = jsonField(json, name);
-        try {
-            return Long.parseLong(value);
-        } catch (NumberFormatException e) {
-            throw new IllegalArgumentException(name + " must be a number");
-        }
-    }
-
-    private static Long jsonLongOrNull(String json, String name) {
-        String value = jsonFieldOrNull(json, name);
-        if (value == null || "null".equals(value)) {
-            return null;
-        }
-        try {
-            return Long.parseLong(value);
-        } catch (NumberFormatException e) {
-            return null;
-        }
-    }
-
-    private static long jsonLongOrDefault(String json, String name, long defaultValue) {
-        Long value = jsonLongOrNull(json, name);
-        return value == null ? defaultValue : value;
-    }
-
-    private static double jsonDoubleOrDefault(String json, String name, double defaultValue) {
-        String value = jsonFieldOrNull(json, name);
-        if (value == null || "null".equals(value)) {
-            return defaultValue;
-        }
-        try {
-            return Double.parseDouble(value);
-        } catch (NumberFormatException e) {
-            return defaultValue;
-        }
-    }
-
-    private static String jsonString(String json, String name) {
-        String value = jsonField(json, name);
-        if (value.length() >= 2 && value.startsWith("\"") && value.endsWith("\"")) {
-            return value.substring(1, value.length() - 1)
-                    .replace("\\\"", "\"")
-                    .replace("\\\\", "\\");
-        }
-        throw new IllegalArgumentException(name + " must be a string");
-    }
-
-    private static String jsonStringOrDefault(String json, String name, String defaultValue) {
-        String value = jsonStringOrNull(json, name);
-        return value == null || value.isBlank() ? defaultValue : value;
-    }
-
-    private static String jsonStringOrNull(String json, String name) {
-        String value = jsonFieldOrNull(json, name);
-        if (value == null || "null".equals(value)) {
-            return null;
-        }
-        if (value.length() >= 2 && value.startsWith("\"") && value.endsWith("\"")) {
-            return value.substring(1, value.length() - 1)
-                    .replace("\\n", "\n")
-                    .replace("\\r", "\r")
-                    .replace("\\t", "\t")
-                    .replace("\\\"", "\"")
-                    .replace("\\\\", "\\");
-        }
-        return null;
-    }
-
-    private static Boolean jsonBooleanOrNull(String json, String name) {
-        String value = jsonFieldOrNull(json, name);
-        if ("true".equals(value)) {
-            return Boolean.TRUE;
-        }
-        if ("false".equals(value)) {
-            return Boolean.FALSE;
-        }
-        return null;
-    }
-
-    private static boolean jsonBooleanOrDefault(String json, String name, boolean defaultValue) {
-        Boolean value = jsonBooleanOrNull(json, name);
-        return value == null ? defaultValue : value;
-    }
-
-    private static String jsonField(String json, String name) {
-        String value = jsonFieldOrNull(json, name);
-        if (value == null) {
-            throw new IllegalArgumentException(name + " is required");
-        }
-        return value;
-    }
-
-    private static String jsonFieldOrNull(String json, String name) {
-        String key = "\"" + name + "\"";
-        int keyStart = json.indexOf(key);
-        if (keyStart < 0) {
-            return null;
-        }
-        int colon = json.indexOf(':', keyStart + key.length());
-        if (colon < 0) {
-            return null;
-        }
-        int valueStart = colon + 1;
-        while (valueStart < json.length() && Character.isWhitespace(json.charAt(valueStart))) {
-            valueStart++;
-        }
-        if (valueStart >= json.length()) {
-            return null;
-        }
-        if (json.charAt(valueStart) == '"') {
-            int valueEnd = valueStart + 1;
-            boolean escaped = false;
-            while (valueEnd < json.length()) {
-                char c = json.charAt(valueEnd);
-                if (c == '"' && !escaped) {
-                    return json.substring(valueStart, valueEnd + 1);
-                }
-                escaped = c == '\\' && !escaped;
-                if (c != '\\') {
-                    escaped = false;
-                }
-                valueEnd++;
-            }
-            return null;
-        }
-        int valueEnd = valueStart;
-        while (valueEnd < json.length()) {
-            char c = json.charAt(valueEnd);
-            if (c == ',' || c == '}') {
-                break;
-            }
-            valueEnd++;
-        }
-        return json.substring(valueStart, valueEnd).trim();
-    }
-
-    private static String jsonEscape(String value) {
-        return value.replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\n", "\\n")
-                .replace("\r", "\\r")
-                .replace("\t", "\\t");
+    private static String errorJson(String message) {
+        return Json.object(Json.fields("error", message)) + "\n";
     }
 
     private record StaticResource(byte[] body, String contentType) {
