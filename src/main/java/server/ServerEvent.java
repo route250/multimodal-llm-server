@@ -28,6 +28,13 @@ public record ServerEvent(String type, String message, Instant timestamp) {
         return new ServerEvent("assistant-state", json.strip(), Instant.now());
     }
 
+    public static ServerEvent transcriptPartial(long speechSequenceId, String text) {
+        String json = Json.object(Json.fields(
+                "speechSequenceId", speechSequenceId,
+                "text", text));
+        return new ServerEvent("transcript-partial", json.strip(), Instant.now());
+    }
+
     public static ServerEvent audioDelta(String data, String format, int sampleRate) {
         return audioDelta(data, format, sampleRate, 0);
     }

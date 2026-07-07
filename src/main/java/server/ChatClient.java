@@ -291,7 +291,8 @@ public class ChatClient {
         String transcript = text == null ? "" : text.trim();
         if (result.kind() == TranscriptionKind.PARTIAL) {
             if (!transcript.isBlank()) {
-                rememberPartialTranscript(result.speechSequenceId(), transcript);
+                String partialTranscript = rememberPartialTranscript(result.speechSequenceId(), transcript);
+                sendToGroupIfOpen(ServerEvent.transcriptPartial(result.speechSequenceId(), partialTranscript));
                 cancelCurrentAssistantTurnForTranscript(result.speechSequenceId());
             }
             return;
@@ -307,11 +308,13 @@ public class ChatClient {
         startAssistantReply(finalTranscript);
     }
 
-    private void rememberPartialTranscript(long speechSequenceId, String transcript) {
+    private String rememberPartialTranscript(long speechSequenceId, String transcript) {
         synchronized (partialTranscriptLock) {
             partialTranscripts.keySet().removeIf(id -> id < speechSequenceId);
             String current = partialTranscripts.getOrDefault(speechSequenceId, "");
-            partialTranscripts.put(speechSequenceId, mergeTranscriptText(current, transcript));
+            String merged = mergeTranscriptText(current, transcript);
+            partialTranscripts.put(speechSequenceId, merged);
+            return merged;
         }
     }
 

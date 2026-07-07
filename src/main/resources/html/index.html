@@ -105,6 +105,13 @@
             color: #ffffff;
         }
 
+        .message.user.partial {
+            background: #dbeafe;
+            border-color: #93c5fd;
+            color: #1e3a8a;
+            opacity: 0.92;
+        }
+
         .message.assistant {
             background: #ffffff;
             border-color: #e5e7eb;
@@ -459,6 +466,7 @@
     let assistantPipelineState = "IDLE";
     let activeAssistantTurnId = 0;
     let activeAssistantMessage = null;
+    const partialTranscriptBubbles = new Map();
     let browserLogSequence = 0;
     const canceledAssistantTurnIds = new Set();
     session.textContent = sessionLabel();
@@ -468,6 +476,7 @@
         events.close();
         response.replaceChildren();
         activeAssistantMessage = null;
+        partialTranscriptBubbles.clear();
         session.textContent = sessionLabel();
         resetPlayback();
         clientLog("group-change", { detail: groupInput.value });
@@ -507,7 +516,7 @@
         });
 
         source.addEventListener("user-message", (event) => {
-            appendMessage("user", JSON.parse(event.data).message);
+            finalizePartialTranscript(JSON.parse(event.data).message);
             activeAssistantMessage = null;
         });
 
@@ -523,6 +532,15 @@
             clientLog("message-done-received");
             activeAssistantMessage = null;
             scrollToBottom();
+        });
+
+        source.addEventListener("transcript-partial", (event) => {
+            try {
+                const payload = JSON.parse(JSON.parse(event.data).message);
+                appendPartialTranscript(payload.speechSequenceId || 0, payload.text || "");
+            } catch (error) {
+                clientLog("transcript-partial-parse-error", { error: error.message });
+            }
         });
 
         source.addEventListener("assistant-audio-chunk", (event) => {
@@ -589,6 +607,51 @@
         response.append(row);
         scrollToBottom();
         return bubble;
+    }
+
+    function appendPartialTranscript(speechSequenceId, message) {
+        if (!speechSequenceId || !message.trim()) {
+            return;
+        }
+        for (const id of partialTranscriptBubbles.keys()) {
+            if (id < speechSequenceId) {
+                partialTranscriptBubbles.delete(id);
+            }
+        }
+        let bubble = partialTranscriptBubbles.get(speechSequenceId);
+        if (!bubble || !bubble.isConnected) {
+            bubble = appendMessage("user", "");
+            bubble.classList.add("partial");
+            partialTranscriptBubbles.set(speechSequenceId, bubble);
+        }
+        bubble.textContent = message;
+        scrollToBottom();
+    }
+
+    function finalizePartialTranscript(message) {
+        const latest = latestPartialTranscriptBubble();
+        if (!latest) {
+            appendMessage("user", message);
+            return;
+        }
+        latest.bubble.textContent = message;
+        latest.bubble.className = "message user";
+        partialTranscriptBubbles.delete(latest.speechSequenceId);
+        scrollToBottom();
+    }
+
+    function latestPartialTranscriptBubble() {
+        let latest = null;
+        for (const [speechSequenceId, bubble] of partialTranscriptBubbles) {
+            if (!bubble.isConnected) {
+                partialTranscriptBubbles.delete(speechSequenceId);
+                continue;
+            }
+            if (!latest || speechSequenceId > latest.speechSequenceId) {
+                latest = { speechSequenceId, bubble };
+            }
+        }
+        return latest;
     }
 
     function appendSystem(message) {

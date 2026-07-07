@@ -95,6 +95,12 @@ class ChatClientAudioProcessingTest {
         assertTrue(html.contains("vadBytes[frameIndex] = (value & 0x7f) | playbackFlag"));
         assertTrue(html.contains("const speechValue = vadValue & 0x7f"));
         assertTrue(html.contains("analyzeLocalTenVad(vadBytes)"));
+        assertTrue(html.contains(".message.user.partial"));
+        assertTrue(html.contains("source.addEventListener(\"transcript-partial\""));
+        assertTrue(html.contains("const partialTranscriptBubbles = new Map()"));
+        assertTrue(html.contains("finalizePartialTranscript(JSON.parse(event.data).message)"));
+        assertTrue(html.contains("function appendPartialTranscript(speechSequenceId, message)"));
+        assertTrue(html.contains("latest.bubble.className = \"message user\""));
         assertFalse(html.contains("let playbackPaused"));
     }
 
@@ -367,12 +373,46 @@ class ChatClientAudioProcessingTest {
 
             processorClient.handle(audioRequest(new byte[]{0, 0}));
 
+            ServerEvent partial = pollUntil(listener, event -> "transcript-partial".equals(event.type()));
             ServerEvent cancel = pollUntil(listener, event -> event.message().contains("\"action\":\"cancel\""));
+            assertNotNull(partial);
+            assertTrue(partial.message().contains("\"speechSequenceId\":1"));
+            assertTrue(partial.message().contains("\"text\":\"途中です\""));
             assertNotNull(cancel);
             assertTrue(cancel.message().contains("\"reason\":\"user-transcript\""));
             assertEquals(1, languageModel.calls);
             assertNull(pollUntil(listener, event -> "assistant-audio-chunk".equals(event.type())));
             textToSpeech.release();
+        }
+    }
+
+    @Test
+    void partialTranscriptEventContainsMergedPartialTextWithoutStartingLlm() throws Exception {
+        try (MlServer server = new MlServer(0)) {
+            ChatGroup group = new ChatGroup("group-test", server);
+            ChatClient listener = group.join("client-1");
+            CountingLanguageModel languageModel = new CountingLanguageModel("応答。");
+            ChatClient processorClient = new ChatClient(
+                    "processor",
+                    group,
+                    new ScriptedTranscriptionAudioProcessor(
+                            new ScriptedTranscription(1, AudioProcessor.TranscriptionKind.PARTIAL, "今日は天気"),
+                            new ScriptedTranscription(1, AudioProcessor.TranscriptionKind.PARTIAL, "天気です")),
+                    languageModel,
+                    TextToSpeech.disabled());
+            drainJoinEvents(listener);
+
+            processorClient.handle(audioRequest(new byte[]{0, 0}));
+            processorClient.handle(audioRequest(new byte[]{0, 0}));
+
+            ServerEvent firstPartial = pollUntil(listener, event -> "transcript-partial".equals(event.type()));
+            ServerEvent secondPartial = pollUntil(listener, event -> "transcript-partial".equals(event.type()));
+            assertNotNull(firstPartial);
+            assertNotNull(secondPartial);
+            assertTrue(firstPartial.message().contains("\"text\":\"今日は天気\""));
+            assertTrue(secondPartial.message().contains("\"text\":\"今日は天気です\""));
+            assertEquals(0, languageModel.calls);
+            assertNull(pollUntil(listener, event -> "assistant-audio-chunk".equals(event.type())));
         }
     }
 
@@ -395,6 +435,10 @@ class ChatClientAudioProcessingTest {
             processorClient.handle(audioRequest(new byte[]{0, 0}));
             processorClient.handle(audioRequest(new byte[]{0, 0}));
 
+            ServerEvent partial = pollUntil(listener, event -> "transcript-partial".equals(event.type()));
+            assertNotNull(partial);
+            assertTrue(partial.message().contains("\"speechSequenceId\":1"));
+            assertTrue(partial.message().contains("\"text\":\"今日は\""));
             assertNotNull(pollUntil(listener, event -> "assistant-audio-chunk".equals(event.type())));
             assertEquals(1, languageModel.calls.size());
             assertEquals(List.of("user:今日は天気です"), languageModel.calls.getFirst());
