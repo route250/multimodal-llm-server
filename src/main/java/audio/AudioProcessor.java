@@ -50,7 +50,7 @@ public class AudioProcessor {
     /** SmartTurn が未完了でも発話終了を確定する最大無音区間。19,200 サンプルは 16 kHz で 1,200 ms。 */
     public static final int MAX_TURN_DETECTION_SILENCE_SAMPLES = 19_200;
     /** 非発話状態から発話状態へ切り替える VAD 確率の下限値。 */
-    public static final float START_THRESHOLD = 0.65f;
+    public static final float START_THRESHOLD = 0.7f;
     /** 発話状態を継続する VAD 確率の下限値。 */
     public static final float END_THRESHOLD = 0.35f;
 
