@@ -26,7 +26,7 @@ import java.util.regex.Pattern;
  * <pre>
  * mvn -q -DskipTests test-compile
  * java -cp target/test-classes:target/classes stt.WhisperServerBenchmark \
- *   --endpoint http://localhost:8767/inference \
+ *   --endpoint http://localhost:8768/inference \
  *   --audio src/test/test-data/voice_mosimosi.wav \
  *   --language ja \
  *   --iterations 10 \
@@ -34,7 +34,7 @@ import java.util.regex.Pattern;
  * </pre>
  */
 public class WhisperServerBenchmark {
-    private static final URI DEFAULT_ENDPOINT = URI.create("http://localhost:8767/inference");
+    private static final URI DEFAULT_ENDPOINT = URI.create("http://localhost:8768/inference");
     private static final Path DEFAULT_AUDIO_FILE = Path.of("src/test/test-data/voice_mosimosi.wav");
     private static final Pattern TEXT_FIELD = Pattern.compile("\"text\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"");
     private static final Pattern WORD_OBJECT = Pattern.compile(
@@ -346,7 +346,7 @@ public class WhisperServerBenchmark {
         private static void printHelp() {
             System.out.println("""
                     Usage: java stt.WhisperServerBenchmark [options]
-                      --endpoint <url>       default: http://localhost:8767/inference
+                      --endpoint <url>       default: http://localhost:8768/inference
                       --audio <path>         default: src/test/test-data/voice_mosimosi.wav
                       --language <code>      default: ja, empty string means auto-detect
                       --iterations <count>   default: 10

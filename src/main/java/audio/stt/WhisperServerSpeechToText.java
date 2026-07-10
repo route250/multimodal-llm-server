@@ -16,7 +16,7 @@ import java.util.UUID;
 import java.util.regex.Pattern;
 
 public class WhisperServerSpeechToText implements SpeechToText {
-    public static final URI DEFAULT_ENDPOINT = URI.create("http://localhost:8767/inference");
+    public static final URI DEFAULT_ENDPOINT = URI.create("http://localhost:8768/inference");
     private static final int SAMPLE_RATE = 16_000;
     private static final int CHANNELS = 1;
     private static final int BITS_PER_SAMPLE = 16;
