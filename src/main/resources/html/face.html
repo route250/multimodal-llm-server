@@ -1,0 +1,669 @@
+<!doctype html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ブラウザ顔認識テスト</title>
+    <style>
+        :root {
+            color-scheme: light;
+            --bg: #f7f7f8;
+            --panel: #ffffff;
+            --text: #17202a;
+            --muted: #667085;
+            --line: #d8dee7;
+            --accent: #2563eb;
+            --ok: #15803d;
+            --warn: #b45309;
+            --bad: #b91c1c;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            line-height: 1.5;
+            margin: 0;
+        }
+
+        main {
+            display: grid;
+            gap: 16px;
+            margin: 0 auto;
+            max-width: 1120px;
+            padding: 18px 20px 28px;
+        }
+
+        header {
+            align-items: end;
+            border-bottom: 1px solid var(--line);
+            display: flex;
+            gap: 12px;
+            justify-content: space-between;
+            padding-bottom: 14px;
+        }
+
+        h1 {
+            font-size: 20px;
+            line-height: 1.2;
+            margin: 0 0 4px;
+        }
+
+        p {
+            margin: 0;
+        }
+
+        .lead {
+            color: var(--muted);
+            font-size: 14px;
+        }
+
+        .layout {
+            display: grid;
+            gap: 16px;
+            grid-template-columns: minmax(0, 1.45fr) minmax(320px, 0.75fr);
+        }
+
+        .camera-panel,
+        .side-panel {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .camera-wrap {
+            aspect-ratio: 16 / 9;
+            background: #111827;
+            position: relative;
+            width: 100%;
+        }
+
+        video,
+        canvas {
+            display: block;
+            height: 100%;
+            inset: 0;
+            object-fit: cover;
+            position: absolute;
+            width: 100%;
+        }
+
+        canvas {
+            pointer-events: none;
+        }
+
+        .controls,
+        .registration,
+        .settings {
+            align-items: center;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            padding: 12px;
+        }
+
+        .registration,
+        .settings {
+            border-top: 1px solid var(--line);
+        }
+
+        button,
+        input {
+            font: inherit;
+        }
+
+        button {
+            background: #111827;
+            border: 1px solid #111827;
+            border-radius: 8px;
+            color: #ffffff;
+            cursor: pointer;
+            font-weight: 700;
+            min-height: 38px;
+            padding: 0 14px;
+        }
+
+        button.secondary {
+            background: #ffffff;
+            border-color: #cbd5e1;
+            color: #111827;
+        }
+
+        button:disabled {
+            cursor: not-allowed;
+            opacity: 0.5;
+        }
+
+        input {
+            border: 1px solid #cbd5e1;
+            border-radius: 8px;
+            height: 38px;
+            min-width: 180px;
+            padding: 0 10px;
+        }
+
+        .status {
+            border-radius: 999px;
+            display: inline-flex;
+            font-size: 13px;
+            font-weight: 700;
+            line-height: 1;
+            padding: 8px 10px;
+        }
+
+        .status.wait {
+            background: #eef2ff;
+            color: #3730a3;
+        }
+
+        .status.ok {
+            background: #dcfce7;
+            color: var(--ok);
+        }
+
+        .status.warn {
+            background: #fef3c7;
+            color: var(--warn);
+        }
+
+        .status.bad {
+            background: #fee2e2;
+            color: var(--bad);
+        }
+
+        .side-panel {
+            display: grid;
+            gap: 0;
+        }
+
+        .block {
+            border-bottom: 1px solid var(--line);
+            display: grid;
+            gap: 10px;
+            padding: 14px;
+        }
+
+        .block:last-child {
+            border-bottom: 0;
+        }
+
+        h2 {
+            font-size: 15px;
+            line-height: 1.2;
+            margin: 0;
+        }
+
+        dl {
+            display: grid;
+            gap: 8px;
+            grid-template-columns: 135px minmax(0, 1fr);
+            margin: 0;
+        }
+
+        dt {
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        dd {
+            margin: 0;
+            overflow-wrap: anywhere;
+        }
+
+        .mono {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: 12px;
+        }
+
+        .log {
+            display: grid;
+            gap: 8px;
+            max-height: 220px;
+            overflow: auto;
+        }
+
+        .log-entry {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 13px;
+            padding: 8px;
+        }
+
+        @media (max-width: 860px) {
+            main {
+                padding: 14px 12px 22px;
+            }
+
+            header {
+                align-items: start;
+                flex-direction: column;
+            }
+
+            .layout {
+                grid-template-columns: 1fr;
+            }
+
+            dl {
+                grid-template-columns: 112px minmax(0, 1fr);
+            }
+        }
+    </style>
+</head>
+<body>
+<main>
+    <header>
+        <div>
+            <h1>ブラウザ顔認識テスト</h1>
+            <p class="lead">カメラ映像の変化を検出した時だけ顔検出し、顔があれば128次元の特徴量を抽出します。</p>
+        </div>
+        <span id="model-status" class="status wait">モデル未読込</span>
+    </header>
+
+    <section class="layout">
+        <section class="camera-panel" aria-label="カメラ映像">
+            <div class="camera-wrap">
+                <video id="camera" autoplay muted playsinline></video>
+                <canvas id="overlay"></canvas>
+            </div>
+            <div class="controls">
+                <button id="start-camera" type="button">カメラ開始</button>
+                <button id="stop-camera" class="secondary" type="button" disabled>停止</button>
+                <span id="camera-status" class="status wait">カメラ停止中</span>
+            </div>
+            <div class="registration">
+                <input id="person-name" autocomplete="off" placeholder="登録する人物名">
+                <button id="register-face" class="secondary" type="button" disabled>現在の顔を登録</button>
+                <button id="clear-known" class="secondary" type="button">登録削除</button>
+            </div>
+            <div class="settings">
+                <span class="lead">判定間隔 500ms / 差分平均しきい値 6.0 / 変化画素率しきい値 4.0% / 既知人物距離しきい値 0.45</span>
+            </div>
+        </section>
+
+        <aside class="side-panel" aria-label="検出結果">
+            <section class="block">
+                <h2>現在の状態</h2>
+                <dl>
+                    <dt>画像変化</dt>
+                    <dd id="motion-state">未測定</dd>
+                    <dt>顔の数</dt>
+                    <dd id="face-count">0</dd>
+                    <dt>あいさつ</dt>
+                    <dd id="greeting">未判定</dd>
+                    <dt>推定人物</dt>
+                    <dd id="matched-person">未判定</dd>
+                    <dt>特徴量</dt>
+                    <dd id="descriptor-preview" class="mono">未抽出</dd>
+                </dl>
+            </section>
+            <section class="block">
+                <h2>登録済み人物</h2>
+                <div id="known-list" class="log"></div>
+            </section>
+            <section class="block">
+                <h2>ログ</h2>
+                <div id="log" class="log"></div>
+            </section>
+        </aside>
+    </section>
+</main>
+
+<script type="module">
+    import * as faceapi from "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/dist/face-api.esm.js";
+
+    const modelUrl = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model/";
+    const motionIntervalMs = 500;
+    const motionMeanThreshold = 6.0;
+    const motionRatioThreshold = 0.04;
+    const fallbackDetectionMs = 3000;
+    const matchDistanceThreshold = 0.45;
+    const sampleWidth = 96;
+    const sampleHeight = 54;
+
+    const video = document.getElementById("camera");
+    const overlay = document.getElementById("overlay");
+    const overlayContext = overlay.getContext("2d");
+    const modelStatus = document.getElementById("model-status");
+    const cameraStatus = document.getElementById("camera-status");
+    const startCameraButton = document.getElementById("start-camera");
+    const stopCameraButton = document.getElementById("stop-camera");
+    const registerFaceButton = document.getElementById("register-face");
+    const clearKnownButton = document.getElementById("clear-known");
+    const personNameInput = document.getElementById("person-name");
+    const motionState = document.getElementById("motion-state");
+    const faceCount = document.getElementById("face-count");
+    const greeting = document.getElementById("greeting");
+    const matchedPerson = document.getElementById("matched-person");
+    const descriptorPreview = document.getElementById("descriptor-preview");
+    const knownList = document.getElementById("known-list");
+    const log = document.getElementById("log");
+
+    const sampleCanvas = document.createElement("canvas");
+    const sampleContext = sampleCanvas.getContext("2d", { willReadFrequently: true });
+    sampleCanvas.width = sampleWidth;
+    sampleCanvas.height = sampleHeight;
+
+    let stream = null;
+    let timerId = 0;
+    let previousFrame = null;
+    let lastDetectionAt = 0;
+    let detecting = false;
+    let modelsReady = false;
+    let lastDescriptor = null;
+    let knownPeople = loadKnownPeople();
+
+    startCameraButton.addEventListener("click", startCamera);
+    stopCameraButton.addEventListener("click", stopCamera);
+    registerFaceButton.addEventListener("click", registerCurrentFace);
+    clearKnownButton.addEventListener("click", clearKnownPeople);
+    renderKnownPeople();
+    loadModels();
+
+    async function loadModels() {
+        try {
+            setStatus(modelStatus, "wait", "モデル読込中");
+            await faceapi.tf.setBackend("webgl");
+            await faceapi.tf.ready();
+            await Promise.all([
+                faceapi.nets.tinyFaceDetector.loadFromUri(modelUrl),
+                faceapi.nets.faceLandmark68Net.loadFromUri(modelUrl),
+                faceapi.nets.faceRecognitionNet.loadFromUri(modelUrl),
+            ]);
+            modelsReady = true;
+            setStatus(modelStatus, "ok", "モデル読込済み");
+            appendLog("顔検出、ランドマーク、顔特徴量モデルを読み込みました。");
+        } catch (error) {
+            modelsReady = false;
+            setStatus(modelStatus, "bad", "モデル読込失敗");
+            appendLog(`モデル読込エラー: ${error.message}`);
+        }
+    }
+
+    async function startCamera() {
+        if (!navigator.mediaDevices?.getUserMedia) {
+            setStatus(cameraStatus, "bad", "カメラAPIなし");
+            appendLog("このブラウザは navigator.mediaDevices.getUserMedia に対応していません。");
+            return;
+        }
+
+        try {
+            stream = await navigator.mediaDevices.getUserMedia({
+                audio: false,
+                video: {
+                    facingMode: "user",
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 },
+                },
+            });
+            video.srcObject = stream;
+            await video.play();
+            resizeOverlay();
+            window.addEventListener("resize", resizeOverlay);
+            previousFrame = null;
+            lastDetectionAt = 0;
+            timerId = window.setInterval(processFrame, motionIntervalMs);
+            startCameraButton.disabled = true;
+            stopCameraButton.disabled = false;
+            setStatus(cameraStatus, "ok", "カメラ動作中");
+            appendLog("カメラを開始しました。");
+        } catch (error) {
+            setStatus(cameraStatus, "bad", "カメラ開始失敗");
+            appendLog(`カメラ開始エラー: ${error.message}`);
+        }
+    }
+
+    function stopCamera() {
+        window.clearInterval(timerId);
+        timerId = 0;
+        window.removeEventListener("resize", resizeOverlay);
+        if (stream) {
+            for (const track of stream.getTracks()) {
+                track.stop();
+            }
+        }
+        stream = null;
+        video.srcObject = null;
+        previousFrame = null;
+        lastDescriptor = null;
+        overlayContext.clearRect(0, 0, overlay.width, overlay.height);
+        registerFaceButton.disabled = true;
+        startCameraButton.disabled = false;
+        stopCameraButton.disabled = true;
+        setStatus(cameraStatus, "wait", "カメラ停止中");
+        appendLog("カメラを停止しました。");
+    }
+
+    async function processFrame() {
+        if (!modelsReady || detecting || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+            return;
+        }
+
+        // 低解像度の差分で、顔認識モデルを実行する回数を制限する。
+        sampleContext.drawImage(video, 0, 0, sampleWidth, sampleHeight);
+        const currentFrame = sampleContext.getImageData(0, 0, sampleWidth, sampleHeight);
+        const motion = measureMotion(previousFrame, currentFrame);
+        previousFrame = currentFrame;
+        motionState.textContent = `${motion.changed ? "変化あり" : "変化なし"} / 平均 ${motion.mean.toFixed(1)} / 画素率 ${(motion.ratio * 100).toFixed(1)}%`;
+
+        const now = performance.now();
+        if (!motion.changed && now - lastDetectionAt < fallbackDetectionMs) {
+            return;
+        }
+
+        detecting = true;
+        lastDetectionAt = now;
+        try {
+            await detectFaces();
+        } finally {
+            detecting = false;
+        }
+    }
+
+    function measureMotion(previous, current) {
+        if (!previous) {
+            return { changed: true, mean: 255, ratio: 1 };
+        }
+
+        const previousData = previous.data;
+        const currentData = current.data;
+        let total = 0;
+        let changedPixels = 0;
+        const pixelCount = sampleWidth * sampleHeight;
+
+        for (let index = 0; index < currentData.length; index += 4) {
+            const previousGray = previousData[index] * 0.299 + previousData[index + 1] * 0.587 + previousData[index + 2] * 0.114;
+            const currentGray = currentData[index] * 0.299 + currentData[index + 1] * 0.587 + currentData[index + 2] * 0.114;
+            const diff = Math.abs(currentGray - previousGray);
+            total += diff;
+            if (diff >= 18) {
+                changedPixels += 1;
+            }
+        }
+
+        const mean = total / pixelCount;
+        const ratio = changedPixels / pixelCount;
+        return {
+            changed: mean >= motionMeanThreshold && ratio >= motionRatioThreshold,
+            mean,
+            ratio,
+        };
+    }
+
+    async function detectFaces() {
+        const overlaySize = resizeOverlay();
+        const options = new faceapi.TinyFaceDetectorOptions({
+            inputSize: 416,
+            scoreThreshold: 0.5,
+        });
+        const detections = await faceapi
+            .detectAllFaces(video, options)
+            .withFaceLandmarks()
+            .withFaceDescriptors();
+
+        overlayContext.clearRect(0, 0, overlaySize.width, overlaySize.height);
+        faceCount.textContent = String(detections.length);
+
+        if (detections.length === 0) {
+            lastDescriptor = null;
+            registerFaceButton.disabled = true;
+            greeting.textContent = "顔なし";
+            matchedPerson.textContent = "未判定";
+            descriptorPreview.textContent = "未抽出";
+            return;
+        }
+
+        const resized = faceapi.resizeResults(detections, {
+            width: overlaySize.width,
+            height: overlaySize.height,
+        });
+        drawDetections(resized);
+
+        const primary = detections[0];
+        lastDescriptor = Array.from(primary.descriptor);
+        registerFaceButton.disabled = false;
+        descriptorPreview.textContent = lastDescriptor.slice(0, 8).map((value) => value.toFixed(4)).join(", ") + " ...";
+
+        const match = findNearestPerson(lastDescriptor);
+        if (match) {
+            greeting.textContent = `${match.name}さん、おひさしぶりです`;
+            matchedPerson.textContent = `${match.name} / 距離 ${match.distance.toFixed(3)}`;
+        } else {
+            greeting.textContent = "はじめまして";
+            matchedPerson.textContent = "未登録人物";
+        }
+    }
+
+    function drawDetections(detections) {
+        overlayContext.lineWidth = 3;
+        overlayContext.font = "16px system-ui, sans-serif";
+        overlayContext.textBaseline = "top";
+
+        for (const detection of detections) {
+            const box = detection.detection.box;
+            overlayContext.strokeStyle = "#22c55e";
+            overlayContext.strokeRect(box.x, box.y, box.width, box.height);
+
+            const score = Math.round(detection.detection.score * 100);
+            const label = `face ${score}%`;
+            overlayContext.fillStyle = "rgba(17, 24, 39, 0.82)";
+            overlayContext.fillRect(box.x, Math.max(0, box.y - 26), 92, 24);
+            overlayContext.fillStyle = "#ffffff";
+            overlayContext.fillText(label, box.x + 8, Math.max(0, box.y - 22));
+        }
+    }
+
+    function registerCurrentFace() {
+        const name = personNameInput.value.trim();
+        if (!name || !lastDescriptor) {
+            appendLog("登録には人物名と検出済みの顔が必要です。");
+            return;
+        }
+
+        knownPeople = knownPeople.filter((person) => person.name !== name);
+        knownPeople.push({
+            name,
+            descriptor: lastDescriptor,
+            createdAt: new Date().toISOString(),
+        });
+        saveKnownPeople();
+        renderKnownPeople();
+        appendLog(`${name} を登録しました。`);
+    }
+
+    function clearKnownPeople() {
+        knownPeople = [];
+        saveKnownPeople();
+        renderKnownPeople();
+        appendLog("登録済み人物をすべて削除しました。");
+    }
+
+    function findNearestPerson(descriptor) {
+        let nearest = null;
+        for (const person of knownPeople) {
+            // 顔特徴量同士のユークリッド距離が小さいほど同一人物の可能性が高い。
+            const distance = euclideanDistance(descriptor, person.descriptor);
+            if (!nearest || distance < nearest.distance) {
+                nearest = { name: person.name, distance };
+            }
+        }
+        return nearest && nearest.distance <= matchDistanceThreshold ? nearest : null;
+    }
+
+    function euclideanDistance(left, right) {
+        let total = 0;
+        for (let index = 0; index < left.length; index += 1) {
+            const diff = left[index] - right[index];
+            total += diff * diff;
+        }
+        return Math.sqrt(total);
+    }
+
+    function loadKnownPeople() {
+        try {
+            const json = localStorage.getItem("face-demo-known-people");
+            return json ? JSON.parse(json) : [];
+        } catch {
+            return [];
+        }
+    }
+
+    function saveKnownPeople() {
+        localStorage.setItem("face-demo-known-people", JSON.stringify(knownPeople));
+    }
+
+    function renderKnownPeople() {
+        knownList.replaceChildren();
+        if (knownPeople.length === 0) {
+            const empty = document.createElement("div");
+            empty.className = "log-entry";
+            empty.textContent = "登録なし";
+            knownList.append(empty);
+            return;
+        }
+
+        for (const person of knownPeople) {
+            const entry = document.createElement("div");
+            entry.className = "log-entry";
+            const date = new Date(person.createdAt).toLocaleString("ja-JP");
+            entry.textContent = `${person.name} / ${date}`;
+            knownList.append(entry);
+        }
+    }
+
+    function resizeOverlay() {
+        const rect = video.getBoundingClientRect();
+        const ratio = window.devicePixelRatio || 1;
+        overlay.width = Math.max(1, Math.round(rect.width * ratio));
+        overlay.height = Math.max(1, Math.round(rect.height * ratio));
+        overlay.style.width = `${rect.width}px`;
+        overlay.style.height = `${rect.height}px`;
+        overlayContext.setTransform(ratio, 0, 0, ratio, 0, 0);
+        return {
+            width: rect.width,
+            height: rect.height,
+        };
+    }
+
+    function setStatus(element, state, text) {
+        element.className = `status ${state}`;
+        element.textContent = text;
+    }
+
+    function appendLog(message) {
+        const entry = document.createElement("div");
+        entry.className = "log-entry";
+        entry.textContent = `${new Date().toLocaleTimeString("ja-JP")} ${message}`;
+        log.prepend(entry);
+        while (log.children.length > 30) {
+            log.lastElementChild.remove();
+        }
+    }
+</script>
+</body>
+</html>

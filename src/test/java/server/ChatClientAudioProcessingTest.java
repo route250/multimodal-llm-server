@@ -75,33 +75,36 @@ class ChatClientAudioProcessingTest {
     @Test
     void frontendEnablesBrowserEchoCancellationAndLocalTenVadPause() throws Exception {
         String html = Files.readString(Path.of("src/main/resources/html/index.html"));
+        String audioJs = Files.readString(Path.of("src/main/resources/html/js/chat-audio.js"));
+        String eventsJs = Files.readString(Path.of("src/main/resources/html/js/chat-events.js"));
+        String frontend = html + "\n" + audioJs + "\n" + eventsJs;
 
-        assertTrue(html.contains("echoCancellation: true"));
-        assertTrue(html.contains("noiseSuppression: true"));
-        assertTrue(html.contains("localPauseVadThreshold = 50"));
-        assertTrue(html.contains("localPauseConsecutiveVadFrames = 3"));
-        assertTrue(html.contains("localResumeVadThreshold = 35"));
-        assertTrue(html.contains("localResumeSilenceVadFrames = 8"));
-        assertTrue(html.contains("let localVadPlaybackPaused = false"));
-        assertTrue(html.contains("let serverSttPlaybackPaused = false"));
-        assertTrue(html.contains("return localVadPlaybackPaused || serverSttPlaybackPaused"));
-        assertTrue(html.contains("audio-control-ignored-without-assistant-turn"));
-        assertTrue(html.contains("X-Client-Mic-Start-Sample"));
-        assertTrue(html.contains("/chat/playback"));
-        assertTrue(html.contains("import createVADModule from \"/tenvad/ten_vad.js\""));
-        assertTrue(html.contains("audio/pcm-vad; rate=16000; channels=1; format=s16le; vad-frame-samples=256"));
-        assertTrue(html.contains("tenVadHopSamples = 256"));
-        assertTrue(html.contains("const playbackFlag = (currentPlayback || pausedPlayback) ? 0x80 : 0"));
-        assertTrue(html.contains("vadBytes[frameIndex] = (value & 0x7f) | playbackFlag"));
-        assertTrue(html.contains("const speechValue = vadValue & 0x7f"));
-        assertTrue(html.contains("analyzeLocalTenVad(vadBytes)"));
-        assertTrue(html.contains(".message.user.partial"));
-        assertTrue(html.contains("source.addEventListener(\"transcript-partial\""));
-        assertTrue(html.contains("const partialTranscriptBubbles = new Map()"));
-        assertTrue(html.contains("finalizePartialTranscript(JSON.parse(event.data).message)"));
-        assertTrue(html.contains("function appendPartialTranscript(speechSequenceId, message)"));
-        assertTrue(html.contains("latest.bubble.className = \"message user\""));
-        assertFalse(html.contains("let playbackPaused"));
+        assertTrue(frontend.contains("echoCancellation: true"));
+        assertTrue(frontend.contains("noiseSuppression: true"));
+        assertTrue(frontend.contains("localPauseVadThreshold = 50"));
+        assertTrue(frontend.contains("localPauseConsecutiveVadFrames = 3"));
+        assertTrue(frontend.contains("localResumeVadThreshold = 35"));
+        assertTrue(frontend.contains("localResumeSilenceVadFrames = 8"));
+        assertTrue(frontend.contains("localVadPlaybackPaused = false"));
+        assertTrue(frontend.contains("serverSttPlaybackPaused = false"));
+        assertTrue(frontend.contains("return this.localVadPlaybackPaused || this.serverSttPlaybackPaused"));
+        assertTrue(frontend.contains("audio-control-ignored-without-assistant-turn"));
+        assertTrue(frontend.contains("X-Client-Mic-Start-Sample"));
+        assertTrue(frontend.contains("/chat/playback"));
+        assertTrue(frontend.contains("import createVADModule from \"/tenvad/ten_vad.js\""));
+        assertTrue(frontend.contains("audio/pcm-vad; rate=16000; channels=1; format=s16le; vad-frame-samples=256"));
+        assertTrue(frontend.contains("tenVadHopSamples = 256"));
+        assertTrue(frontend.contains("const playbackFlag = (this.currentPlayback || this.pausedPlayback) ? 0x80 : 0"));
+        assertTrue(frontend.contains("vadBytes[frameIndex] = (value & 0x7f) | playbackFlag"));
+        assertTrue(frontend.contains("const speechValue = vadValue & 0x7f"));
+        assertTrue(frontend.contains("this.analyzeLocalTenVad(vadBytes)"));
+        assertTrue(frontend.contains(".message.user.partial"));
+        assertTrue(frontend.contains("source.addEventListener(\"transcript-partial\""));
+        assertTrue(frontend.contains("const partialTranscriptBubbles = new Map()"));
+        assertTrue(frontend.contains("onUserMessage: finalizePartialTranscript"));
+        assertTrue(frontend.contains("function appendPartialTranscript(speechSequenceId, message)"));
+        assertTrue(frontend.contains("latest.bubble.className = \"message user\""));
+        assertFalse(frontend.contains("let playbackPaused"));
     }
 
     @Test

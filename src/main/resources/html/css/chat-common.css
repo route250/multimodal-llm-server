@@ -1,0 +1,152 @@
+.sr-only {
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    height: 1px;
+    overflow: hidden;
+    position: absolute;
+    white-space: nowrap;
+    width: 1px;
+}
+
+.speech-state {
+    align-items: center;
+    background: #f8fafc;
+    border: 1px solid #dbe3ed;
+    border-radius: 999px;
+    box-sizing: border-box;
+    color: #475569;
+    display: inline-flex;
+    font-size: 13px;
+    font-weight: 700;
+    gap: 8px;
+    height: 36px;
+    justify-content: center;
+    letter-spacing: 0;
+    padding: 0 8px;
+    width: 72px;
+}
+
+.speech-state .state-dot {
+    background: #94a3b8;
+    border-radius: 999px;
+    height: 9px;
+    position: relative;
+    width: 9px;
+}
+
+.speech-state.active {
+    background: #ecfdf5;
+    border-color: #86efac;
+    color: #14532d;
+}
+
+.speech-state.active .state-dot {
+    animation: state-pulse 1.1s ease-out infinite;
+    background: #16a34a;
+}
+
+.speech-state[data-state="TRAILING_SILENCE"] {
+    background: #fffbeb;
+    border-color: #fde68a;
+    color: #713f12;
+}
+
+.speech-state[data-state="TRAILING_SILENCE"] .state-dot {
+    background: #d97706;
+}
+
+.speech-state[data-state="TURN_DETECTING"] {
+    background: #eff6ff;
+    border-color: #93c5fd;
+    color: #1e3a8a;
+}
+
+.speech-state[data-state="TURN_DETECTING"] .state-dot {
+    animation: state-spin 0.9s linear infinite;
+    background: conic-gradient(from 0deg, #2563eb 0deg, #2563eb 110deg, transparent 110deg);
+    height: 14px;
+    width: 14px;
+}
+
+.speech-state[data-state="TRANSCRIBING"] {
+    background: #f5f3ff;
+    border-color: #c4b5fd;
+    color: #4c1d95;
+}
+
+.speech-state[data-state="TRANSCRIBING"] .state-dot {
+    animation: state-pulse 0.72s ease-in-out infinite;
+    background: #7c3aed;
+}
+
+.speech-state[data-state="LLM"] {
+    background: #eef2ff;
+    border-color: #a5b4fc;
+    color: #3730a3;
+}
+
+.speech-state[data-state="LLM"] .state-dot {
+    animation: state-pulse 0.8s ease-in-out infinite;
+    background: #4f46e5;
+}
+
+.speech-state[data-state="TTS"] {
+    background: #fff7ed;
+    border-color: #fdba74;
+    color: #9a3412;
+}
+
+.speech-state[data-state="TTS"] .state-dot {
+    animation: state-pulse 0.8s ease-in-out infinite;
+    background: #ea580c;
+}
+
+.icon-button {
+    align-items: center;
+    background: #ffffff;
+    border-radius: 999px;
+    display: inline-flex;
+    height: 36px;
+    justify-content: center;
+    padding: 0;
+    width: 36px;
+}
+
+.icon-button svg {
+    height: 19px;
+    pointer-events: none;
+    width: 19px;
+}
+
+.icon-button.primary {
+    background: #111827;
+    border-color: #111827;
+    color: #ffffff;
+}
+
+.icon-button.recording {
+    background: #fee2e2;
+    border-color: #fca5a5;
+    color: #b91c1c;
+}
+
+@keyframes state-pulse {
+    0% {
+        box-shadow: 0 0 0 0 currentColor;
+        opacity: 1;
+    }
+    70% {
+        box-shadow: 0 0 0 8px transparent;
+        opacity: 0.72;
+    }
+    100% {
+        box-shadow: 0 0 0 0 transparent;
+        opacity: 1;
+    }
+}
+
+@keyframes state-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}

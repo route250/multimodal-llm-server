@@ -104,6 +104,16 @@ public record ServerEvent(String type, String message, Instant timestamp) {
         return new ServerEvent("speech-state", json.strip(), Instant.now());
     }
 
+    public static ServerEvent facePresence(FaceEventResult result) {
+        String json = Json.object(Json.fields(
+                "state", result.presenceState(),
+                "personId", result.personId(),
+                "personName", result.personName(),
+                "distance", result.distance(),
+                "known", result.known()));
+        return new ServerEvent("face-presence", json.strip(), Instant.now());
+    }
+
     public static ServerEvent system(String message) {
         return new ServerEvent("system", message, Instant.now());
     }

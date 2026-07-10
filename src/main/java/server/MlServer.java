@@ -28,6 +28,7 @@ public class MlServer implements AutoCloseable {
 
     private final HttpServer httpServer;
     private final ExecutorService executor;
+    private final FaceEventStore faceEventStore = new FaceEventStore();
     private final Map<String, ChatGroup> chatGroups = new ConcurrentHashMap<>();
     private final AtomicInteger counter = new AtomicInteger();
 
@@ -38,6 +39,7 @@ public class MlServer implements AutoCloseable {
         httpServer.createContext("/chat/playback", this::handleChatPlayback);
         httpServer.createContext("/chat/client-log", this::handleChatClientLog);
         httpServer.createContext("/chat/connect", this::handleChatConnect);
+        httpServer.createContext("/face/event", this::handleFaceEvent);
         httpServer.createContext("/", this::handleStaticFile);
         executor = Executors.newVirtualThreadPerTaskExecutor();
         httpServer.setExecutor(executor);
@@ -268,6 +270,36 @@ public class MlServer implements AutoCloseable {
         } finally {
             chatGroup.leave(client);
         }
+    }
+
+    private void handleFaceEvent(HttpExchange exchange) throws IOException {
+        if (!"POST".equals(exchange.getRequestMethod())) {
+            exchange.getResponseHeaders().set("Allow", "POST");
+            exchange.sendResponseHeaders(405, -1);
+            return;
+        }
+
+        String sessionId = sessionId(exchange);
+        ChatGroup chatGroup = chatGroup(exchange);
+        if (chatGroup == null) {
+            sendText(exchange, 404, "application/json; charset=utf-8", "{\"error\":\"chat group not found\"}\n");
+            return;
+        }
+
+        String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+        FaceEventResult result;
+        try {
+            result = faceEventStore.handle(chatGroup.id(), sessionId, body);
+        } catch (IllegalArgumentException e) {
+            sendText(exchange, 400, "application/json; charset=utf-8", errorJson(e.getMessage()));
+            return;
+        }
+
+        ChatClient client = chatGroup.client(sessionId);
+        if (client != null) {
+            client.handleFacePresence(result);
+        }
+        sendText(exchange, 202, "application/json; charset=utf-8", result.toJson());
     }
 
     private void createDefaultChatGroups() {

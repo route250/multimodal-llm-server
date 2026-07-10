@@ -14,5 +14,5 @@ $SCR_DIR/whisper-install.sh
 
 export PATH="$WHISPER_BIN:$PATH"
 
-whisper-server --port 8767 -m $WHISPER_MODELS/ggml-small.bin
+whisper-server --port 8768 -m $WHISPER_MODELS/ggml-small.bin
 

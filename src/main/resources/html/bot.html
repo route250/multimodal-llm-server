@@ -1,0 +1,724 @@
+<!doctype html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>顔認識会話bot</title>
+    <link rel="stylesheet" href="/css/chat-common.css">
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            background: #000000;
+            color: #6fa878;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            margin: 0;
+            transition: background-color 400ms linear;
+        }
+
+        body.person-present {
+            background: #e6e6e6;
+        }
+
+        main {
+            display: grid;
+            grid-template-rows: auto minmax(0, 1fr) auto;
+            height: 100vh;
+            overflow: hidden;
+            padding: 18px;
+        }
+
+        .topbar {
+            align-items: center;
+            display: flex;
+            gap: 10px;
+            justify-content: space-between;
+            z-index: 2;
+        }
+
+        .status-group {
+            align-items: center;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        select,
+        button {
+            font: inherit;
+        }
+
+        select,
+        .bot-button {
+            background: #07110b;
+            border: 1px solid #25472d;
+            border-radius: 8px;
+            color: #91c99a;
+            height: 36px;
+            padding: 0 12px;
+        }
+
+        .bot-button {
+            cursor: pointer;
+            font-weight: 700;
+        }
+
+        .bot-button:disabled {
+            cursor: not-allowed;
+            opacity: 0.5;
+        }
+
+        .presence {
+            border: 1px solid #25472d;
+            border-radius: 999px;
+            color: #91c99a;
+            font-size: 13px;
+            font-weight: 700;
+            padding: 8px 10px;
+        }
+
+        .stage {
+            align-items: center;
+            display: grid;
+            justify-items: center;
+            min-height: 0;
+            position: relative;
+        }
+
+        .face {
+            height: min(56vw, 440px);
+            width: min(78vw, 680px);
+        }
+
+        .face-eye-open-parts,
+        .face-eye-60-parts,
+        .face-eye-30-parts,
+        .face-eye-closed-parts,
+        .mouth,
+        .mouth-smile,
+        .mouth-closed {
+            opacity: 0;
+            transition: opacity 120ms ease;
+        }
+
+        .face.awake .face-awake-parts {
+            opacity: 1;
+        }
+
+        .face.awake .mouth {
+            opacity: 1;
+        }
+
+        .face.sleep .face-closed-parts,
+        .face.sleep .mouth-closed {
+            opacity: 1;
+        }
+
+        .face.smile .mouth {
+            opacity: 0;
+        }
+
+        .face.smile .mouth-smile {
+            opacity: 1;
+        }
+
+        .face.blink .face-eye-open-parts {
+            animation: blink-eye-open 320ms linear forwards;
+        }
+
+        .face.blink .face-eye-60-parts {
+            animation: blink-eye-60 320ms linear forwards;
+        }
+
+        .face.blink .face-eye-30-parts {
+            animation: blink-eye-30 320ms linear forwards;
+        }
+
+        .face.blink .face-eye-closed-parts {
+            animation: blink-eye-closed 320ms linear forwards;
+        }
+
+        @keyframes blink-eye-open {
+            0%, 74.99% {
+                opacity: 0;
+            }
+            75%, 100% {
+                opacity: 1;
+            }
+        }
+
+        @keyframes blink-eye-60 {
+            0%, 49.99%, 75%, 100% {
+                opacity: 0;
+            }
+            50%, 74.99% {
+                opacity: 1;
+            }
+        }
+
+        @keyframes blink-eye-30 {
+            0%, 24.99%, 50%, 100% {
+                opacity: 0;
+            }
+            25%, 49.99% {
+                opacity: 1;
+            }
+        }
+
+        @keyframes blink-eye-closed {
+            0%, 24.99% {
+                opacity: 1;
+            }
+            25%, 100% {
+                opacity: 0;
+            }
+        }
+
+        .mouth.speaking {
+            animation: mouth-talk 300ms steps(2, end) infinite;
+        }
+
+        @keyframes mouth-talk {
+            0% {
+                transform: translateY(0);
+            }
+            50% {
+                transform: translateY(16px);
+            }
+            100% {
+                transform: translateY(0);
+            }
+        }
+
+        .camera-debug {
+            background: #030806;
+            border: 1px solid #25472d;
+            border-radius: 8px;
+            bottom: 18px;
+            display: grid;
+            gap: 6px;
+            padding: 8px;
+            position: absolute;
+            right: 0;
+            width: 220px;
+        }
+
+        .camera-wrap {
+            aspect-ratio: 16 / 9;
+            background: #000000;
+            overflow: hidden;
+            position: relative;
+        }
+
+        video,
+        canvas {
+            display: block;
+            height: 100%;
+            inset: 0;
+            object-fit: cover;
+            position: absolute;
+            width: 100%;
+        }
+
+        canvas {
+            pointer-events: none;
+        }
+
+        .debug-text {
+            color: #91c99a;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: 11px;
+            overflow-wrap: anywhere;
+        }
+
+        .subtitle {
+            align-items: end;
+            display: grid;
+            justify-items: center;
+            min-height: 82px;
+            padding-bottom: 18px;
+        }
+
+        .subtitle-text {
+            background: rgba(0, 0, 0, 0.58);
+            border: 1px solid #25472d;
+            border-radius: 8px;
+            color: #91c99a;
+            display: -webkit-box;
+            font-size: clamp(18px, 2.6vw, 28px);
+            line-height: 1.45;
+            max-width: min(920px, 94vw);
+            min-height: 0;
+            overflow: hidden;
+            padding: 10px 14px;
+            text-align: center;
+            -webkit-box-orient: vertical;
+            -webkit-line-clamp: 2;
+        }
+
+        .subtitle-text:empty {
+            border-color: transparent;
+            padding: 0;
+        }
+
+        .speech-state {
+            background: #07110b;
+            border-color: #25472d;
+            color: #91c99a;
+        }
+
+        @media (max-width: 720px) {
+            main {
+                padding: 12px;
+            }
+
+            .topbar {
+                align-items: stretch;
+                flex-direction: column;
+            }
+
+            .camera-debug {
+                bottom: 0;
+                width: 168px;
+            }
+
+            .face {
+                height: 54vw;
+                width: 88vw;
+            }
+        }
+    </style>
+</head>
+<body>
+<main>
+    <header class="topbar">
+        <div class="status-group">
+            <button id="start-bot" class="bot-button" type="button">開始</button>
+            <select id="group" name="group">
+                <option value="group-1">group-1</option>
+                <option value="group-2">group-2</option>
+                <option value="group-3">group-3</option>
+            </select>
+            <span id="speech-state" class="speech-state" data-state="UNDETECTED" title="IDLE">
+                <span class="state-dot"></span>
+                <span id="speech-state-text">IDLE</span>
+            </span>
+        </div>
+        <span id="presence" class="presence">no person</span>
+    </header>
+
+    <section class="stage" aria-label="AI表情">
+        <svg id="face" class="face sleep" role="img" aria-labelledby="face-title"></svg>
+        <section class="camera-debug" aria-label="カメラプレビュー">
+            <div class="camera-wrap">
+                <video id="camera" autoplay muted playsinline></video>
+                <canvas id="overlay"></canvas>
+            </div>
+            <div id="debug-text" class="debug-text">model: loading / camera: stopped</div>
+        </section>
+    </section>
+
+    <section class="subtitle" aria-live="polite">
+        <div id="subtitle" class="subtitle-text"></div>
+    </section>
+</main>
+
+<script type="module">
+    import * as faceapi from "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/dist/face-api.esm.js";
+    import { ChatAudio } from "/js/chat-audio.js";
+    import { ChatEvents } from "/js/chat-events.js";
+    import { drawFace } from "/js/face.js";
+
+    const modelUrl = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model/";
+    const sessionId = crypto.randomUUID();
+    const groupInput = document.getElementById("group");
+    const startBot = document.getElementById("start-bot");
+    const speechState = document.getElementById("speech-state");
+    const speechStateText = document.getElementById("speech-state-text");
+    const presence = document.getElementById("presence");
+    const face = document.getElementById("face");
+    const { mouth } = drawFace(face);
+    const subtitle = document.getElementById("subtitle");
+    const video = document.getElementById("camera");
+    const overlay = document.getElementById("overlay");
+    const overlayContext = overlay.getContext("2d");
+    const debugText = document.getElementById("debug-text");
+    const sampleCanvas = document.createElement("canvas");
+    const sampleContext = sampleCanvas.getContext("2d", { willReadFrequently: true });
+    const cropCanvas = document.createElement("canvas");
+    const cropContext = cropCanvas.getContext("2d");
+    sampleCanvas.width = 96;
+    sampleCanvas.height = 54;
+
+    let events = null;
+    let stream = null;
+    let faceTimer = 0;
+    let previousFrame = null;
+    let modelsReady = false;
+    let detecting = false;
+    let lastDetectionAt = 0;
+    let lastFaceSeenAt = 0;
+    let lastFaceSentAt = 0;
+    let nearFaceFrameCount = 0;
+    let farFaceFrameCount = 0;
+    let missedFaceFrameCount = 0;
+    let eventSequence = 0;
+    let personPresent = false;
+    let blinkTimer = 0;
+    let subtitleClearTimer = 0;
+
+    const audio = new ChatAudio({
+        group: () => groupInput.value,
+        sessionId,
+        clientLog: (event, fields) => events?.clientLog(event, fields),
+        onSystem: (message) => setSubtitle(message, 2500),
+        onSpeechStateDisplay: updateStatusDisplay,
+        onAssistantText: (text) => {
+            appendSubtitle(text);
+            return { textContent: subtitle.textContent, parentElement: subtitle.parentElement };
+        },
+        onAssistantTextRemove: () => {},
+        onAssistantSubtitle: () => {},
+        onAssistantSubtitleDone: () => clearSubtitleSoon(),
+        onMicStatus: updateDebugText,
+        onMicRecording: () => {}
+    });
+
+    connectEvents();
+    scheduleBlink();
+    loadModels();
+
+    startBot.addEventListener("click", async () => {
+        startBot.disabled = true;
+        await audio.preparePlayback();
+        await startCamera();
+    });
+    groupInput.addEventListener("change", connectEvents);
+    document.addEventListener("pointerdown", () => audio.preparePlayback(), { once: true });
+    document.addEventListener("keydown", () => audio.preparePlayback(), { once: true });
+
+    function connectEvents() {
+        if (events) {
+            events.close();
+        }
+        events = new ChatEvents({
+            group: () => groupInput.value,
+            sessionId,
+            statusFields: () => audio.statusFields(),
+            onSystem: (message) => setSubtitle(message, 2500),
+            onUserMessage: (message) => setSubtitle(message, 0),
+            onMessage: (message) => setSubtitle(message, 0),
+            onMessageDone: clearSubtitleSoon,
+            onTranscriptPartial: (payload) => setSubtitle(payload.text || "", 0),
+            onAssistantAudioChunk: (payload) => audio.queueAudioDelta(payload),
+            onAudioControl: (payload) => audio.handleAudioControl(payload),
+            onSpeechState: (payload) => audio.updateSpeechState(payload.currentState || "UNDETECTED"),
+            onAssistantState: (payload) => {
+                audio.updateAssistantState(payload.state || "IDLE");
+                mouth.classList.toggle("speaking", payload.state === "TTS");
+            },
+            onFacePresence: handleFacePresence
+        });
+        events.connect();
+    }
+
+    async function loadModels() {
+        try {
+            updateDebugText("model: loading / camera: stopped");
+            await faceapi.tf.setBackend("webgl");
+            await faceapi.tf.ready();
+            await Promise.all([
+                faceapi.nets.tinyFaceDetector.loadFromUri(modelUrl),
+                faceapi.nets.faceLandmark68Net.loadFromUri(modelUrl),
+                faceapi.nets.faceRecognitionNet.loadFromUri(modelUrl),
+            ]);
+            modelsReady = true;
+            updateDebugText("model: ready / camera: stopped");
+        } catch (error) {
+            updateDebugText(`model error: ${error.message}`);
+        }
+    }
+
+    async function startCamera() {
+        if (stream) {
+            return;
+        }
+        stream = await navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: {
+                facingMode: "user",
+                width: { ideal: 1280 },
+                height: { ideal: 720 },
+            },
+        });
+        video.srcObject = stream;
+        await video.play();
+        resizeOverlay();
+        window.addEventListener("resize", resizeOverlay);
+        previousFrame = null;
+        faceTimer = window.setInterval(processCameraFrame, 400);
+        updateDebugText("model: ready / camera: running");
+    }
+
+    async function processCameraFrame() {
+        if (!modelsReady || detecting || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+            return;
+        }
+        sampleContext.drawImage(video, 0, 0, sampleCanvas.width, sampleCanvas.height);
+        const currentFrame = sampleContext.getImageData(0, 0, sampleCanvas.width, sampleCanvas.height);
+        const motion = measureMotion(previousFrame, currentFrame);
+        previousFrame = currentFrame;
+        const now = performance.now();
+        if (!motion.changed && now - lastDetectionAt < 3000) {
+            if (personPresent && now - lastFaceSeenAt > 9000) {
+                markPersonLeft();
+            }
+            return;
+        }
+        detecting = true;
+        lastDetectionAt = now;
+        try {
+            await detectFace(motion, now);
+        } finally {
+            detecting = false;
+        }
+    }
+
+    function measureMotion(previous, current) {
+        if (!previous) {
+            return { changed: true, mean: 255, ratio: 1 };
+        }
+        const previousData = previous.data;
+        const currentData = current.data;
+        let total = 0;
+        let changedPixels = 0;
+        const pixelCount = sampleCanvas.width * sampleCanvas.height;
+        for (let index = 0; index < currentData.length; index += 4) {
+            const previousGray = previousData[index] * 0.299 + previousData[index + 1] * 0.587 + previousData[index + 2] * 0.114;
+            const currentGray = currentData[index] * 0.299 + currentData[index + 1] * 0.587 + currentData[index + 2] * 0.114;
+            const diff = Math.abs(currentGray - previousGray);
+            total += diff;
+            if (diff >= 18) {
+                changedPixels += 1;
+            }
+        }
+        const mean = total / pixelCount;
+        const ratio = changedPixels / pixelCount;
+        return {
+            changed: mean >= 6.0 && ratio >= 0.04,
+            mean,
+            ratio,
+        };
+    }
+
+    async function detectFace(motion, now) {
+        const overlaySize = resizeOverlay();
+        const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.5 });
+        const detections = await faceapi.detectAllFaces(video, options).withFaceLandmarks().withFaceDescriptors();
+        overlayContext.clearRect(0, 0, overlaySize.width, overlaySize.height);
+        if (detections.length === 0) {
+            updateDebugText(`faces=0 motion=${motion.mean.toFixed(1)}/${(motion.ratio * 100).toFixed(1)}%`);
+            missedFaceFrameCount += 1;
+            if (!personPresent || missedFaceFrameCount > 3) {
+                nearFaceFrameCount = 0;
+            }
+            if (personPresent && now - lastFaceSeenAt > 9000) {
+                markPersonLeft();
+            }
+            return;
+        }
+        missedFaceFrameCount = 0;
+        const target = detections
+            .map((item) => ({ item, area: item.detection.box.width * item.detection.box.height }))
+            .sort((left, right) => right.area - left.area)[0].item;
+        const resized = faceapi.resizeResults([target], overlaySize)[0];
+        drawTargetFace(resized);
+        const faceWidthRatio = target.detection.box.width / video.videoWidth;
+        const faceAreaRatio = (target.detection.box.width * target.detection.box.height) / (video.videoWidth * video.videoHeight);
+        lastFaceSeenAt = now;
+        updateDebugText(`faces=${detections.length} width=${(faceWidthRatio * 100).toFixed(1)}% score=${target.detection.score.toFixed(2)}`);
+        if (faceWidthRatio >= 0.20) {
+            nearFaceFrameCount += 1;
+            farFaceFrameCount = 0;
+            if (nearFaceFrameCount < 2) {
+                return;
+            }
+            if (!personPresent) {
+                await handlePersonEntered(target, faceWidthRatio, faceAreaRatio);
+            } else if (now - lastFaceSentAt >= 8000) {
+                lastFaceSentAt = now;
+                await sendFaceEvent("person-updated", target, faceWidthRatio, faceAreaRatio);
+            }
+        } else if (faceWidthRatio < 0.15) {
+            nearFaceFrameCount = 0;
+            farFaceFrameCount += 1;
+            if (farFaceFrameCount >= 12) {
+                markPersonLeft();
+            }
+        }
+    }
+
+    async function handlePersonEntered(target, faceWidthRatio, faceAreaRatio) {
+        personPresent = true;
+        document.body.classList.add("person-present");
+        await wait(400);
+        face.classList.remove("sleep");
+        face.classList.add("awake");
+        if (!audio.isMicrophoneActive()) {
+            await audio.startMicrophone();
+        }
+        blinkOnce();
+        lastFaceSentAt = performance.now();
+        await sendFaceEvent("person-entered", target, faceWidthRatio, faceAreaRatio);
+    }
+
+    function drawTargetFace(detection) {
+        const box = detection.detection.box;
+        overlayContext.strokeStyle = "#315f39";
+        overlayContext.lineWidth = 3;
+        overlayContext.strokeRect(box.x, box.y, box.width, box.height);
+    }
+
+    async function sendFaceEvent(eventType, detection, faceWidthRatio, faceAreaRatio) {
+        const imageDataUrl = cropFaceImage(detection.detection.box);
+        const payload = {
+            eventType,
+            eventId: `${Date.now()}-${++eventSequence}`,
+            clientTimestamp: new Date().toISOString(),
+            faceWidthRatio,
+            faceAreaRatio,
+            detectionScore: detection.detection.score,
+            descriptor: Array.from(detection.descriptor),
+            imageDataUrl,
+        };
+        const response = await fetch(`/face/event?group=${encodeURIComponent(groupInput.value)}&sessionId=${encodeURIComponent(sessionId)}`, {
+            method: "POST",
+            headers: {"Content-Type": "application/json; charset=utf-8"},
+            body: JSON.stringify(payload),
+        });
+        if (response.ok) {
+            const result = await response.json();
+            presence.textContent = result.known ? `${result.personName} / ${(result.distance || 0).toFixed(3)}` : "unknown person";
+        }
+    }
+
+    function cropFaceImage(box) {
+        const margin = box.width * 0.3;
+        const sx = Math.max(0, box.x - margin);
+        const sy = Math.max(0, box.y - margin);
+        const sw = Math.min(video.videoWidth - sx, box.width + margin * 2);
+        const sh = Math.min(video.videoHeight - sy, box.height + margin * 2);
+        const scale = Math.min(320 / sw, 320 / sh, 1);
+        cropCanvas.width = Math.max(1, Math.round(sw * scale));
+        cropCanvas.height = Math.max(1, Math.round(sh * scale));
+        cropContext.drawImage(video, sx, sy, sw, sh, 0, 0, cropCanvas.width, cropCanvas.height);
+        return cropCanvas.toDataURL("image/jpeg", 0.75);
+    }
+
+    function markPersonLeft() {
+        if (!personPresent) {
+            return;
+        }
+        personPresent = false;
+        nearFaceFrameCount = 0;
+        farFaceFrameCount = 0;
+        missedFaceFrameCount = 0;
+        presence.textContent = "no person";
+        document.body.classList.remove("person-present");
+        face.classList.remove("awake");
+        face.classList.add("sleep");
+        if (audio.isMicrophoneActive()) {
+            audio.stopMicrophone();
+        }
+        fetch(`/face/event?group=${encodeURIComponent(groupInput.value)}&sessionId=${encodeURIComponent(sessionId)}`, {
+            method: "POST",
+            headers: {"Content-Type": "application/json; charset=utf-8"},
+            body: JSON.stringify({
+                eventType: "person-left",
+                eventId: `${Date.now()}-${++eventSequence}`,
+                clientTimestamp: new Date().toISOString()
+            }),
+        }).catch(() => {});
+    }
+
+    function handleFacePresence(payload) {
+        if (payload.state === "person-left") {
+            presence.textContent = "no person";
+            setSubtitle("だれもいなくなりました", 1800);
+            return;
+        }
+        presence.textContent = payload.known ? `${payload.personName} / ${Number(payload.distance || 0).toFixed(3)}` : "unknown person";
+        if (payload.state === "person-entered") {
+            setSubtitle(`${payload.personName || "unknown"}さんがきました`, 1800);
+        }
+    }
+
+    function resizeOverlay() {
+        const rect = video.getBoundingClientRect();
+        const ratio = window.devicePixelRatio || 1;
+        overlay.width = Math.max(1, Math.round(rect.width * ratio));
+        overlay.height = Math.max(1, Math.round(rect.height * ratio));
+        overlay.style.width = `${rect.width}px`;
+        overlay.style.height = `${rect.height}px`;
+        overlayContext.setTransform(ratio, 0, 0, ratio, 0, 0);
+        return { width: rect.width, height: rect.height };
+    }
+
+    function updateStatusDisplay(status) {
+        speechState.dataset.state = status.displayState;
+        speechState.classList.toggle("active", status.active);
+        speechStateText.textContent = status.displayText;
+        speechState.title = status.displayState;
+        mouth.classList.toggle("speaking", status.displayState === "TTS");
+    }
+
+    function appendSubtitle(text) {
+        clearTimeout(subtitleClearTimer);
+        subtitle.textContent += text;
+    }
+
+    function setSubtitle(text, clearMs) {
+        clearTimeout(subtitleClearTimer);
+        subtitle.textContent = text;
+        if (clearMs > 0) {
+            subtitleClearTimer = setTimeout(() => {
+                subtitle.textContent = "";
+            }, clearMs);
+        }
+    }
+
+    function clearSubtitleSoon() {
+        clearTimeout(subtitleClearTimer);
+        subtitleClearTimer = setTimeout(() => {
+            subtitle.textContent = "";
+        }, 900);
+    }
+
+    function scheduleBlink() {
+        clearTimeout(blinkTimer);
+        const delay = 3000 + Math.random() * 4000;
+        blinkTimer = setTimeout(() => {
+            if (personPresent) {
+                blinkOnce();
+            }
+            scheduleBlink();
+        }, delay);
+    }
+
+    function blinkOnce() {
+        face.classList.add("blink");
+        setTimeout(() => face.classList.remove("blink"), 320);
+    }
+
+    function wait(ms) {
+        return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    function updateDebugText(message) {
+        debugText.textContent = message;
+    }
+</script>
+</body>
+</html>

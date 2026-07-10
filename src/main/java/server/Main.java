@@ -3,7 +3,7 @@ package server;
 import audio.AudioDiagnostics;
 import java.io.IOException;
 
-public class MainTest {
+public class Main {
     private static final int DEFAULT_PORT = 8080;
 
     public static void main(String[] args) throws IOException {

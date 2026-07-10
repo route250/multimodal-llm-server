@@ -213,6 +213,33 @@ public class ChatClient {
         }
     }
 
+    public void handleFacePresence(FaceEventResult result) {
+        if (!"person-updated".equals(result.presenceState())) {
+            String eventText = facePresenceHistoryText(result);
+            synchronized (conversationLock) {
+                conversationHistory.add(new ChatMessage("user", eventText));
+                trimConversationHistory();
+            }
+        }
+        sendToGroupIfOpen(ServerEvent.facePresence(result));
+    }
+
+    List<ChatMessage> conversationHistoryForTest() {
+        synchronized (conversationLock) {
+            return List.copyOf(conversationHistory);
+        }
+    }
+
+    private static String facePresenceHistoryText(FaceEventResult result) {
+        if ("person-left".equals(result.presenceState())) {
+            return "[環境イベント] だれもいなくなりました";
+        }
+        String personName = result.personName() == null || result.personName().isBlank()
+                ? "unknown"
+                : result.personName();
+        return "[環境イベント] " + personName + "さんがきました";
+    }
+
     private void finishPlaybackTracking(long assistantTurnId, long clientMicSampleIndex) {
         if (activePlaybackStartSampleIndex == Long.MIN_VALUE
                 || activePlaybackAssistantTurnId != assistantTurnId
