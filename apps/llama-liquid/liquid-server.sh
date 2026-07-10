@@ -21,6 +21,7 @@ export CKPT="$LIQUID_HOME/models"
 
 # モデルファイル
 QT="Q4_0"
+M0="LFM2.5-1.2B-JP-202606-${QT}.gguf"
 M1="LFM2.5-Audio-1.5B-JP-${QT}.gguf"
 M2="mmproj-LFM2.5-Audio-1.5B-JP-${QT}.gguf"
 M3="vocoder-LFM2.5-Audio-1.5B-JP-${QT}.gguf"
@@ -52,7 +53,7 @@ trap fn_cleanup EXIT
 $LIQUID_BIN/llama-liquid-audio-server -lv 1 --port 8766 -m $CKPT/$M1 -mm $CKPT/$M2 -mv $CKPT/$M3 --tts-speaker-file $CKPT/$M4 >>"$LIQUID_LOGFILE" 2>&1 &
 LIQUID_PID=$!
 
-$LLAMACPP_BIN/llama-server -lv 1 --port 8767 -m $CKPT/$M1 >>"$LLAMACPP_LOGFILE" 2>&1 &
+$LLAMACPP_BIN/llama-server -lv 1 --port 8767 -m $CKPT/$M0 >>"$LLAMACPP_LOGFILE" 2>&1 &
 LLAMACPP_PID=$!
 
 wait "$LIQUID_PID" "$LLAMACPP_PID"
