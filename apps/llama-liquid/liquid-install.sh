@@ -20,7 +20,7 @@ if [ "$(uname -s)" == "Darwin" ]; then
   LIQUID_PKG="$PKG_DIR/llama-liquid-audio-macos-arm64.zip"
   LLAMACPP_PKG="$PKG_DIR/llama-b9946-bin-macos-arm64.tar.gz"
 else
-  LIQUID_PKG="$PKG_DIR/llama-liquid-audio-ubuntu-x64.zip"
+  LIQUID_PKG="$PKG_DIR/llama-liquid-audio-ubuntu-x64-cuda.zip"
   LLAMACPP_PKG="$PKG_DIR/llama-b9946-bin-ubuntu-x64-cuda.tar.gz"
 fi
 

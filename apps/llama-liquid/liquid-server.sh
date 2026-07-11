@@ -7,9 +7,11 @@ PRJ_DIR="$(cd $SCR_DIR/../..;pwd)"
 LIQUID_HOME="$PRJ_DIR/.local/opt/llama-liquid"
 LIQUID_BIN="$LIQUID_HOME/bin"
 LIQUID_LOG="$LIQUID_HOME/logs"
+LIQUID_PORT=8766
 
 LLAMACPP_HOME="$PRJ_DIR/.local/opt/llama-cpp"
 LLAMACPP_BIN="$LLAMACPP_HOME/bin"
+LLAMACPP_PORT=8767
 
 # インストール
 $SCR_DIR/liquid-install.sh
@@ -46,14 +48,17 @@ function fn_cleanup() {
   if [[ -n "$LLAMACPP_PID" ]] && kill -0 "$LLAMACPP_PID" 2>/dev/null; then
     kill "$LLAMACPP_PID"
   fi
+  echo "wait for process..."
   wait 2>/dev/null || true
 }
 trap fn_cleanup EXIT
 
-$LIQUID_BIN/llama-liquid-audio-server -lv 1 --port 8766 -m $CKPT/$M1 -mm $CKPT/$M2 -mv $CKPT/$M3 --tts-speaker-file $CKPT/$M4 >>"$LIQUID_LOGFILE" 2>&1 &
+echo "start liquid-audio http://localhost:$LIQUID_PORT"
+$LIQUID_BIN/llama-liquid-audio-server -lv 1 --port $LIQUID_PORT -m $CKPT/$M1 -mm $CKPT/$M2 -mv $CKPT/$M3 --tts-speaker-file $CKPT/$M4 >>"$LIQUID_LOGFILE" 2>&1 &
 LIQUID_PID=$!
 
-$LLAMACPP_BIN/llama-server -lv 1 --port 8767 -m $CKPT/$M0 >>"$LLAMACPP_LOGFILE" 2>&1 &
+echo "start llama-server http://localhost:$LLAMACPP_PORT"
+$LLAMACPP_BIN/llama-server -lv 1 --port $LLAMACPP_PORT -m $CKPT/$M0 >>"$LLAMACPP_LOGFILE" 2>&1 &
 LLAMACPP_PID=$!
 
 wait "$LIQUID_PID" "$LLAMACPP_PID"
