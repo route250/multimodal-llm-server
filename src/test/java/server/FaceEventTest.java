@@ -13,12 +13,14 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Base64;
+import facedb.FaceDB;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
-class FaceEventStoreTest {
+class FaceEventTest {
     @Test
-    void faceEventEndpointSavesJsonAndJpeg() throws Exception {
-        try (MlServer server = new MlServer(0)) {
+    void faceEventEndpointSavesJsonAndJpeg(@TempDir Path tempDir) throws Exception {
+        try (MlServer server = new MlServer(0, new FaceDB(tempDir))) {
             server.start();
             String body = faceEventBody(descriptor(0.1));
 
@@ -32,6 +34,7 @@ class FaceEventStoreTest {
 
             assertEquals(202, response.statusCode());
             assertTrue(response.body().contains("\"known\":false"));
+            assertEquals("face000000", jsonString(response.body(), "faceId"));
             String jsonPath = jsonString(response.body(), "jsonPath");
             String imagePath = jsonString(response.body(), "imagePath");
             assertNotNull(jsonPath);
@@ -43,33 +46,51 @@ class FaceEventStoreTest {
     }
 
     @Test
-    void knownFaceDistanceUnderThresholdIsMatched() throws Exception {
-        Path knownFaces = Path.of("tmp", "face-events", "known-faces.json");
-        Files.createDirectories(knownFaces.getParent());
-        Files.writeString(knownFaces, """
-                [{"personId":"person-1","personName":"山田","descriptor":[%s]}]
-                """.formatted(csv(descriptor(0.2))), StandardCharsets.UTF_8);
+    void faceEventEndpointMatchesNamedFaceFromFaceDB(@TempDir Path tempDir) throws Exception {
+        FaceDB db = new FaceDB(tempDir);
+        db.register(descriptor(0.2), jpegBase64(new byte[] {(byte) 0xff, (byte) 0xd8, 1, (byte) 0xff, (byte) 0xd9}));
+        db.assign("face000000", "山田");
 
-        FaceEventResult result = new FaceEventStore().match(descriptor(0.2));
+        try (MlServer server = new MlServer(0, db)) {
+            server.start();
+            HttpResponse<String> response = HttpClient.newHttpClient().send(
+                    HttpRequest.newBuilder(URI.create("http://localhost:" + server.port()
+                                    + "/face/event?group=group-1&sessionId=test-face"))
+                            .header("Content-Type", "application/json; charset=utf-8")
+                            .POST(HttpRequest.BodyPublishers.ofString(faceEventBody(descriptor(0.2)), StandardCharsets.UTF_8))
+                            .build(),
+                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
 
-        assertTrue(result.known());
-        assertEquals("person-1", result.personId());
-        assertEquals("山田", result.personName());
-        assertEquals(0.0, result.distance(), 0.000001);
+            assertEquals(202, response.statusCode());
+            assertTrue(response.body().contains("\"known\":true"));
+            assertEquals("face000001", jsonString(response.body(), "faceId"));
+            assertEquals("person0000", jsonString(response.body(), "personId"));
+            assertEquals("山田", jsonString(response.body(), "personName"));
+            assertTrue(Files.isRegularFile(tempDir.resolve("face000001.json")));
+            assertTrue(Files.isRegularFile(tempDir.resolve("face000001.jpg")));
+        }
     }
 
     @Test
-    void knownFaceDistanceOverThresholdIsUnknown() throws Exception {
-        Path knownFaces = Path.of("tmp", "face-events", "known-faces.json");
-        Files.createDirectories(knownFaces.getParent());
-        Files.writeString(knownFaces, """
-                [{"personId":"person-1","personName":"山田","descriptor":[%s]}]
-                """.formatted(csv(descriptor(1.0))), StandardCharsets.UTF_8);
+    void personLeftDoesNotRegisterFaceDBFile(@TempDir Path tempDir) throws Exception {
+        try (MlServer server = new MlServer(0, new FaceDB(tempDir))) {
+            server.start();
+            HttpResponse<String> response = HttpClient.newHttpClient().send(
+                    HttpRequest.newBuilder(URI.create("http://localhost:" + server.port()
+                                    + "/face/event?group=group-1&sessionId=test-face"))
+                            .header("Content-Type", "application/json; charset=utf-8")
+                            .POST(HttpRequest.BodyPublishers.ofString("""
+                                    {"eventType":"person-left","eventId":"left-1","clientTimestamp":"2026-07-09T00:00:00Z"}
+                                    """, StandardCharsets.UTF_8))
+                            .build(),
+                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
 
-        FaceEventResult result = new FaceEventStore().match(descriptor(0.0));
-
-        assertFalse(result.known());
-        assertEquals("unknown", result.personId());
+            assertEquals(202, response.statusCode());
+            assertEquals("person-left", jsonString(response.body(), "presenceState"));
+            assertEquals("none", jsonString(response.body(), "faceId"));
+            assertFalse(Files.exists(tempDir.resolve("face000000.json")));
+            assertFalse(Files.exists(tempDir.resolve("face000000.jpg")));
+        }
     }
 
     @Test
@@ -139,6 +160,10 @@ class FaceEventStoreTest {
             csv.append(values[i]);
         }
         return csv.toString();
+    }
+
+    private static String jpegBase64(byte[] jpeg) {
+        return Base64.getEncoder().encodeToString(jpeg);
     }
 
     private static String jsonString(String json, String name) {

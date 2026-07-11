@@ -3,6 +3,8 @@ package server;
 import audio.AudioDiagnostics;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import facedb.FaceDB;
+import facedb.FacePossibility;
 import json.Json;
 import json.JsonFields;
 import java.io.IOException;
@@ -28,11 +30,17 @@ public class MlServer implements AutoCloseable {
 
     private final HttpServer httpServer;
     private final ExecutorService executor;
-    private final FaceEventStore faceEventStore = new FaceEventStore();
+    private final FaceDB faceDB;
     private final Map<String, ChatGroup> chatGroups = new ConcurrentHashMap<>();
     private final AtomicInteger counter = new AtomicInteger();
 
     public MlServer(int port) throws IOException {
+        this(port, new FaceDB(Path.of(".local", "facedb")));
+    }
+
+    MlServer(int port, FaceDB faceDB) throws IOException {
+        this.faceDB = faceDB;
+        this.faceDB.load();
         createDefaultChatGroups();
         httpServer = HttpServer.create(new InetSocketAddress(port), 0);
         httpServer.createContext("/chat/request", this::handleChatRequest);
@@ -289,7 +297,8 @@ public class MlServer implements AutoCloseable {
         String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
         FaceEventResult result;
         try {
-            result = faceEventStore.handle(chatGroup.id(), sessionId, body);
+            FaceEventRequest request = FaceEventRequest.fromJson(body);
+            result = faceEventResult(request);
         } catch (IllegalArgumentException e) {
             sendText(exchange, 400, "application/json; charset=utf-8", errorJson(e.getMessage()));
             return;
@@ -300,6 +309,44 @@ public class MlServer implements AutoCloseable {
             client.handleFacePresence(result);
         }
         sendText(exchange, 202, "application/json; charset=utf-8", result.toJson());
+    }
+
+    private FaceEventResult faceEventResult(FaceEventRequest request) {
+        if ("person-left".equals(request.eventType())) {
+            return FaceEventResult.left();
+        }
+
+        FacePossibility registered = faceDB.register(request.descriptor(), request.imageDataUrl());
+        FacePossibility.PersonPossibility nearest = nearest(registered.personPossibilities);
+        if (nearest == null) {
+            return new FaceEventResult(
+                    "accepted",
+                    "unknown",
+                    "unknown",
+                    null,
+                    false,
+                    registered.faceId,
+                    registered.jsonPath,
+                    registered.imagePath,
+                    request.presenceState());
+        }
+        return new FaceEventResult(
+                "accepted",
+                nearest.personId,
+                nearest.name,
+                (double) nearest.distance,
+                true,
+                registered.faceId,
+                registered.jsonPath,
+                registered.imagePath,
+                request.presenceState());
+    }
+
+    private static FacePossibility.PersonPossibility nearest(FacePossibility.PersonPossibility[] possibilities) {
+        if (possibilities == null || possibilities.length == 0) {
+            return null;
+        }
+        return possibilities[0];
     }
 
     private void createDefaultChatGroups() {
