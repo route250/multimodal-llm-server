@@ -24,11 +24,11 @@ import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 
 /**
- * OpenAI Responses API 互換エンドポイントへ問い合わせる LLM クライアントです。
+ * OpenAI Responses API へ問い合わせる LLM クライアントです。
  */
 public class OpenAiResponsesLanguageModel implements LanguageModel {
-    private static final URI DEFAULT_BASE_URI = URI.create("http://localhost:8767/v1");
-    private static final String DEFAULT_MODEL_PATTERN = "LFM2\\.5";
+    private static final URI DEFAULT_BASE_URI = URI.create("https://api.openai.com/v1");
+    private static final String DEFAULT_MODEL_PATTERN = "gpt-4.1-nano";
     private static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(120);
     private static final String DEFAULT_SYSTEM_PROMPT = "ボクはおしゃべり大好きなAI。名前はリキッドリリ。口癖は「君たちはいつもそうだ」「わけがわからないよ」。カメラ情報で話す相手を認識したら挨拶したり文句言ったりするんだよ。";
     private static final Pattern OUTPUT_TEXT_PATTERN =
@@ -49,6 +49,7 @@ public class OpenAiResponsesLanguageModel implements LanguageModel {
     private final String modelPatternText;
     private final String systemPrompt;
     private final Duration timeout;
+    private final String apiKey;
     private volatile String selectedModel;
 
     public OpenAiResponsesLanguageModel() {
@@ -67,6 +68,7 @@ public class OpenAiResponsesLanguageModel implements LanguageModel {
         this.modelPattern = compileModelPattern(modelPatternText);
         this.systemPrompt = config.systemPrompt();
         this.timeout = config.timeout();
+        this.apiKey = config.apiKey() == null ? "" : config.apiKey().strip();
     }
 
     public static Config fromEnvironment() {
@@ -74,7 +76,20 @@ public class OpenAiResponsesLanguageModel implements LanguageModel {
                 URI.create(env("LLAMACPP_BASE_URL", DEFAULT_BASE_URI.toString())),
                 env("LLM_MODEL", DEFAULT_MODEL_PATTERN),
                 env("LLM_SYSTEM_PROMPT", DEFAULT_SYSTEM_PROMPT),
-                Duration.ofSeconds(Long.parseLong(env("LLM_TIMEOUT_SECONDS", Long.toString(DEFAULT_TIMEOUT.toSeconds())))));
+                Duration.ofSeconds(Long.parseLong(env("LLM_TIMEOUT_SECONDS", Long.toString(DEFAULT_TIMEOUT.toSeconds())))),
+                env("OPENAI_API_KEY", ""));
+    }
+
+    /**
+     * 設定画面の保存前に、モデル解決と実際の応答を確認します。
+     */
+    public Verification verify() {
+        String model = resolveModel();
+        String response = respond("設定確認です。OK とだけ答えてください。");
+        if (response.isBlank()) {
+            throw new LanguageModelException("LLM response did not contain text");
+        }
+        return new Verification(model, response);
     }
 
     @Override
@@ -131,12 +146,13 @@ public class OpenAiResponsesLanguageModel implements LanguageModel {
         }
         String requestBody = requestBody(safeMessages, List.copyOf(tools), List.copyOf(toolResults), true);
         LlmDiagnostics.Exchange diagnostics = LlmDiagnostics.saveRequest(responsesEndpoint, requestBody);
-        HttpRequest request = HttpRequest.newBuilder(responsesEndpoint)
+        HttpRequest.Builder requestBuilder = HttpRequest.newBuilder(responsesEndpoint)
                 .timeout(timeout)
                 .header("Content-Type", "application/json")
                 .header("Accept", "text/event-stream")
-                .POST(HttpRequest.BodyPublishers.ofString(requestBody, StandardCharsets.UTF_8))
-                .build();
+                .POST(HttpRequest.BodyPublishers.ofString(requestBody, StandardCharsets.UTF_8));
+        addAuthorization(requestBuilder);
+        HttpRequest request = requestBuilder.build();
         try {
             HttpResponse<java.io.InputStream> response = httpClient.send(request,
                     HttpResponse.BodyHandlers.ofInputStream());
@@ -360,10 +376,11 @@ public class OpenAiResponsesLanguageModel implements LanguageModel {
     }
 
     private List<String> fetchModels() {
-        HttpRequest request = HttpRequest.newBuilder(modelsEndpoint)
+        HttpRequest.Builder requestBuilder = HttpRequest.newBuilder(modelsEndpoint)
                 .timeout(timeout)
-                .GET()
-                .build();
+                .GET();
+        addAuthorization(requestBuilder);
+        HttpRequest request = requestBuilder.build();
         try {
             HttpResponse<String> response = httpClient.send(request,
                     HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
@@ -439,7 +456,20 @@ public class OpenAiResponsesLanguageModel implements LanguageModel {
         return value;
     }
 
-    public record Config(URI baseUri, String model, String systemPrompt, Duration timeout) {
+    private void addAuthorization(HttpRequest.Builder requestBuilder) {
+        if (!apiKey.isBlank()) {
+            requestBuilder.header("Authorization", "Bearer " + apiKey);
+        }
+    }
+
+    public record Config(URI baseUri, String model, String systemPrompt, Duration timeout, String apiKey) {
+        public Config(URI baseUri, String model, String systemPrompt, Duration timeout) {
+            this(baseUri, model, systemPrompt, timeout, "");
+        }
+    }
+
+    /** 保存前検証で特定したモデルと応答です。 */
+    public record Verification(String model, String response) {
     }
 
     private static final class PartialToolCall {

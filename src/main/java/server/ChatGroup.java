@@ -26,6 +26,10 @@ public class ChatGroup {
     public int nextId() {
         return this.server.nextId();
     }
+
+    MlServer server() {
+        return server;
+    }
     public void execute(Runnable r) {
         this.server.execute(r);
     }
@@ -86,5 +90,12 @@ public class ChatGroup {
 
     public int clientCount() {
         return clients.size();
+    }
+
+    /** 保存済みの Group 設定を、接続済みクライアントの次回呼び出しへ反映します。 */
+    void applyLanguageModelConfig(OpenAiResponsesLanguageModel.Config config) {
+        for (ChatClient client : clients.values()) {
+            client.setLanguageModel(new OpenAiResponsesLanguageModel(config));
+        }
     }
 }

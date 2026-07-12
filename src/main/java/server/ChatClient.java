@@ -56,7 +56,7 @@ public class ChatClient {
     private final LinkedBlockingQueue<ServerEvent> events = new LinkedBlockingQueue<>();
     private final AudioProcessor audioProcessor;
     private final AudioDiagnostics.Context diagnosticsContext;
-    private final LanguageModel languageModel;
+    private volatile LanguageModel languageModel;
     private final TextToSpeech textToSpeech;
     private final Object audioTaskLock = new Object();
     private final Object lifecycleLock = new Object();
@@ -88,7 +88,7 @@ public class ChatClient {
                 new LazySmartTurnV3(smartTurnModelPath()),
                 new Lfm2AudioSpeechToText(),
                 chatGroup::execute),
-                new OpenAiResponsesLanguageModel(),
+                new OpenAiResponsesLanguageModel(chatGroup.server().languageModelConfig(chatGroup.id())),
                 defaultTextToSpeech());
     }
 
@@ -119,6 +119,11 @@ public class ChatClient {
 
     public String id() {
         return id;
+    }
+
+    /** Group 設定の保存後に、次の LLM 呼び出しから使用するモデルを切り替えます。 */
+    void setLanguageModel(LanguageModel languageModel) {
+        this.languageModel = languageModel;
     }
 
     public int nextId() {
@@ -523,6 +528,7 @@ public class ChatClient {
                 }
                 sendToGroupIfOpen(ServerEvent.assistantState("LLM"));
                 List<ToolCallResult> toolResults = List.of();
+                LanguageModel currentLanguageModel = languageModel;
                 for (int toolRound = 0; toolRound < 4; toolRound++) {
                     List<ToolCallResult> nextToolResults = new ArrayList<>();
                     StreamingResponseHandler handler = new StreamingResponseHandler() {
@@ -546,9 +552,9 @@ public class ChatClient {
                         }
                     };
                     if (toolResults.isEmpty()) {
-                        languageModel.respondStreamingEvents(requestMessages, LLM_TOOLS, handler);
+                        currentLanguageModel.respondStreamingEvents(requestMessages, LLM_TOOLS, handler);
                     } else {
-                        languageModel.respondStreamingEvents(requestMessages, LLM_TOOLS, toolResults, handler);
+                        currentLanguageModel.respondStreamingEvents(requestMessages, LLM_TOOLS, toolResults, handler);
                     }
                     if (nextToolResults.isEmpty() || !isAssistantTurnActive(assistantTurnId)) {
                         break;

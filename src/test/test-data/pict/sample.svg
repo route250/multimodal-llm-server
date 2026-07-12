@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2560" height="1600" viewBox="0 0 2560 1600" role="img" aria-labelledby="title desc">
+  <title id="title">Simple face sample</title>
+  <desc id="desc">Two circular eyes with filled pupils and highlights, and a mouth made from two downward arcs.</desc>
+
+  <!-- JPEG 元画像の角丸背景を再現する。 -->
+  <rect x="0" y="0" width="2560" height="1600" rx="24" ry="24" fill="#f6f6f6"/>
+
+  <!-- 左目: 外円、同心円の塗りつぶし、円形ハイライト。 -->
+  <circle cx="720" cy="653" r="164" fill="#20232a"/>
+  <circle cx="720" cy="653" r="160" fill="#c04078"/>
+  <circle cx="720" cy="653" r="98" fill="#740d38"/>
+  <circle cx="774" cy="580" r="54" fill="#ffffff"/>
+
+  <!-- 右目: 外円、同心円の塗りつぶし、円形ハイライト。 -->
+  <circle cx="1747" cy="653" r="164" fill="#20232a"/>
+  <circle cx="1747" cy="653" r="160" fill="#c04078"/>
+  <circle cx="1747" cy="653" r="98" fill="#740d38"/>
+  <circle cx="1801" cy="580" r="54" fill="#ffffff"/>
+
+  <!-- 口: 中央の接続部にも 21.6px の太さを持たせた下向き円弧 2 本。 -->
+  <path d="M 1052.4 997.8 Q 1137.6 1096.2 1224 997.8 Q 1310.4 1096.2 1396.8 997.8" fill="none" stroke="#000000" stroke-width="21.6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

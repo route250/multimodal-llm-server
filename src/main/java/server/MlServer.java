@@ -23,15 +23,19 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import llm.LanguageModelException;
+import llm.OpenAiResponsesLanguageModel;
 
 public class MlServer implements AutoCloseable {
     private static final Path STATIC_ROOT = Paths.get("src/main/resources/html").toAbsolutePath().normalize();
     private static final String DEFAULT_GROUP_ID = "group-1";
+    private static final Path LOCAL_ROOT = Paths.get(".local").toAbsolutePath().normalize();
 
     private final HttpServer httpServer;
     private final ExecutorService executor;
     private final FaceDB faceDB;
     private final Map<String, ChatGroup> chatGroups = new ConcurrentHashMap<>();
+    private final Map<String, GroupLlmSettings> groupLlmSettings = new ConcurrentHashMap<>();
     private final AtomicInteger counter = new AtomicInteger();
 
     public MlServer(int port) throws IOException {
@@ -47,6 +51,7 @@ public class MlServer implements AutoCloseable {
         httpServer.createContext("/chat/playback", this::handleChatPlayback);
         httpServer.createContext("/chat/client-log", this::handleChatClientLog);
         httpServer.createContext("/chat/connect", this::handleChatConnect);
+        httpServer.createContext("/chat/settings", this::handleChatSettings);
         httpServer.createContext("/face/event", this::handleFaceEvent);
         httpServer.createContext("/", this::handleStaticFile);
         executor = Executors.newVirtualThreadPerTaskExecutor();
@@ -91,10 +96,57 @@ public class MlServer implements AutoCloseable {
         faceDB.assign(faceId, name);
     }
 
+    private void handleChatSettings(HttpExchange exchange) throws IOException {
+        ChatGroup chatGroup = chatGroup(exchange);
+        if (chatGroup == null) {
+            sendText(exchange, 404, "application/json; charset=utf-8", "{\"error\":\"chat group not found\"}\n");
+            return;
+        }
+        if ("GET".equals(exchange.getRequestMethod())) {
+            sendText(exchange, 200, "application/json; charset=utf-8",
+                    settings(chatGroup.id()).toSettingsJson(GroupLlmSettings.defaults(chatGroup.id())) + "\n");
+            return;
+        }
+        if (!"POST".equals(exchange.getRequestMethod())) {
+            exchange.getResponseHeaders().set("Allow", "GET, POST");
+            exchange.sendResponseHeaders(405, -1);
+            return;
+        }
+        try {
+            GroupLlmSettings settings = GroupLlmSettings.fromJson(
+                    new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            OpenAiResponsesLanguageModel model = new OpenAiResponsesLanguageModel(settings.toConfig());
+            OpenAiResponsesLanguageModel.Verification verification = model.verify();
+            settings.save(LOCAL_ROOT, chatGroup.id());
+            groupLlmSettings.put(chatGroup.id(), settings);
+            chatGroup.applyLanguageModelConfig(settings.toConfig());
+            sendText(exchange, 200, "application/json; charset=utf-8", Json.object(Json.fields(
+                    "status", "saved",
+                    "model", verification.model(),
+                    "response", verification.response())) + "\n");
+        } catch (IllegalArgumentException | LanguageModelException e) {
+            sendText(exchange, 400, "application/json; charset=utf-8", errorJson(e.getMessage()));
+        } catch (IOException e) {
+            sendText(exchange, 500, "application/json; charset=utf-8",
+                    errorJson("failed to save LLM settings: " + e.getMessage()));
+        }
+    }
+
+    OpenAiResponsesLanguageModel.Config languageModelConfig(String groupId) {
+        return settings(groupId).toConfig();
+    }
+
     private void handleStaticFile(HttpExchange exchange) throws IOException {
         if (!"GET".equals(exchange.getRequestMethod()) && !"HEAD".equals(exchange.getRequestMethod())) {
             exchange.getResponseHeaders().set("Allow", "GET, HEAD");
             exchange.sendResponseHeaders(405, -1);
+            return;
+        }
+
+        if (isRootPath(exchange.getRequestURI().getPath())) {
+            exchange.getResponseHeaders().set("Location", "/bot.html");
+            exchange.sendResponseHeaders(302, -1);
+            exchange.close();
             return;
         }
 
@@ -359,6 +411,16 @@ public class MlServer implements AutoCloseable {
         chatGroups.put("group-3", new ChatGroup("group-3", this));
     }
 
+    private GroupLlmSettings settings(String groupId) {
+        return groupLlmSettings.computeIfAbsent(groupId, id -> {
+            try {
+                return GroupLlmSettings.load(LOCAL_ROOT, id);
+            } catch (IOException e) {
+                throw new IllegalStateException("failed to load LLM settings for " + id, e);
+            }
+        });
+    }
+
     private static void sendText(HttpExchange exchange, int status, String contentType, String text) throws IOException {
         byte[] body = text.getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().set("Content-Type", contentType);
@@ -394,6 +456,11 @@ public class MlServer implements AutoCloseable {
             }
             return new StaticResource(stream.readAllBytes(), contentType(Path.of(resourcePath)));
         }
+    }
+
+    private static boolean isRootPath(String requestPath) {
+        String path = urlDecode(requestPath);
+        return path.equals("/") || path.isBlank();
     }
 
     private static String normalizeRequestPath(String requestPath) {

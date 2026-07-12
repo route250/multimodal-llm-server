@@ -312,18 +312,42 @@ LLM 応答と TTS 処理が終了したら `message-done` イベントを配信�
 `browser-cancel-playback-received` などを記録します。
 ブラウザログは `assistantTurnId`、`activeAssistantTurnId`、`queuedAudioDeltas`、`currentPlayback`、
 `pausedPlayback`、`localVadPlaybackPaused`、`serverSttPlaybackPaused`、`playbackReady` を含みます。
-デフォルトでは llama.cpp のローカルエンドポイントを使います。
+デフォルトでは OpenAI 公式 Responses API を使います。
 
 ```text
-LLAMACPP_BASE_URL=http://localhost:8767/v1
-LLM_MODEL=LFM2\.5
+OPENAI_API_KEY=sk-...
+LLAMACPP_BASE_URL=https://api.openai.com/v1
+LLM_MODEL=gpt-5-nano
 LLM_SYSTEM_PROMPT=あなたは日本語で簡潔に応答するアシスタントです。
 LLM_TIMEOUT_SECONDS=120
 ```
 
 `LLM_MODEL` は Java の正規表現として扱います。
 サーバは `GET /v1/models` でモデル一覧を取得し、モデル ID に対して `Pattern.matcher(modelId).find()` が真になる最初のモデルを `POST /v1/responses` の `model` に指定します。
+`OPENAI_API_KEY` が設定されている場合は、`GET /v1/models` と `POST /v1/responses` の両方へ `Authorization: Bearer` ヘッダーを付与します。
 テキスト入力と STT 結果は、同じ `ChatClient` の直近 20 件の user/assistant 履歴と一緒に `POST /v1/responses` へ送信します。
+
+### Group ごとの LLM 設定
+
+`GET /chat/settings?group=group-1` は Group の LLM 設定を返します。
+`POST /chat/settings?group=group-1` は次の JSON を受け取り、保存前に設定を検証します。
+
+```json
+{
+  "baseUrl": "http://localhost:8767/v1",
+  "model": "LFM2\\.5",
+  "apiKey": "",
+  "systemPrompt": "メインプロンプト"
+}
+```
+
+- `baseUrl` は空文字にできません。`apiKey` は空文字を指定できます。
+- Base URL のホスト名が `openai.com` またはそのサブドメインで `apiKey` が空文字の場合は、サーバー環境の `OPENAI_API_KEY` を使用します。環境変数も空の場合は HTTP 400 を返します。
+- `model` は空文字にできず、Java 正規表現としてコンパイルできる必要があります。
+- 保存前に `GET /v1/models` を実行して `model` に一致するモデル ID を 1 件特定し、そのモデルで `POST /v1/responses` を実行して空でない応答を確認します。
+- 検証失敗時は HTTP 400 を返し、設定ファイルと接続中クライアントの設定は変更しません。
+- 検証成功時だけ `.local/group-1/llm.json` の形式で保存し、同じ Group に接続中のクライアントは次の assistant turn から新設定を使用します。
+- 設定画面のリセット値は Group ごとに異なります。`group-1` と `group-3` は `baseUrl=http://localhost:8767/v1`、`model=LFM2\\.5`、空の `apiKey`、既定メインプロンプトです。`group-2` は `baseUrl=https://api.openai.com/v1`、`model=gpt-4.1-nano`、空の `apiKey`、既定メインプロンプトです。
 
 LFM2.5 Audio の STT/TTS は、デフォルトで `llama-liquid-audio-server` の OpenAI Chat Completions 互換エンドポイントを使います。
 

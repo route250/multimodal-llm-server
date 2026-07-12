@@ -80,6 +80,21 @@
             padding: 8px 10px;
         }
 
+        .settings-button {
+            background: #07110b;
+            border: 1px solid #25472d;
+            border-radius: 8px;
+            color: #91c99a;
+            height: 36px;
+            padding: 0;
+            width: 36px;
+        }
+
+        .settings-button svg {
+            height: 19px;
+            width: 19px;
+        }
+
         .stage {
             align-items: center;
             display: grid;
@@ -354,7 +369,12 @@
                 <span id="speech-state-text">IDLE</span>
             </span>
         </div>
-        <span id="presence" class="presence">no person</span>
+        <div class="status-group">
+            <span id="presence" class="presence">no person</span>
+            <button id="open-settings" class="settings-button" type="button" aria-label="設定" title="設定">
+                <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06-2.3 2.3-.06-.06A1.65 1.65 0 0 0 15.6 18a1.65 1.65 0 0 0-1 1.51V20h-3.2v-.09A1.65 1.65 0 0 0 10.4 18a1.65 1.65 0 0 0-1.82.33l-.06.06-2.3-2.3.06-.06A1.65 1.65 0 0 0 6 14.2a1.65 1.65 0 0 0-1.51-1H4.4V10h.09A1.65 1.65 0 0 0 6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06 2.3-2.3.06.06A1.65 1.65 0 0 0 9.8 5.2h.01A1.65 1.65 0 0 0 10.8 3.7V3.6H14v.1A1.65 1.65 0 0 0 15 5.2a1.65 1.65 0 0 0 1.82-.33l.06-.06 2.3 2.3-.06.06A1.65 1.65 0 0 0 18.8 9v.01a1.65 1.65 0 0 0 1.51 1H20.4v3.2h-.09A1.65 1.65 0 0 0 19.4 15z"></path></svg>
+            </button>
+        </div>
     </header>
 
     <section class="stage" aria-label="AI表情">
@@ -382,6 +402,7 @@
     const modelUrl = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model/";
     const sessionId = crypto.randomUUID();
     const groupInput = document.getElementById("group");
+    const openSettings = document.getElementById("open-settings");
     const startBot = document.getElementById("start-bot");
     const speechState = document.getElementById("speech-state");
     const speechStateText = document.getElementById("speech-state-text");
@@ -417,6 +438,14 @@
     let personPresent = false;
     let faceAnimationSequence = 0;
     let subtitleClearTimer = 0;
+
+    const selectedGroup = new URLSearchParams(location.search).get("group");
+    if ([...groupInput.options].some((option) => option.value === selectedGroup)) {
+        groupInput.value = selectedGroup;
+    }
+    openSettings.addEventListener("click", () => {
+        location.href = `/settings.html?group=${encodeURIComponent(groupInput.value)}`;
+    });
 
     const audio = new ChatAudio({
         group: () => groupInput.value,

@@ -44,6 +44,40 @@ class OpenAiResponsesLanguageModelTest {
     }
 
     @Test
+    void sendsOpenAiApiKeyAsBearerToken() throws Exception {
+        AtomicReference<String> authorization = new AtomicReference<>();
+        try (FakeServer server = new FakeServer(sse("""
+                {"type":"response.output_text.delta","delta":"ok"}
+                """), 200, new AtomicReference<>(), new AtomicReference<>(), authorization)) {
+            OpenAiResponsesLanguageModel model = new OpenAiResponsesLanguageModel(new OpenAiResponsesLanguageModel.Config(
+                    server.baseUri(),
+                    "gemma[-_]?4[-]?e2b",
+                    "",
+                    Duration.ofSeconds(5),
+                    "test-key"));
+
+            assertEquals("ok", model.respond("こんにちは"));
+            assertEquals("Bearer test-key", authorization.get());
+        }
+    }
+
+    @Test
+    void verifiesModelSelectionAndResponse() throws Exception {
+        try (FakeServer server = new FakeServer(sse("""
+                {"type":"response.output_text.delta","delta":"OK"}
+                """), 200, new AtomicReference<>(), new AtomicReference<>())) {
+            OpenAiResponsesLanguageModel model = new OpenAiResponsesLanguageModel(new OpenAiResponsesLanguageModel.Config(
+                    server.baseUri(), "gemma[-_]?4[-]?e2b", "", Duration.ofSeconds(5)));
+
+            OpenAiResponsesLanguageModel.Verification verification = model.verify();
+
+            assertEquals("gemma_4e2b-it-q4_k_m", verification.model());
+            assertEquals("OK", verification.response());
+            assertEquals(List.of("/v1/models", "/v1/responses"), server.paths());
+        }
+    }
+
+    @Test
     void ignoresStreamingEventsThatAreNotOutputDeltas() throws Exception {
         try (FakeServer server = new FakeServer(sse("""
                 {"type":"response.output_item.done","item":{"content":[{"type":"output_text","text":"これは差分ではない"}]}}
@@ -253,6 +287,15 @@ class OpenAiResponsesLanguageModelTest {
 
         FakeServer(String responseBody, int status, AtomicReference<String> path, AtomicReference<String> body)
                 throws IOException {
+            this(responseBody, status, path, body, new AtomicReference<>());
+        }
+
+        FakeServer(
+                String responseBody,
+                int status,
+                AtomicReference<String> path,
+                AtomicReference<String> body,
+                AtomicReference<String> authorization) throws IOException {
             server = HttpServer.create(new InetSocketAddress(0), 0);
             server.createContext("/v1/models", exchange -> {
                 recordPath(exchange.getRequestURI().getPath());
@@ -268,6 +311,7 @@ class OpenAiResponsesLanguageModelTest {
             server.createContext("/v1/responses", exchange -> {
                 recordPath(exchange.getRequestURI().getPath());
                 path.set(exchange.getRequestURI().getPath());
+                authorization.set(exchange.getRequestHeaders().getFirst("Authorization"));
                 body.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
                 byte[] responseBytes = responseBody.getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().set("Content-Type", "text/event-stream; charset=utf-8");

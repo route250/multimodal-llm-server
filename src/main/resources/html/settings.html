@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>LLM 設定</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { background: #f4f7f5; color: #18231b; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; }
+        main { margin: 0 auto; max-width: 720px; padding: 24px 18px 48px; }
+        header { align-items: center; display: flex; gap: 14px; margin-bottom: 28px; }
+        h1 { font-size: 22px; margin: 0; }
+        .icon-button { align-items: center; background: #ffffff; border: 1px solid #bdc9c0; border-radius: 6px; color: #18231b; cursor: pointer; display: inline-flex; height: 36px; justify-content: center; padding: 0; width: 36px; }
+        .icon-button svg { height: 20px; width: 20px; }
+        form { display: grid; gap: 20px; }
+        label { display: grid; font-size: 14px; font-weight: 700; gap: 7px; }
+        input, textarea { background: #ffffff; border: 1px solid #9ead9f; border-radius: 6px; color: #18231b; font: inherit; font-weight: 400; padding: 10px; width: 100%; }
+        textarea { min-height: 180px; resize: vertical; }
+        .hint { color: #506257; font-size: 13px; font-weight: 400; line-height: 1.5; }
+        .actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 4px; }
+        button { border: 1px solid #56725d; border-radius: 6px; cursor: pointer; font: inherit; font-weight: 700; min-height: 38px; padding: 0 14px; }
+        .reset { background: #ffffff; color: #294133; }
+        .save { background: #1f5d36; border-color: #1f5d36; color: #ffffff; }
+        button:disabled { cursor: wait; opacity: .65; }
+        #status { border-radius: 6px; display: none; font-size: 14px; line-height: 1.5; margin: 20px 0 0; padding: 10px 12px; white-space: pre-wrap; }
+        #status.error { background: #feeceb; border: 1px solid #e9a29e; color: #8a1e19; display: block; }
+        #status.ok { background: #e8f7eb; border: 1px solid #8bc497; color: #164b24; display: block; }
+    </style>
+</head>
+<body>
+<main>
+    <header>
+        <button id="back" class="icon-button" type="button" aria-label="戻る" title="戻る"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"></path></svg></button>
+        <h1 id="title">LLM 設定</h1>
+    </header>
+    <form id="settings-form">
+        <label>Base URL
+            <input id="base-url" type="url" inputmode="url" required placeholder="http://localhost:8767/v1">
+            <span class="hint">必須項目です。`api.openai.com` で API KEY を空欄にした場合は、サーバー環境の `OPENAI_API_KEY` を使用します。</span>
+        </label>
+        <label>モデル名（正規表現）
+            <input id="model" type="text" required placeholder="LFM2\.5">
+        </label>
+        <label>API KEY
+            <input id="api-key" type="password" autocomplete="off">
+            <span class="hint">認証を使わないサーバーでは空欄にします。</span>
+        </label>
+        <label>メインプロンプト
+            <textarea id="system-prompt"></textarea>
+        </label>
+        <div class="actions">
+            <button id="reset" class="reset" type="button">デフォルトにリセット</button>
+            <button id="save" class="save" type="submit">検証して保存</button>
+        </div>
+    </form>
+    <p id="status" role="status"></p>
+</main>
+<script>
+    const FALLBACK_DEFAULTS = {
+        baseUrl: "http://localhost:8767/v1",
+        model: "LFM2\\.5",
+        apiKey: "",
+        systemPrompt: "ボクはおしゃべり大好きなAI。名前はリキッドリリ。口癖は「君たちはいつもそうだ」「わけがわからないよ」。カメラ情報で話す相手を認識したら挨拶したり文句言ったりするんだよ。"
+    };
+    const group = new URLSearchParams(location.search).get("group") || "group-1";
+    const form = document.getElementById("settings-form");
+    const baseUrl = document.getElementById("base-url");
+    const model = document.getElementById("model");
+    const apiKey = document.getElementById("api-key");
+    const systemPrompt = document.getElementById("system-prompt");
+    const status = document.getElementById("status");
+    const save = document.getElementById("save");
+    let defaults = FALLBACK_DEFAULTS;
+    document.getElementById("title").textContent = `${group} の LLM 設定`;
+    document.getElementById("back").addEventListener("click", () => location.href = `/bot.html?group=${encodeURIComponent(group)}`);
+    document.getElementById("reset").addEventListener("click", () => {
+        baseUrl.value = defaults.baseUrl;
+        model.value = defaults.model;
+        apiKey.value = defaults.apiKey;
+        systemPrompt.value = defaults.systemPrompt;
+        status.className = "";
+        status.textContent = "";
+    });
+    async function load() {
+        const response = await fetch(`/chat/settings?group=${encodeURIComponent(group)}`);
+        if (!response.ok) throw new Error(await errorMessage(response));
+        const settings = await response.json();
+        defaults = settings.defaults || FALLBACK_DEFAULTS;
+        baseUrl.value = settings.baseUrl || "";
+        model.value = settings.model || "";
+        apiKey.value = settings.apiKey || "";
+        systemPrompt.value = settings.systemPrompt || "";
+    }
+    form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        save.disabled = true;
+        status.className = "";
+        status.textContent = "";
+        try {
+            const response = await fetch(`/chat/settings?group=${encodeURIComponent(group)}`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json; charset=utf-8" },
+                body: JSON.stringify({ baseUrl: baseUrl.value, model: model.value, apiKey: apiKey.value, systemPrompt: systemPrompt.value })
+            });
+            if (!response.ok) throw new Error(await errorMessage(response));
+            const result = await response.json();
+            status.className = "ok";
+            status.textContent = `保存しました。確認モデル: ${result.model}\n応答: ${result.response}`;
+        } catch (error) {
+            status.className = "error";
+            status.textContent = `保存しませんでした。${error.message}`;
+        } finally {
+            save.disabled = false;
+        }
+    });
+    async function errorMessage(response) {
+        const text = await response.text();
+        try { return JSON.parse(text).error || `HTTP ${response.status}`; } catch { return text || `HTTP ${response.status}`; }
+    }
+    load().catch((error) => { status.className = "error"; status.textContent = `設定を読み込めません。${error.message}`; });
+</script>
+</body>
+</html>
