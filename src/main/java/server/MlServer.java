@@ -2,7 +2,8 @@ package server;
 
 import audio.AudioDiagnostics;
 import com.sun.net.httpserver.HttpExchange;
-import com.sun.net.httpserver.HttpServer;
+import com.sun.net.httpserver.HttpsConfigurator;
+import com.sun.net.httpserver.HttpsServer;
 import facedb.FaceDB;
 import facedb.FacePossibility;
 import json.Json;
@@ -23,6 +24,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import javax.net.ssl.SSLContext;
 import llm.LanguageModelException;
 import llm.OpenAiResponsesLanguageModel;
 
@@ -31,7 +33,7 @@ public class MlServer implements AutoCloseable {
     private static final String DEFAULT_GROUP_ID = "group-1";
     private static final Path LOCAL_ROOT = Paths.get(".local").toAbsolutePath().normalize();
 
-    private final HttpServer httpServer;
+    private final HttpsServer httpsServer;
     private final ExecutorService executor;
     private final FaceDB faceDB;
     private final Map<String, ChatGroup> chatGroups = new ConcurrentHashMap<>();
@@ -39,36 +41,61 @@ public class MlServer implements AutoCloseable {
     private final AtomicInteger counter = new AtomicInteger();
 
     public MlServer(int port) throws IOException {
-        this(port, new FaceDB(Path.of(".local", "facedb")));
+        this("0.0.0.0", port);
+    }
+
+    public MlServer(String host, int port) throws IOException {
+        this(host, port, new FaceDB(Path.of(".local", "facedb")));
+    }
+
+    public MlServer(String host, int port, SSLContext sslContext) throws IOException {
+        this(host, port, new FaceDB(Path.of(".local", "facedb")), sslContext);
     }
 
     MlServer(int port, FaceDB faceDB) throws IOException {
+        this("127.0.0.1", port, faceDB);
+    }
+
+    MlServer(String host, int port, FaceDB faceDB) throws IOException {
+        this(host, port, faceDB, LocalHttpsCertificate.sslContext());
+    }
+
+    MlServer(String host, int port, FaceDB faceDB, SSLContext sslContext) throws IOException {
         this.faceDB = faceDB;
         this.faceDB.load();
         createDefaultChatGroups();
-        httpServer = HttpServer.create(new InetSocketAddress(port), 0);
-        httpServer.createContext("/chat/request", this::handleChatRequest);
-        httpServer.createContext("/chat/playback", this::handleChatPlayback);
-        httpServer.createContext("/chat/client-log", this::handleChatClientLog);
-        httpServer.createContext("/chat/connect", this::handleChatConnect);
-        httpServer.createContext("/chat/settings", this::handleChatSettings);
-        httpServer.createContext("/face/event", this::handleFaceEvent);
-        httpServer.createContext("/", this::handleStaticFile);
+        httpsServer = HttpsServer.create(new InetSocketAddress(host, port), 0);
+        httpsServer.setHttpsConfigurator(new HttpsConfigurator(sslContext));
+        registerContexts();
         executor = Executors.newVirtualThreadPerTaskExecutor();
-        httpServer.setExecutor(executor);
+        httpsServer.setExecutor(executor);
+    }
+
+    private void registerContexts() {
+        httpsServer.createContext("/chat/request", this::handleChatRequest);
+        httpsServer.createContext("/chat/playback", this::handleChatPlayback);
+        httpsServer.createContext("/chat/client-log", this::handleChatClientLog);
+        httpsServer.createContext("/chat/connect", this::handleChatConnect);
+        httpsServer.createContext("/chat/settings", this::handleChatSettings);
+        httpsServer.createContext("/face/event", this::handleFaceEvent);
+        httpsServer.createContext("/", this::handleStaticFile);
     }
 
     public void start() {
-        httpServer.start();
+        httpsServer.start();
     }
 
     public void stop() {
-        httpServer.stop(0);
+        httpsServer.stop(0);
         executor.shutdown();
     }
 
     public int port() {
-        return httpServer.getAddress().getPort();
+        return httpsServer.getAddress().getPort();
+    }
+
+    public String host() {
+        return httpsServer.getAddress().getHostString();
     }
 
     @Override

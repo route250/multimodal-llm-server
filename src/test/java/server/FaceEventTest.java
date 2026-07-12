@@ -19,6 +19,9 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import facedb.FaceDB;
 import json.JsonFields;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.X509TrustManager;
 import llm.ChatMessage;
 import llm.StreamingResponseHandler;
 import llm.ToolCall;
@@ -34,8 +37,8 @@ class FaceEventTest {
             server.start();
             String body = faceEventBody(descriptor(0.1));
 
-            HttpResponse<String> response = HttpClient.newHttpClient().send(
-                    HttpRequest.newBuilder(URI.create("http://localhost:" + server.port()
+            HttpResponse<String> response = localHttpsClient().send(
+                    HttpRequest.newBuilder(URI.create("https://localhost:" + server.port()
                                     + "/face/event?group=group-1&sessionId=test-face"))
                             .header("Content-Type", "application/json; charset=utf-8")
                             .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
@@ -63,8 +66,8 @@ class FaceEventTest {
 
         try (MlServer server = new MlServer(0, db)) {
             server.start();
-            HttpResponse<String> response = HttpClient.newHttpClient().send(
-                    HttpRequest.newBuilder(URI.create("http://localhost:" + server.port()
+            HttpResponse<String> response = localHttpsClient().send(
+                    HttpRequest.newBuilder(URI.create("https://localhost:" + server.port()
                                     + "/face/event?group=group-1&sessionId=test-face"))
                             .header("Content-Type", "application/json; charset=utf-8")
                             .POST(HttpRequest.BodyPublishers.ofString(faceEventBody(descriptor(0.2)), StandardCharsets.UTF_8))
@@ -85,8 +88,8 @@ class FaceEventTest {
     void personLeftDoesNotRegisterFaceDBFile(@TempDir Path tempDir) throws Exception {
         try (MlServer server = new MlServer(0, new FaceDB(tempDir))) {
             server.start();
-            HttpResponse<String> response = HttpClient.newHttpClient().send(
-                    HttpRequest.newBuilder(URI.create("http://localhost:" + server.port()
+            HttpResponse<String> response = localHttpsClient().send(
+                    HttpRequest.newBuilder(URI.create("https://localhost:" + server.port()
                                     + "/face/event?group=group-1&sessionId=test-face"))
                             .header("Content-Type", "application/json; charset=utf-8")
                             .POST(HttpRequest.BodyPublishers.ofString("""
@@ -228,6 +231,28 @@ class FaceEventTest {
         int valueStart = start + key.length();
         int valueEnd = json.indexOf('"', valueStart);
         return json.substring(valueStart, valueEnd).replace("\\/", "/");
+    }
+
+    private static HttpClient localHttpsClient() throws Exception {
+        TrustManager[] trustManagers = {
+                new X509TrustManager() {
+                    @Override
+                    public java.security.cert.X509Certificate[] getAcceptedIssuers() {
+                        return new java.security.cert.X509Certificate[0];
+                    }
+
+                    @Override
+                    public void checkClientTrusted(java.security.cert.X509Certificate[] chain, String authType) {
+                    }
+
+                    @Override
+                    public void checkServerTrusted(java.security.cert.X509Certificate[] chain, String authType) {
+                    }
+                }
+        };
+        SSLContext sslContext = SSLContext.getInstance("TLS");
+        sslContext.init(null, trustManagers, null);
+        return HttpClient.newBuilder().sslContext(sslContext).build();
     }
 
     private static void drainJoinEvents(ChatClient client) {

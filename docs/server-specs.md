@@ -2,15 +2,28 @@
 
 ## Overview
 
-`MlServer` is a Java HTTP server for a multimodal chat backend.
+`MlServer` is a Java HTTPS server for a multimodal chat backend.
 
 The server has two responsibilities:
 
 - Serve static frontend files from `src/main/resources/html`.
 - Provide chat endpoints for bidirectional chat flow using HTTP requests and Server-Sent Events.
 
-`MlServer` uses JDK standard `com.sun.net.httpserver.HttpServer`.
+`MlServer` uses JDK standard `com.sun.net.httpserver.HttpsServer`.
 Each request is handled by `Executors.newVirtualThreadPerTaskExecutor()`.
+
+Default local startup:
+
+```text
+host 0.0.0.0
+port 8443
+```
+
+The server creates a self-signed local development certificate at
+`.local/tls/localhost.p12` when the file is missing or when the detected Subject
+Alternative Name list changes. The certificate includes `localhost`,
+`127.0.0.1`, `::1`, local host names, and current LAN IP addresses. `0.0.0.0`
+is only a bind address and is not included in the certificate.
 
 ## Static File Serving
 
