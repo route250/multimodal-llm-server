@@ -5,7 +5,7 @@ package llm;
  */
 public record ChatMessage(String role, String text) {
     public ChatMessage {
-        if (!"user".equals(role) && !"assistant".equals(role)) {
+        if (!"user".equals(role) && !"assistant".equals(role) && !"system".equals(role) && !"developer".equals(role)) {
             throw new IllegalArgumentException("role must be user or assistant: " + role);
         }
         if (text == null || text.isBlank()) {

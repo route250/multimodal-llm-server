@@ -1,6 +1,7 @@
 package server;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -15,10 +16,15 @@ import java.util.concurrent.FutureTask;
 import java.util.concurrent.LinkedBlockingQueue;
 import audio.AudioDiagnostics;
 import json.Json;
+import json.JsonFields;
 import llm.ChatMessage;
 import llm.LanguageModel;
 import llm.LanguageModelException;
 import llm.OpenAiResponsesLanguageModel;
+import llm.StreamingResponseHandler;
+import llm.ToolCall;
+import llm.ToolCallResult;
+import llm.ToolDefinition;
 import model.download.SmartTurnV3ModelDownloader;
 import onnx.OnnxModelException;
 import audio.stt.Lfm2AudioSpeechToText;
@@ -38,6 +44,12 @@ import audio.vad.smartturn.LazySmartTurnV3;
 
 public class ChatClient {
     private static final int MAX_HISTORY_MESSAGES = 20;
+    private static final List<ToolDefinition> LLM_TOOLS = List.of(new ToolDefinition(
+            "assign_face_name",
+            "faceIdに人物名を登録します。ユーザーが自分の名前を名乗ったときに呼び出します。",
+            """
+                    {"type":"object","properties":{"faceId":{"type":"string"},"name":{"type":"string"}},"required":["faceId","name"],"additionalProperties":false}\
+                    """));
 
     private final String id;
     private final ChatGroup chatGroup;
@@ -53,13 +65,15 @@ public class ChatClient {
     private final Object partialTranscriptLock = new Object();
     private final List<ChatMessage> conversationHistory = new ArrayList<>();
     private final Set<Long> canceledAssistantTurnIds = new HashSet<>();
+    private final Set<Long> rememberedUserAssistantTurnIds = new HashSet<>();
+    private final Map<Long, PendingUserMessage> pendingUserMessages = new LinkedHashMap<>();
     private final Map<AssistantChunkKey, PendingAssistantChunk> pendingAssistantChunks = new LinkedHashMap<>();
+    private final Map<Long, Integer> rememberedAssistantMessageIndexes = new HashMap<>();
     private final Map<Long, String> partialTranscripts = new LinkedHashMap<>();
     private CompletableFuture<Void> audioTaskTail = CompletableFuture.completedFuture(null);
     private Future<?> activeAssistantTask;
     private long currentAssistantTurnId;
     private long nextAssistantChunkId;
-    private long rememberedUserAssistantTurnId;
     private long currentInterruptionId;
     private long activePlaybackAssistantTurnId;
     private long activePlaybackStartSampleIndex = Long.MIN_VALUE;
@@ -214,14 +228,19 @@ public class ChatClient {
     }
 
     public void handleFacePresence(FaceEventResult result) {
+        ChatMessage faceEventMessage = null;
         if (!"person-updated".equals(result.presenceState())) {
             String eventText = facePresenceHistoryText(result);
+            faceEventMessage = new ChatMessage("system", eventText);
             synchronized (conversationLock) {
-                conversationHistory.add(new ChatMessage("user", eventText));
+                conversationHistory.add(faceEventMessage);
                 trimConversationHistory();
             }
         }
         sendToGroupIfOpen(ServerEvent.facePresence(result));
+        if ("person-entered".equals(result.presenceState()) && faceEventMessage != null) {
+            startAssistantReplyFromHistory(faceEventMessage);
+        }
     }
 
     List<ChatMessage> conversationHistoryForTest() {
@@ -231,13 +250,18 @@ public class ChatClient {
     }
 
     private static String facePresenceHistoryText(FaceEventResult result) {
+        String personName = null;
+        String faceId = "";
+        String m;
         if ("person-left".equals(result.presenceState())) {
-            return "[環境イベント] だれもいなくなりました";
+            m = "[カメラ情報] { \"comment\": \"だれもいなくなりました\"}";
+        } else {
+            faceId = result.faceId() == null || result.faceId().isBlank() ? "" : result.faceId();
+            personName = result.personName() == null || result.personName().isBlank() ? "知らない人" : result.personName();
+            m = "[カメラ情報] { \"name\": \"" + personName + "\", \"faceId\": \""+faceId+"\", \"comment\": \"人物を認識しました\" }";
         }
-        String personName = result.personName() == null || result.personName().isBlank()
-                ? "unknown"
-                : result.personName();
-        return "[環境イベント] " + personName + "さんがきました";
+        System.out.println(m);
+        return m;
     }
 
     private void finishPlaybackTracking(long assistantTurnId, long clientMicSampleIndex) {
@@ -431,6 +455,24 @@ public class ChatClient {
             replyToTranscript(transcript, assistantTurnId);
             return null;
         });
+        startAssistantTask(assistantTurnId, task);
+    }
+
+    private void startAssistantReplyFromHistory(ChatMessage triggerMessage) {
+        long assistantTurnId = beginAssistantTurn();
+        AudioDiagnostics.log("assistant-turn-start", diagnosticsContext, Json.fields(
+                "assistantTurnId", assistantTurnId,
+                "trigger", "conversation-history",
+                "triggerChars", triggerMessage.text().length(),
+                "triggerText", triggerMessage.text()));
+        FutureTask<Void> task = new FutureTask<>(() -> {
+            replyToConversationHistory(triggerMessage, assistantTurnId);
+            return null;
+        });
+        startAssistantTask(assistantTurnId, task);
+    }
+
+    private void startAssistantTask(long assistantTurnId, FutureTask<Void> task) {
         synchronized (playbackControlLock) {
             if (currentAssistantTurnId == assistantTurnId && !canceledAssistantTurnIds.contains(assistantTurnId)) {
                 activeAssistantTask = task;
@@ -445,23 +487,77 @@ public class ChatClient {
         if (isClosed()) {
             return;
         }
+        StreamingTextChunker chunker = new StreamingTextChunker();
+        ChatMessage userMessage = new ChatMessage("user", transcript);
+        List<ChatMessage> requestMessages;
         synchronized (conversationLock) {
-            StreamingTextChunker chunker = new StreamingTextChunker();
-            ChatMessage userMessage = new ChatMessage("user", transcript);
-            List<ChatMessage> requestMessages = requestMessages(userMessage);
+            rememberStalePendingUserMessages(assistantTurnId);
+            pendingUserMessages.put(assistantTurnId, new PendingUserMessage(userMessage));
+            requestMessages = requestMessages(userMessage);
+        }
+        replyWithMessages(assistantTurnId, chunker, userMessage, requestMessages, true, false);
+    }
+
+    private void replyToConversationHistory(ChatMessage triggerMessage, long assistantTurnId) {
+        if (isClosed()) {
+            return;
+        }
+        StreamingTextChunker chunker = new StreamingTextChunker();
+        List<ChatMessage> requestMessages;
+        synchronized (conversationLock) {
+            requestMessages = List.copyOf(conversationHistory);
+        }
+        replyWithMessages(assistantTurnId, chunker, triggerMessage, requestMessages, false, true);
+    }
+
+    private void replyWithMessages(
+            long assistantTurnId,
+            StreamingTextChunker chunker,
+            ChatMessage userMessage,
+            List<ChatMessage> requestMessages,
+            boolean publishUserMessage,
+            boolean userMessageAlreadyInHistory) {
             try {
-                sendToGroupIfOpen(ServerEvent.userMessage(transcript));
+                if (publishUserMessage) {
+                    sendToGroupIfOpen(ServerEvent.userMessage(userMessage.text()));
+                }
                 sendToGroupIfOpen(ServerEvent.assistantState("LLM"));
-                languageModel.respondStreaming(requestMessages, delta -> {
-                    if (!isAssistantTurnActive(assistantTurnId)) {
-                        return;
+                List<ToolCallResult> toolResults = List.of();
+                for (int toolRound = 0; toolRound < 4; toolRound++) {
+                    List<ToolCallResult> nextToolResults = new ArrayList<>();
+                    StreamingResponseHandler handler = new StreamingResponseHandler() {
+                        @Override
+                        public void onTextDelta(String delta) {
+                            if (!isAssistantTurnActive(assistantTurnId)) {
+                                return;
+                            }
+                            AudioDiagnostics.log("llm-message-delta", diagnosticsContext, Json.fields(
+                                    "assistantTurnId", assistantTurnId,
+                                    "deltaChars", delta.length()));
+                            speak(assistantTurnId, userMessage, userMessageAlreadyInHistory, chunker.append(delta));
+                        }
+
+                        @Override
+                        public void onToolCall(ToolCall toolCall) {
+                            if (!isAssistantTurnActive(assistantTurnId)) {
+                                return;
+                            }
+                            nextToolResults.add(handleToolCall(assistantTurnId, toolCall));
+                        }
+                    };
+                    if (toolResults.isEmpty()) {
+                        languageModel.respondStreamingEvents(requestMessages, LLM_TOOLS, handler);
+                    } else {
+                        languageModel.respondStreamingEvents(requestMessages, LLM_TOOLS, toolResults, handler);
                     }
-                    AudioDiagnostics.log("llm-message-delta", diagnosticsContext, Json.fields(
-                            "assistantTurnId", assistantTurnId,
-                            "deltaChars", delta.length()));
-                    speak(assistantTurnId, userMessage, chunker.append(delta));
-                });
-                speak(assistantTurnId, userMessage, chunker.finish());
+                    if (nextToolResults.isEmpty() || !isAssistantTurnActive(assistantTurnId)) {
+                        break;
+                    }
+                    List<ToolCallResult> mergedToolResults = new ArrayList<>(toolResults);
+                    mergedToolResults.addAll(nextToolResults);
+                    toolResults = List.copyOf(mergedToolResults);
+                }
+                speak(assistantTurnId, userMessage, userMessageAlreadyInHistory, chunker.finish());
                 if (!isAssistantTurnActive(assistantTurnId)) {
                     return;
                 }
@@ -470,11 +566,13 @@ public class ChatClient {
                 sendToGroupIfOpen(ServerEvent.messageDone());
                 finishAssistantTurn(assistantTurnId);
             } catch (LanguageModelException e) {
+                rememberUserMessageWithoutAssistant(assistantTurnId);
                 if (isAssistantTurnActive(assistantTurnId)) {
                     sendToGroupIfOpen(ServerEvent.system("llm request failed: " + e.getMessage()));
                 }
                 finishAssistantTurn(assistantTurnId);
             } catch (TextToSpeechException e) {
+                rememberUserMessageWithoutAssistant(assistantTurnId);
                 if (isAssistantTurnActive(assistantTurnId)) {
                     sendToGroupIfOpen(ServerEvent.system("tts request failed: " + e.getMessage()));
                 }
@@ -482,7 +580,46 @@ public class ChatClient {
             } finally {
                 sendToGroupIfOpen(ServerEvent.assistantState("IDLE"));
             }
+    }
+
+    private ToolCallResult handleToolCall(long assistantTurnId, ToolCall toolCall) {
+        AudioDiagnostics.log("llm-tool-call", diagnosticsContext, Json.fields(
+                "assistantTurnId", assistantTurnId,
+                "toolName", toolCall.name(),
+                "callId", toolCall.callId()));
+        if (!"assign_face_name".equals(toolCall.name())) {
+            AudioDiagnostics.log("llm-tool-call-ignored", diagnosticsContext, Json.fields(
+                    "assistantTurnId", assistantTurnId,
+                    "toolName", toolCall.name(),
+                    "reason", "unknown-tool"));
+            return new ToolCallResult(toolCall, Json.object(Json.fields(
+                    "status", "failed",
+                    "error", "unknown tool: " + toolCall.name())));
         }
+        String faceId = JsonFields.stringOrDefault(toolCall.arguments(), "faceId", "").trim();
+        String name = JsonFields.stringOrDefault(toolCall.arguments(), "name", "").trim();
+        if (faceId.isBlank() || "unknown".equals(faceId) || "none".equals(faceId) || name.isBlank()) {
+            AudioDiagnostics.log("llm-tool-call-ignored", diagnosticsContext, Json.fields(
+                    "assistantTurnId", assistantTurnId,
+                    "toolName", toolCall.name(),
+                    "reason", "invalid-argument",
+                    "faceId", faceId,
+                    "name", name));
+            return new ToolCallResult(toolCall, Json.object(Json.fields(
+                    "status", "failed",
+                    "error", "faceId and name are required",
+                    "faceId", faceId,
+                    "name", name)));
+        }
+        chatGroup.assignFaceName(faceId, name);
+        AudioDiagnostics.log("face-name-assigned", diagnosticsContext, Json.fields(
+                "assistantTurnId", assistantTurnId,
+                "faceId", faceId,
+                "name", name));
+        return new ToolCallResult(toolCall, Json.object(Json.fields(
+                "status", "ok",
+                "faceId", faceId,
+                "name", name)));
     }
 
     private long beginAssistantTurn() {
@@ -525,11 +662,8 @@ public class ChatClient {
             if (chunk == null || chunk.text().isBlank()) {
                 return;
             }
-            if (rememberedUserAssistantTurnId != assistantTurnId) {
-                conversationHistory.add(chunk.userMessage());
-                rememberedUserAssistantTurnId = assistantTurnId;
-            }
-            conversationHistory.add(new ChatMessage("assistant", chunk.text()));
+            rememberUserMessageForRecognizedAssistant(assistantTurnId, chunk);
+            rememberAssistantChunk(assistantTurnId, chunk.text());
             trimConversationHistory();
         }
         AudioDiagnostics.log("assistant-chunk-recognized", diagnosticsContext, Json.fields(
@@ -538,13 +672,78 @@ public class ChatClient {
                 "textChars", chunk.text().length()));
     }
 
-    private void trimConversationHistory() {
-        while (conversationHistory.size() > MAX_HISTORY_MESSAGES) {
-            conversationHistory.removeFirst();
+    private void rememberUserMessageForRecognizedAssistant(long assistantTurnId, PendingAssistantChunk chunk) {
+        if (chunk.userMessageAlreadyInHistory() || rememberedUserAssistantTurnIds.contains(assistantTurnId)) {
+            return;
+        }
+        PendingUserMessage pendingUserMessage = pendingUserMessages.remove(assistantTurnId);
+        ChatMessage userMessage = pendingUserMessage == null ? chunk.userMessage() : pendingUserMessage.userMessage();
+        conversationHistory.add(userMessage);
+        rememberedUserAssistantTurnIds.add(assistantTurnId);
+    }
+
+    private void rememberUserMessageWithoutAssistant(long assistantTurnId) {
+        synchronized (conversationLock) {
+            PendingUserMessage pendingUserMessage = pendingUserMessages.remove(assistantTurnId);
+            if (pendingUserMessage == null || rememberedUserAssistantTurnIds.contains(assistantTurnId)) {
+                return;
+            }
+            conversationHistory.add(pendingUserMessage.userMessage());
+            rememberedUserAssistantTurnIds.add(assistantTurnId);
+            trimConversationHistory();
         }
     }
 
-    private void speak(long assistantTurnId, ChatMessage userMessage, Iterable<String> chunks) {
+    private void rememberStalePendingUserMessages(long currentAssistantTurnId) {
+        List<Long> staleAssistantTurnIds = pendingUserMessages.keySet().stream()
+                .filter(assistantTurnId -> assistantTurnId < currentAssistantTurnId)
+                .toList();
+        for (long assistantTurnId : staleAssistantTurnIds) {
+            PendingUserMessage pendingUserMessage = pendingUserMessages.remove(assistantTurnId);
+            if (pendingUserMessage != null && !rememberedUserAssistantTurnIds.contains(assistantTurnId)) {
+                pendingAssistantChunks.keySet().removeIf(key -> key.assistantTurnId() == assistantTurnId);
+                conversationHistory.add(pendingUserMessage.userMessage());
+                rememberedUserAssistantTurnIds.add(assistantTurnId);
+            }
+        }
+        trimConversationHistory();
+    }
+
+    private void rememberAssistantChunk(long assistantTurnId, String text) {
+        Integer historyIndex = rememberedAssistantMessageIndexes.get(assistantTurnId);
+        if (historyIndex == null || historyIndex < 0 || historyIndex >= conversationHistory.size()) {
+            conversationHistory.add(new ChatMessage("assistant", text));
+            rememberedAssistantMessageIndexes.put(assistantTurnId, conversationHistory.size() - 1);
+            return;
+        }
+        ChatMessage currentMessage = conversationHistory.get(historyIndex);
+        if (!"assistant".equals(currentMessage.role())) {
+            conversationHistory.add(new ChatMessage("assistant", text));
+            rememberedAssistantMessageIndexes.put(assistantTurnId, conversationHistory.size() - 1);
+            return;
+        }
+        conversationHistory.set(historyIndex, new ChatMessage("assistant", currentMessage.text() + text));
+    }
+
+    private void trimConversationHistory() {
+        int removedCount = 0;
+        while (conversationHistory.size() > MAX_HISTORY_MESSAGES) {
+            conversationHistory.removeFirst();
+            removedCount++;
+        }
+        if (removedCount == 0) {
+            return;
+        }
+        int removed = removedCount;
+        rememberedAssistantMessageIndexes.entrySet().removeIf(entry -> entry.getValue() < removed);
+        rememberedAssistantMessageIndexes.replaceAll((assistantTurnId, index) -> index - removed);
+    }
+
+    private void speak(
+            long assistantTurnId,
+            ChatMessage userMessage,
+            boolean userMessageAlreadyInHistory,
+            Iterable<String> chunks) {
         for (String chunk : chunks) {
             if (!isAssistantTurnActive(assistantTurnId)) {
                 return;
@@ -575,9 +774,11 @@ public class ChatClient {
                 return;
             }
             double durationSeconds = audioDurationSeconds(audioDeltas);
-            pendingAssistantChunks.put(
-                    new AssistantChunkKey(assistantTurnId, chunkId),
-                    new PendingAssistantChunk(userMessage, chunk));
+            synchronized (conversationLock) {
+                pendingAssistantChunks.put(
+                        new AssistantChunkKey(assistantTurnId, chunkId),
+                        new PendingAssistantChunk(userMessage, userMessageAlreadyInHistory, chunk));
+            }
             sendToGroupIfOpen(ServerEvent.assistantAudioChunk(
                     assistantTurnId,
                     chunkId,
@@ -652,6 +853,9 @@ public class ChatClient {
         }
         synchronized (conversationLock) {
             pendingAssistantChunks.clear();
+            pendingUserMessages.clear();
+            rememberedUserAssistantTurnIds.clear();
+            rememberedAssistantMessageIndexes.clear();
         }
         if (taskToCancel != null) {
             taskToCancel.cancel(true);
@@ -695,6 +899,9 @@ public class ChatClient {
     private record AssistantChunkKey(long assistantTurnId, long chunkId) {
     }
 
-    private record PendingAssistantChunk(ChatMessage userMessage, String text) {
+    private record PendingUserMessage(ChatMessage userMessage) {
+    }
+
+    private record PendingAssistantChunk(ChatMessage userMessage, boolean userMessageAlreadyInHistory, String text) {
     }
 }

@@ -85,6 +85,15 @@ Responsibilities:
 - Handle incoming `ChatRequest`.
 - Send resulting events to its `ChatGroup`.
 
+Conversation history is updated with these rules:
+
+- Text input and non-empty FINAL STT text are sent to the LLM immediately, but the user message is not added to history before the LLM call.
+- When a played assistant chunk is reported by `/chat/playback` with `recognized:true`, the related user message is added to history once for that `assistantTurnId`.
+- The recognized assistant chunk text is added to the assistant history for that `assistantTurnId`. If another recognized chunk for the same `assistantTurnId` arrives, its text is appended to the same assistant history message.
+- If the LLM request fails or TTS fails before any recognized assistant chunk is recorded, the user message is added to history without an assistant message.
+- If no recognized assistant chunk is reported for a completed turn, the user message remains pending. When a later user turn starts, the stale pending user message is added to history without an assistant message.
+- Assistant chunks that are never reported as recognized are not added to history.
+
 If `/chat/request` is called with a `sessionId` that is not connected to the specified `ChatGroup`, the server returns:
 
 ```http
@@ -135,10 +144,14 @@ Current event types:
 
 ```text
 system
+user-message
 message
-message-delta
-audio-delta
+assistant-audio-chunk
+assistant-state
 audio-control
+speech-state
+transcript-partial
+face-presence
 message-done
 ```
 
@@ -243,7 +256,8 @@ the server queues a `FINAL` STT task anyway.
 `FINAL` では同じ `speechSequenceId` の過去 `PARTIAL` 結果と `FINAL` 結果を結合します。
 `FINAL` の対象範囲が空の場合、STT 結果は空文字として扱います。
 結合後テキストが空文字でない場合、サーバは OpenAI Responses API 互換エンドポイントへ `stream:true`
-で送信し、LLM の応答差分を `message-delta` イベントとして配信します。結合後テキストが空文字の場合は、
+で送信し、LLM の応答差分を TTS 分割単位へ変換して `assistant-audio-chunk` イベントとして配信します。
+結合後テキストが空文字の場合は、
 一時停止中の AI 音声再生を再開します。FINAL STT 実行中に新しい発話で `speechSequenceId` が変わった場合、
 古い FINAL 結果は破棄します。
 LLM 応答差分は、以下の条件で TTS へ送信する単位に分割します。
@@ -252,9 +266,11 @@ LLM 応答差分は、以下の条件で TTS へ送信する単位に分割し�
 - 空白: `Character.isWhitespace(c)` が `true` の文字
 - 最大長: 80 文字
 
-TTS の音声差分は `audio-delta` イベントとして配信します。
-`audio-delta` の payload には `assistantTurnId` を含めます。クライアントは現在の再生対象より古い
-`assistantTurnId`、またはキャンセル済みの `assistantTurnId` を持つ音声差分を破棄します。
+TTS の結果は `assistant-audio-chunk` イベントとして配信します。
+`assistant-audio-chunk` の payload には `assistantTurnId`、`chunkId`、`text`、`audioDeltas`、`audioDurationSeconds`
+を含めます。`audioDeltas` の各要素は `data`、`format`、`sampleRate` を含みます。
+クライアントは現在の再生対象より古い `assistantTurnId`、またはキャンセル済みの `assistantTurnId` を持つ
+音声チャンクを破棄します。
 
 STT タスクが投入された場合、サーバは `audio-control` イベントを配信します。payload は
 `action`、`assistantTurnId`、`interruptionId`、`speechSequenceId`、`reason` を含みます。
@@ -283,23 +299,24 @@ Content-Type: application/json; charset=utf-8
 一時停止中は TEN VAD 値が 35 未満の状態が 8 フレーム、つまり 128 ms 続いたらローカルで再開します。
 ブラウザは `localVadPlaybackPaused` と `serverSttPlaybackPaused` の 2 つの停止フラグを保持し、
 両方が `false` になった時だけ再生を再開します。
-`audio-delta` の `message` は JSON 文字列で、`data` は base64、`format` は `pcm`、`sampleRate` は通常 `24000` です。
+`assistant-audio-chunk` の `message` は JSON 文字列です。`audioDeltas[].data` は base64、`audioDeltas[].format`
+は `pcm`、`audioDeltas[].sampleRate` は通常 `24000` です。
 LLM 応答と TTS 処理が終了したら `message-done` イベントを配信します。
 
 再生状態の調査用に、サーバとブラウザは `tmp/audio-debug/audio-debug.log` へ JSON Lines 形式の診断ログを出力します。
 サーバは `assistant-turn-start`、`llm-message-delta`、`tts-chunk-start`、`tts-audio-delta`、`tts-chunk-done`、
-`sse-send-audio-delta`、`sse-send-audio-control`、`playback-report` を記録します。
-ブラウザは `/chat/client-log` へ状態を送信し、サーバは `browser-audio-delta-received`、
+`sse-send-assistant-audio-chunk`、`sse-send-audio-control`、`playback-report` を記録します。
+ブラウザは `/chat/client-log` へ状態を送信し、サーバは `browser-assistant-audio-chunk-received`、
 `browser-audio-delta-queued`、`browser-pump-playback-blocked`、`browser-playback-start`、
 `browser-playback-ended`、`browser-local-vad-pause-set`、`browser-server-stt-pause-set`、
 `browser-cancel-playback-received` などを記録します。
 ブラウザログは `assistantTurnId`、`activeAssistantTurnId`、`queuedAudioDeltas`、`currentPlayback`、
 `pausedPlayback`、`localVadPlaybackPaused`、`serverSttPlaybackPaused`、`playbackReady` を含みます。
-デフォルトでは LM Studio のローカルエンドポイントを使います。
+デフォルトでは llama.cpp のローカルエンドポイントを使います。
 
 ```text
-LMSTUDIO_BASE_URL=http://localhost:1234/v1
-LLM_MODEL=gemma[-_]?4[-]?e2b
+LLAMACPP_BASE_URL=http://localhost:8767/v1
+LLM_MODEL=LFM2\.5
 LLM_SYSTEM_PROMPT=あなたは日本語で簡潔に応答するアシスタントです。
 LLM_TIMEOUT_SECONDS=120
 ```

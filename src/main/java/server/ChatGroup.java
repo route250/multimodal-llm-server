@@ -39,6 +39,10 @@ public class ChatGroup {
         return this.server.submit(task);
     }
 
+    void assignFaceName(String faceId, String name) {
+        this.server.assignFaceName(faceId, name);
+    }
+
     public ChatClient join(String clientId) {
         ChatClient client = new ChatClient(clientId, this);
         return join(clientId, client);

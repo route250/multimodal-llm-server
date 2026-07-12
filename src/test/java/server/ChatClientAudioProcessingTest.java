@@ -23,6 +23,9 @@ import java.util.function.Consumer;
 import java.util.function.Predicate;
 import llm.ChatMessage;
 import llm.LanguageModel;
+import llm.LanguageModelException;
+import llm.StreamingResponseHandler;
+import llm.ToolDefinition;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
@@ -630,7 +633,7 @@ class ChatClientAudioProcessingTest {
     }
 
     @Test
-    void assistantChunkIsNotSentToHistoryBeforePlaybackRecognition() throws Exception {
+    void unrecognizedAssistantChunkIsNotSentToHistoryButUserMessageIsKept() throws Exception {
         try (MlServer server = new MlServer(0)) {
             ChatGroup group = new ChatGroup("group-test", server);
             ChatClient listener = group.join("client-1");
@@ -651,7 +654,9 @@ class ChatClientAudioProcessingTest {
 
             assertEquals(2, languageModel.calls.size());
             assertEquals(List.of("user:私の名前は太郎です"), languageModel.calls.get(0));
-            assertEquals(List.of("user:私の名前は何ですか"), languageModel.calls.get(1));
+            assertEquals(List.of(
+                    "user:私の名前は太郎です",
+                    "user:私の名前は何ですか"), languageModel.calls.get(1));
         }
     }
 
@@ -683,6 +688,53 @@ class ChatClientAudioProcessingTest {
                     "user:私の名前は太郎です",
                     "assistant:太郎です",
                     "user:私の名前は何ですか"), languageModel.calls.get(1));
+        }
+    }
+
+    @Test
+    void recognizedAssistantChunksAreMergedByAssistantTurnInHistory() throws Exception {
+        try (MlServer server = new MlServer(0)) {
+            ChatGroup group = new ChatGroup("group-test", server);
+            ChatClient listener = group.join("client-1");
+            ChatClient processorClient = new ChatClient(
+                    "processor",
+                    group,
+                    new TranscriptAudioProcessor("unused"),
+                    new StreamingLanguageModel("一つ目です。", "二つ目です。"),
+                    new RecordingTextToSpeech());
+            drainJoinEvents(listener);
+
+            processorClient.handle(ChatRequest.from("text/plain; charset=utf-8", "開始".getBytes()));
+            assertNotNull(pollUntil(listener, event -> "assistant-audio-chunk".equals(event.type())));
+            assertNotNull(pollUntil(listener, event -> "assistant-audio-chunk".equals(event.type())));
+            processorClient.handlePlayback(new ChatClient.PlaybackEvent(1, 1, "end", true, 0, 0, 0));
+            processorClient.handlePlayback(new ChatClient.PlaybackEvent(1, 2, "end", true, 0, 0, 0));
+            assertNotNull(pollUntil(listener, event -> "message-done".equals(event.type())));
+
+            assertEquals(List.of(
+                    new ChatMessage("user", "開始"),
+                    new ChatMessage("assistant", "一つ目です。二つ目です。")),
+                    processorClient.conversationHistoryForTest());
+        }
+    }
+
+    @Test
+    void llmFailureKeepsUserMessageInHistory() throws Exception {
+        try (MlServer server = new MlServer(0)) {
+            ChatGroup group = new ChatGroup("group-test", server);
+            ChatClient listener = group.join("client-1");
+            ChatClient processorClient = new ChatClient(
+                    "processor",
+                    group,
+                    new TranscriptAudioProcessor("unused"),
+                    new FailingLanguageModel());
+            drainJoinEvents(listener);
+
+            processorClient.handle(ChatRequest.from("text/plain; charset=utf-8", "失敗しても残す".getBytes()));
+            assertNotNull(pollUntil(listener, event -> event.message().contains("llm request failed: boom")));
+
+            assertEquals(List.of(new ChatMessage("user", "失敗しても残す")),
+                    processorClient.conversationHistoryForTest());
         }
     }
 
@@ -1213,6 +1265,14 @@ class ChatClientAudioProcessingTest {
         public void respondStreaming(String userText, java.util.function.Consumer<String> onDelta) {
             deltas.forEach(onDelta);
         }
+
+        @Override
+        public void respondStreamingEvents(
+                List<ChatMessage> messages,
+                List<ToolDefinition> tools,
+                StreamingResponseHandler handler) {
+            deltas.forEach(handler::onTextDelta);
+        }
     }
 
     private static class RecordingConversationLanguageModel implements LanguageModel {
@@ -1235,6 +1295,29 @@ class ChatClientAudioProcessingTest {
                     .map(message -> message.role() + ":" + message.text())
                     .toList());
             onDelta.accept(responses.get(nextResponse++));
+        }
+
+        @Override
+        public void respondStreamingEvents(
+                List<ChatMessage> messages,
+                List<ToolDefinition> tools,
+                StreamingResponseHandler handler) {
+            respondStreaming(messages, handler::onTextDelta);
+        }
+    }
+
+    private static class FailingLanguageModel implements LanguageModel {
+        @Override
+        public String respond(String userText) {
+            throw new LanguageModelException("boom");
+        }
+
+        @Override
+        public void respondStreamingEvents(
+                List<ChatMessage> messages,
+                List<ToolDefinition> tools,
+                StreamingResponseHandler handler) {
+            throw new LanguageModelException("boom");
         }
     }
 

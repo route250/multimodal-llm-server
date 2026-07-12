@@ -696,6 +696,11 @@
         if (animationSequence !== faceAnimationSequence || !personPresent || !botRunning) {
             return;
         }
+        lastFaceSentAt = performance.now();
+        await sendFaceEvent("person-entered", target, faceWidthRatio, faceAreaRatio);
+        if (animationSequence !== faceAnimationSequence || !personPresent || !botRunning) {
+            return;
+        }
         if (!audio.isMicrophoneActive()) {
             await audio.startMicrophone();
         }
@@ -703,11 +708,6 @@
             return;
         }
         await blinkTwice(animationSequence);
-        if (animationSequence !== faceAnimationSequence || !personPresent || !botRunning) {
-            return;
-        }
-        lastFaceSentAt = performance.now();
-        await sendFaceEvent("person-entered", target, faceWidthRatio, faceAreaRatio);
     }
 
     function drawTargetFace(detection) {

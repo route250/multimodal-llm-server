@@ -18,7 +18,31 @@ public interface LanguageModel {
     }
 
     default void respondStreaming(List<ChatMessage> messages, Consumer<String> onDelta) {
-        respondStreaming(lastUserText(messages), onDelta);
+        respondStreamingEvents(messages, new StreamingResponseHandler() {
+            @Override
+            public void onTextDelta(String delta) {
+                onDelta.accept(delta);
+            }
+        });
+    }
+
+    default void respondStreamingEvents(List<ChatMessage> messages, StreamingResponseHandler handler) {
+        respondStreaming(lastUserText(messages), handler::onTextDelta);
+    }
+
+    default void respondStreamingEvents(
+            List<ChatMessage> messages,
+            List<ToolDefinition> tools,
+            StreamingResponseHandler handler) {
+        respondStreamingEvents(messages, handler);
+    }
+
+    default void respondStreamingEvents(
+            List<ChatMessage> messages,
+            List<ToolDefinition> tools,
+            List<ToolCallResult> toolResults,
+            StreamingResponseHandler handler) {
+        respondStreamingEvents(messages, tools, handler);
     }
 
     private static String lastUserText(List<ChatMessage> messages) {

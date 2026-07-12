@@ -87,6 +87,10 @@ public class MlServer implements AutoCloseable {
         return this.executor.submit(task);
     }
 
+    void assignFaceName(String faceId, String name) {
+        faceDB.assign(faceId, name);
+    }
+
     private void handleStaticFile(HttpExchange exchange) throws IOException {
         if (!"GET".equals(exchange.getRequestMethod()) && !"HEAD".equals(exchange.getRequestMethod())) {
             exchange.getResponseHeaders().set("Allow", "GET, HEAD");

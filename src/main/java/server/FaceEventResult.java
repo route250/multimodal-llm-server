@@ -32,6 +32,10 @@ public record FaceEventResult(
         return new FaceEventResult("accepted", "unknown", "unknown", distance, false, "unknown", null, null, "person-entered");
     }
 
+    public static FaceEventResult unknownFace(String faceId) {
+        return new FaceEventResult("accepted", "unknown", "unknown", null, false, faceId, null, null, "person-entered");
+    }
+
     public static FaceEventResult left() {
         return new FaceEventResult("accepted", "none", "none", null, false, "none", null, null, "person-left");
     }

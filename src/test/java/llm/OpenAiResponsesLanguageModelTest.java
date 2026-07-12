@@ -61,6 +61,50 @@ class OpenAiResponsesLanguageModelTest {
     }
 
     @Test
+    void separatesStreamingTextDeltasAndToolCalls() throws Exception {
+        try (FakeServer server = new FakeServer(sse("""
+                {"type":"response.output_text.delta","delta":"先に話します。"}
+                """, """
+                {"type":"response.output_item.added","item":{"id":"fc_1","arguments":"","call_id":"call_1","name":"assign_face_name","type":"function_call","status":"in_progress"}}
+                """, """
+                {"type":"response.function_call_arguments.delta","delta":"{\\"faceId\\":\\"","item_id":"fc_1"}
+                """, """
+                {"type":"response.function_call_arguments.delta","delta":"face000001\\",\\"name\\":\\"山田\\"}","item_id":"fc_1"}
+                """, """
+                {"type":"response.function_call_arguments.done","item_id":"fc_1","arguments":"{\\"faceId\\":\\"face000001\\",\\"name\\":\\"山田\\"}","name":"assign_face_name"}
+                """, """
+                {"type":"response.output_item.done","item":{"id":"fc_1","type":"function_call","status":"completed","arguments":"{\\"faceId\\":\\"face000001\\",\\"name\\":\\"山田\\"}","call_id":"call_1","name":"assign_face_name"}}
+                """), 200, new AtomicReference<>(), new AtomicReference<>())) {
+            OpenAiResponsesLanguageModel model = new OpenAiResponsesLanguageModel(new OpenAiResponsesLanguageModel.Config(
+                    server.baseUri(),
+                    "gemma[-_]?4[-]?e2b",
+                    "",
+                    Duration.ofSeconds(5)));
+            StringBuilder text = new StringBuilder();
+            List<ToolCall> toolCalls = new ArrayList<>();
+
+            model.respondStreamingEvents(List.of(new ChatMessage("user", "顔を登録して")), new StreamingResponseHandler() {
+                @Override
+                public void onTextDelta(String delta) {
+                    text.append(delta);
+                }
+
+                @Override
+                public void onToolCall(ToolCall toolCall) {
+                    toolCalls.add(toolCall);
+                }
+            });
+
+            assertEquals("先に話します。", text.toString());
+            assertEquals(1, toolCalls.size());
+            assertEquals("fc_1", toolCalls.get(0).id());
+            assertEquals("call_1", toolCalls.get(0).callId());
+            assertEquals("assign_face_name", toolCalls.get(0).name());
+            assertEquals("{\"faceId\":\"face000001\",\"name\":\"山田\"}", toolCalls.get(0).arguments());
+        }
+    }
+
+    @Test
     void postsConversationHistoryToResponsesEndpoint() throws Exception {
         AtomicReference<String> body = new AtomicReference<>();
         try (FakeServer server = new FakeServer(sse("""
@@ -78,11 +122,78 @@ class OpenAiResponsesLanguageModelTest {
                     new ChatMessage("user", "私の名前は何ですか"))));
 
             assertTrue(body.get().contains("\"role\":\"user\""));
+            assertTrue(body.get().contains("\"type\":\"message\",\"role\":\"user\""));
             assertTrue(body.get().contains("\"text\":\"私の名前は太郎です\""));
             assertTrue(body.get().contains("\"role\":\"assistant\""));
+            assertTrue(body.get().contains("\"type\":\"message\",\"role\":\"assistant\""));
             assertTrue(body.get().contains("\"type\":\"output_text\""));
             assertTrue(body.get().contains("\"text\":\"覚えました\""));
             assertTrue(body.get().contains("\"text\":\"私の名前は何ですか\""));
+        }
+    }
+
+    @Test
+    void postsToolsToResponsesEndpoint() throws Exception {
+        AtomicReference<String> body = new AtomicReference<>();
+        try (FakeServer server = new FakeServer(sse("""
+                {"type":"response.output_text.delta","delta":"確認します"}
+                """), 200, new AtomicReference<>(), body)) {
+            OpenAiResponsesLanguageModel model = new OpenAiResponsesLanguageModel(new OpenAiResponsesLanguageModel.Config(
+                    server.baseUri(),
+                    "gemma[-_]?4[-]?e2b",
+                    "日本語で答えてください。",
+                    Duration.ofSeconds(5)));
+
+            model.respondStreamingEvents(
+                    List.of(new ChatMessage("user", "私の名前は太郎です")),
+                    List.of(assignFaceNameTool()),
+                    new StreamingResponseHandler() {
+                        @Override
+                        public void onTextDelta(String delta) {
+                        }
+                    });
+
+            assertTrue(body.get().contains("\"tools\":["));
+            assertTrue(body.get().contains("\"type\":\"function\""));
+            assertTrue(body.get().contains("\"name\":\"assign_face_name\""));
+            assertTrue(body.get().contains("\"required\":[\"faceId\",\"name\"]"));
+        }
+    }
+
+    @Test
+    void postsFunctionCallOutputToResponsesEndpoint() throws Exception {
+        AtomicReference<String> body = new AtomicReference<>();
+        try (FakeServer server = new FakeServer(sse("""
+                {"type":"response.output_text.delta","delta":"登録しました"}
+                """), 200, new AtomicReference<>(), body)) {
+            OpenAiResponsesLanguageModel model = new OpenAiResponsesLanguageModel(new OpenAiResponsesLanguageModel.Config(
+                    server.baseUri(),
+                    "gemma[-_]?4[-]?e2b",
+                    "日本語で答えてください。",
+                    Duration.ofSeconds(5)));
+            StringBuilder text = new StringBuilder();
+            ToolCall toolCall = new ToolCall(
+                    "fc_1",
+                    "call_1",
+                    "assign_face_name",
+                    "{\"faceId\":\"face000001\",\"name\":\"太郎\"}");
+
+            model.respondStreamingEvents(
+                    List.of(new ChatMessage("user", "私の名前は太郎です")),
+                    List.of(assignFaceNameTool()),
+                    List.of(new ToolCallResult(toolCall, "{\"status\":\"ok\",\"faceId\":\"face000001\",\"name\":\"太郎\"}")),
+                    new StreamingResponseHandler() {
+                        @Override
+                        public void onTextDelta(String delta) {
+                            text.append(delta);
+                        }
+                    });
+
+            assertEquals("登録しました", text.toString());
+            assertTrue(body.get().contains("\"type\":\"function_call\""));
+            assertTrue(body.get().contains("\"call_id\":\"call_1\""));
+            assertTrue(body.get().contains("\"type\":\"function_call_output\""));
+            assertTrue(body.get().contains("\"output\":\"{\\\"status\\\":\\\"ok\\\",\\\"faceId\\\":\\\"face000001\\\",\\\"name\\\":\\\"太郎\\\"}\""));
         }
     }
 
@@ -125,6 +236,15 @@ class OpenAiResponsesLanguageModelTest {
         }
         body.append("data: [DONE]\n\n");
         return body.toString();
+    }
+
+    static ToolDefinition assignFaceNameTool() {
+        return new ToolDefinition(
+                "assign_face_name",
+                "顔IDに人物名を登録します。ユーザーが自分の名前を名乗ったときに呼び出します。",
+                """
+                        {"type":"object","properties":{"faceId":{"type":"string"},"name":{"type":"string"}},"required":["faceId","name"],"additionalProperties":false}\
+                        """);
     }
 
     private static class FakeServer implements AutoCloseable {
