@@ -409,8 +409,6 @@ public class MlServer implements AutoCloseable {
                     null,
                     false,
                     registered.faceId,
-                    registered.jsonPath,
-                    registered.imagePath,
                     request.presenceState(),
                     request.trackId());
         }
@@ -421,8 +419,6 @@ public class MlServer implements AutoCloseable {
                 (double) nearest.distance,
                 true,
                 registered.faceId,
-                registered.jsonPath,
-                registered.imagePath,
                 request.presenceState(),
                 request.trackId());
     }

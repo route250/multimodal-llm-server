@@ -11,14 +11,12 @@ public class FacePossibility {
             this.distance = distance;
         }
     }
+    public final String trackId;
     public final String faceId;
-    public final String jsonPath;
-    public final String imagePath;
     public final FacePossibility.PersonPossibility[] personPossibilities;
-    public FacePossibility(String faceId, String jsonPath, String imagePath, FacePossibility.PersonPossibility[] p ) {
+    public FacePossibility(String trackId, String faceId, FacePossibility.PersonPossibility[] p ) {
+        this.trackId = trackId;
         this.faceId = faceId;
-        this.jsonPath = jsonPath;
-        this.imagePath = imagePath;
         this.personPossibilities = p;
     }
 
