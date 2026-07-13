@@ -23,29 +23,35 @@ public record FaceEventResult(
         // 顔イベント画像を保存した JPEG ファイルの絶対パスです。HTTP レスポンスに出します。SSE には出しません。
         String imagePath,
         // 顔の在室状態です。SSE の state と会話履歴追加判定に使います。
-        String presenceState) {
+        String presenceState,
+        // ページ表示中だけ有効な、ブラウザが発行した顔トラッキング ID です。
+        String trackId) {
     public static FaceEventResult unknown() {
         return unknown(null);
     }
 
     public static FaceEventResult unknown(Double distance) {
-        return new FaceEventResult("accepted", "unknown", "unknown", distance, false, "unknown", null, null, "person-entered");
+        return new FaceEventResult("accepted", "unknown", "unknown", distance, false, "unknown", null, null, "person-entered", "legacy");
     }
 
     public static FaceEventResult unknownFace(String faceId) {
-        return new FaceEventResult("accepted", "unknown", "unknown", null, false, faceId, null, null, "person-entered");
+        return new FaceEventResult("accepted", "unknown", "unknown", null, false, faceId, null, null, "person-entered", "legacy");
     }
 
     public static FaceEventResult left() {
-        return new FaceEventResult("accepted", "none", "none", null, false, "none", null, null, "person-left");
+        return new FaceEventResult("accepted", "none", "none", null, false, "none", null, null, "person-left", "legacy");
     }
 
     public FaceEventResult withFiles(String jsonPath, String imagePath) {
-        return new FaceEventResult(status, personId, personName, distance, known, faceId, jsonPath, imagePath, presenceState);
+        return new FaceEventResult(status, personId, personName, distance, known, faceId, jsonPath, imagePath, presenceState, trackId);
     }
 
     public FaceEventResult withPresenceState(String presenceState) {
-        return new FaceEventResult(status, personId, personName, distance, known, faceId, jsonPath, imagePath, presenceState);
+        return new FaceEventResult(status, personId, personName, distance, known, faceId, jsonPath, imagePath, presenceState, trackId);
+    }
+
+    public FaceEventResult withTrackId(String trackId) {
+        return new FaceEventResult(status, personId, personName, distance, known, faceId, jsonPath, imagePath, presenceState, trackId);
     }
 
     public String toJson() {
@@ -55,6 +61,7 @@ public record FaceEventResult(
                 "personName", personName,
                 "distance", distance,
                 "known", known,
+                "trackId", trackId,
                 "faceId", faceId,
                 "presenceState", presenceState,
                 "jsonPath", jsonPath,

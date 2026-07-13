@@ -25,6 +25,7 @@ export class ChatAudio {
         this.localResumeSilenceVadFrames = 8;
         this.audioContext = null;
         this.micStream = null;
+        this.standbyMicStream = null;
         this.micSource = null;
         this.micProcessor = null;
         this.resampler = null;
@@ -71,6 +72,37 @@ export class ChatAudio {
         return Boolean(this.audioContext);
     }
 
+    // 顔処理の開始を遅延するため、ローカル VAD とサーバ VAD の発話状態を公開する。
+    isSpeechActive() {
+        return new Set(["DETECTED", "TRAILING_SILENCE", "TURN_DETECTING", "TRANSCRIBING"])
+            .has(this.speechDetectionState);
+    }
+
+    // 現在の再生実装は AudioBufferSourceNode を即時開始するため、再生予定時刻との差は常に 0ms である。
+    // 将来 start(when) による予約再生へ変更した場合は、この値を予定時刻と currentTime の差へ置き換える。
+    playbackScheduleGapMs() {
+        return 0;
+    }
+
+    // 許可済みマイクを待機状態で保持し、必要になるまで音声入力を無効化する。
+    setStandbyMicrophone(stream) {
+        if (this.audioContext) {
+            throw new Error("microphone is already active");
+        }
+        this.standbyMicStream = stream;
+        this.standbyMicStream.getAudioTracks().forEach((track) => {
+            track.enabled = false;
+        });
+    }
+
+    // カメラ停止時に、待機中または利用中のマイク参照を破棄する。
+    releaseStandbyMicrophone() {
+        if (this.micStream === this.standbyMicStream) {
+            this.stopMicrophone();
+        }
+        this.standbyMicStream = null;
+    }
+
     async startMicrophone() {
         if (this.audioContext) {
             return;
@@ -79,7 +111,7 @@ export class ChatAudio {
         try {
             await this.preparePlayback();
             await this.ensureTenVadReady();
-            this.micStream = await navigator.mediaDevices.getUserMedia({
+            this.micStream = this.standbyMicStream || await navigator.mediaDevices.getUserMedia({
                 audio: {
                     channelCount: 1,
                     sampleRate: { ideal: this.targetSampleRate },
@@ -88,6 +120,9 @@ export class ChatAudio {
                     noiseSuppression: true,
                     autoGainControl: false
                 }
+            });
+            this.micStream.getAudioTracks().forEach((track) => {
+                track.enabled = true;
             });
             this.audioContext = new AudioContext();
             await this.audioContext.resume();
@@ -127,7 +162,13 @@ export class ChatAudio {
             this.micSource = null;
         }
         if (this.micStream) {
-            this.micStream.getTracks().forEach((track) => track.stop());
+            if (this.micStream === this.standbyMicStream) {
+                this.micStream.getAudioTracks().forEach((track) => {
+                    track.enabled = false;
+                });
+            } else {
+                this.micStream.getTracks().forEach((track) => track.stop());
+            }
             this.micStream = null;
         }
         if (this.audioContext) {

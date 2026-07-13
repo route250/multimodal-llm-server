@@ -107,6 +107,7 @@ public record ServerEvent(String type, String message, Instant timestamp) {
     public static ServerEvent facePresence(FaceEventResult result) {
         String json = Json.object(Json.fields(
                 "state", result.presenceState(),
+                "trackId", result.trackId(),
                 "faceId", result.faceId(),
                 "personId", result.personId(),
                 "personName", result.personName(),

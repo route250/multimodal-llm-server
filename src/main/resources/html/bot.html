@@ -294,6 +294,7 @@
             font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
             font-size: 11px;
             overflow-wrap: anywhere;
+            white-space: pre-wrap;
         }
 
         .subtitle {
@@ -414,30 +415,35 @@
     const overlay = document.getElementById("overlay");
     const overlayContext = overlay.getContext("2d");
     const debugText = document.getElementById("debug-text");
-    const sampleCanvas = document.createElement("canvas");
-    const sampleContext = sampleCanvas.getContext("2d", { willReadFrequently: true });
     const cropCanvas = document.createElement("canvas");
     const cropContext = cropCanvas.getContext("2d");
-    sampleCanvas.width = 96;
-    sampleCanvas.height = 54;
+    const descriptorCanvas = document.createElement("canvas");
+    const descriptorContext = descriptorCanvas.getContext("2d");
 
     let events = null;
     let stream = null;
     let faceTimer = 0;
-    let previousFrame = null;
     let botRunning = false;
     let modelsReady = false;
     let detecting = false;
-    let lastDetectionAt = 0;
-    let lastFaceSeenAt = 0;
-    let lastFaceSentAt = 0;
-    let nearFaceFrameCount = 0;
-    let farFaceFrameCount = 0;
-    let missedFaceFrameCount = 0;
     let eventSequence = 0;
     let personPresent = false;
     let faceAnimationSequence = 0;
     let subtitleClearTimer = 0;
+    let trackSequence = 0;
+    let lastFaceProcessAt = 0;
+    let vadDeferredAt = 0;
+    let skipNextFaceProcess = false;
+    let faceLoadLevel = 0;
+    let overloadCount = 0;
+    const faceProcessDurations = [];
+    const faceTracks = new Map();
+    const faceLoadProfiles = [
+        { periodMs: 250, inputSize: 416, descriptorIntervalMs: 1000 },
+        { periodMs: 500, inputSize: 320, descriptorIntervalMs: 1000 },
+        { periodMs: 1000, inputSize: 224, descriptorIntervalMs: 2000 },
+        { periodMs: 2000, inputSize: 160, descriptorIntervalMs: 4000 },
+    ];
 
     const selectedGroup = new URLSearchParams(location.search).get("group");
     if ([...groupInput.options].some((option) => option.value === selectedGroup)) {
@@ -523,11 +529,13 @@
     function stopBot() {
         startBot.disabled = true;
         botRunning = false;
-        if (personPresent) {
-            markPersonLeft();
-        } else {
-            resetFaceState();
+        for (const track of faceTracks.values()) {
+            if (track.entered) {
+                sendPersonLeft(track);
+            }
         }
+        markAllPeopleLeft();
+        resetFaceState();
         stopCamera();
         if (audio.isMicrophoneActive()) {
             audio.stopMicrophone();
@@ -558,19 +566,27 @@
             return;
         }
         stream = await navigator.mediaDevices.getUserMedia({
-            audio: false,
+            audio: {
+                channelCount: 1,
+                sampleRate: { ideal: 16000 },
+                echoCancellation: true,
+                echoCancellationType: "system",
+                noiseSuppression: true,
+                autoGainControl: false,
+            },
             video: {
                 facingMode: "user",
                 width: { ideal: 1280 },
                 height: { ideal: 720 },
             },
         });
+        audio.setStandbyMicrophone(stream);
         video.srcObject = stream;
         await video.play();
         resizeOverlay();
         window.addEventListener("resize", resizeOverlay);
-        previousFrame = null;
-        faceTimer = window.setInterval(processCameraFrame, 400);
+        lastFaceProcessAt = 0;
+        scheduleFaceProcess();
         updateDebugText("model: ready / camera: running");
     }
 
@@ -581,135 +597,264 @@
         }
         window.removeEventListener("resize", resizeOverlay);
         if (stream) {
+            audio.releaseStandbyMicrophone();
             stream.getTracks().forEach((track) => track.stop());
             stream = null;
         }
         video.pause();
         video.srcObject = null;
-        previousFrame = null;
         detecting = false;
-        lastDetectionAt = 0;
-        lastFaceSeenAt = 0;
-        lastFaceSentAt = 0;
-        nearFaceFrameCount = 0;
-        farFaceFrameCount = 0;
-        missedFaceFrameCount = 0;
+        lastFaceProcessAt = 0;
+        vadDeferredAt = 0;
+        skipNextFaceProcess = false;
+        faceTracks.clear();
         overlayContext.clearRect(0, 0, overlay.width, overlay.height);
         updateDebugText(modelsReady ? "model: ready / camera: stopped" : "model: loading / camera: stopped");
+    }
+
+    function scheduleFaceProcess() {
+        if (!botRunning || !stream) {
+            return;
+        }
+        const delay = Math.max(0, faceLoadProfiles[faceLoadLevel].periodMs - (performance.now() - lastFaceProcessAt));
+        faceTimer = window.setTimeout(async () => {
+            await processCameraFrame();
+            scheduleFaceProcess();
+        }, delay);
     }
 
     async function processCameraFrame() {
         if (!botRunning || !modelsReady || detecting || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
             return;
         }
-        sampleContext.drawImage(video, 0, 0, sampleCanvas.width, sampleCanvas.height);
-        const currentFrame = sampleContext.getImageData(0, 0, sampleCanvas.width, sampleCanvas.height);
-        const motion = measureMotion(previousFrame, currentFrame);
-        previousFrame = currentFrame;
         const now = performance.now();
-        if (!motion.changed && now - lastDetectionAt < 3000) {
-            if (personPresent && now - lastFaceSeenAt > 9000) {
-                markPersonLeft();
+        if (audio.isSpeechActive()) {
+            vadDeferredAt ||= now;
+            if (now - vadDeferredAt < 1000) {
+                lastFaceProcessAt = now;
+                return;
             }
+        } else {
+            vadDeferredAt = 0;
+        }
+        if (skipNextFaceProcess) {
+            skipNextFaceProcess = false;
+            lastFaceProcessAt = now;
             return;
         }
         detecting = true;
-        lastDetectionAt = now;
+        lastFaceProcessAt = now;
         try {
-            await detectFace(motion, now);
+            await detectFaces(now);
         } finally {
             detecting = false;
+            recordFaceProcessDuration(performance.now() - now);
         }
     }
 
-    function measureMotion(previous, current) {
-        if (!previous) {
-            return { changed: true, mean: 255, ratio: 1 };
+    async function detectFaces(now) {
+        const overlaySize = resizeOverlay();
+        const profile = faceLoadProfiles[faceLoadLevel];
+        const options = new faceapi.TinyFaceDetectorOptions({ inputSize: profile.inputSize, scoreThreshold: 0.5 });
+        const rawDetections = await faceapi.detectAllFaces(video, options);
+        if (!botRunning) {
+            return;
         }
-        const previousData = previous.data;
-        const currentData = current.data;
-        let total = 0;
-        let changedPixels = 0;
-        const pixelCount = sampleCanvas.width * sampleCanvas.height;
-        for (let index = 0; index < currentData.length; index += 4) {
-            const previousGray = previousData[index] * 0.299 + previousData[index + 1] * 0.587 + previousData[index + 2] * 0.114;
-            const currentGray = currentData[index] * 0.299 + currentData[index + 1] * 0.587 + currentData[index + 2] * 0.114;
-            const diff = Math.abs(currentGray - previousGray);
-            total += diff;
-            if (diff >= 18) {
-                changedPixels += 1;
+        const detections = rawDetections.map((detection) => ({ detection, box: detection.box, score: detection.score }));
+        const assignments = associateTracks(detections, now);
+        for (const { track, detection, isNew } of assignments) {
+            updateTrack(track, detection, now);
+            if (track.farFrames >= 12) {
+                faceTracks.delete(track.trackId);
+                if (track.entered) {
+                    sendPersonLeft(track);
+                }
+                continue;
+            }
+            if (isNew || shouldRefreshDescriptor(track, profile, now)) {
+                await updateTrackDescriptor(track, detection, options, now);
+            }
+            await sendTrackEventIfNeeded(track, detection, now);
+        }
+        expireUnmatchedTracks(assignments, now);
+        drawTrackedFaces(overlaySize);
+        updateFaceDebug(detections.length);
+    }
+
+    function associateTracks(detections, now) {
+        const candidates = [];
+        const unmatchedTrackIds = new Set(faceTracks.keys());
+        const unmatchedDetectionIndexes = new Set(detections.map((_, index) => index));
+        for (const track of faceTracks.values()) {
+            for (const [index, detection] of detections.entries()) {
+                const candidate = associationCandidate(track, detection);
+                if (candidate) {
+                    candidates.push({ track, detection, index, cost: candidate.cost });
+                }
             }
         }
-        const mean = total / pixelCount;
-        const ratio = changedPixels / pixelCount;
+        candidates.sort((left, right) => left.cost - right.cost);
+        const assignments = [];
+        for (const candidate of candidates) {
+            if (!unmatchedTrackIds.has(candidate.track.trackId) || !unmatchedDetectionIndexes.has(candidate.index)) {
+                continue;
+            }
+            unmatchedTrackIds.delete(candidate.track.trackId);
+            unmatchedDetectionIndexes.delete(candidate.index);
+            assignments.push({ track: candidate.track, detection: candidate.detection, isNew: false });
+        }
+        for (const index of unmatchedDetectionIndexes) {
+            const track = createFaceTrack(detections[index], now);
+            faceTracks.set(track.trackId, track);
+            assignments.push({ track, detection: detections[index], isNew: true });
+        }
+        for (const trackId of unmatchedTrackIds) {
+            faceTracks.get(trackId).missedFrames += 1;
+        }
+        return assignments;
+    }
+
+    function associationCandidate(track, detection) {
+        const predicted = predictedBox(track);
+        const centerDistance = boxCenterDistance(predicted, detection.box);
+        const diagonal = Math.hypot(video.videoWidth, video.videoHeight);
+        const overlap = iou(predicted, detection.box);
+        if (centerDistance / diagonal > 0.15 && overlap < 0.1) {
+            return null;
+        }
+        const distance = track.descriptor && detection.descriptor
+            ? descriptorDistance(track.descriptor, detection.descriptor)
+            : 0;
+        if (distance > 0.45) {
+            return null;
+        }
+        const sizeCost = Math.abs(boxArea(track.box) - boxArea(detection.box)) / Math.max(1, boxArea(track.box));
+        return { cost: centerDistance / diagonal + sizeCost + distance };
+    }
+
+    function createFaceTrack(detection, now) {
         return {
-            changed: mean >= 6.0 && ratio >= 0.04,
-            mean,
-            ratio,
+            trackId: `track-${++trackSequence}`,
+            box: { ...detection.box },
+            descriptorBoxArea: 0,
+            velocity: { x: 0, y: 0 },
+            descriptor: null,
+            lastSeenAt: now,
+            lastDescriptorAt: 0,
+            missedFrames: 0,
+            matchedFrames: 1,
+            farFrames: 0,
+            confirmed: false,
+            entered: false,
+            lastEventAt: 0,
+            personId: null,
+            faceId: null,
         };
     }
 
-    async function detectFace(motion, now) {
-        if (!botRunning) {
+    function updateTrack(track, detection, now) {
+        const previousCenter = boxCenter(track.box);
+        const nextCenter = boxCenter(detection.box);
+        const elapsed = Math.max(1, now - track.lastSeenAt);
+        track.velocity = { x: (nextCenter.x - previousCenter.x) / elapsed, y: (nextCenter.y - previousCenter.y) / elapsed };
+        track.box = { ...detection.box };
+        track.lastSeenAt = now;
+        track.missedFrames = 0;
+        track.matchedFrames += 1;
+        track.confirmed = track.matchedFrames >= 2;
+        track.farFrames = detection.box.width / video.videoWidth < 0.15 ? track.farFrames + 1 : 0;
+    }
+
+    function predictedBox(track) {
+        const elapsed = Math.max(0, performance.now() - track.lastSeenAt);
+        return { ...track.box, x: track.box.x + track.velocity.x * elapsed, y: track.box.y + track.velocity.y * elapsed };
+    }
+
+    function shouldRefreshDescriptor(track, profile, now) {
+        return !track.descriptor
+            || now - track.lastDescriptorAt >= profile.descriptorIntervalMs
+            || Math.abs(boxArea(track.box) - track.descriptorBoxArea) / Math.max(1, track.descriptorBoxArea) >= 0.5;
+    }
+
+    async function updateTrackDescriptor(track, detection, options, now) {
+        const descriptorDetection = await detectDescriptor(detection.box, options);
+        if (!descriptorDetection || !botRunning) {
             return;
         }
-        const overlaySize = resizeOverlay();
-        const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.5 });
-        const detections = await faceapi.detectAllFaces(video, options).withFaceLandmarks().withFaceDescriptors();
-        if (!botRunning) {
+        track.descriptor = Float32Array.from(descriptorDetection.descriptor);
+        track.lastDescriptorAt = now;
+        track.descriptorBoxArea = boxArea(detection.box);
+    }
+
+    async function detectDescriptor(box, options) {
+        const margin = box.width * 0.3;
+        const sx = Math.max(0, box.x - margin);
+        const sy = Math.max(0, box.y - margin);
+        const sw = Math.min(video.videoWidth - sx, box.width + margin * 2);
+        const sh = Math.min(video.videoHeight - sy, box.height + margin * 2);
+        descriptorCanvas.width = Math.max(1, Math.round(sw));
+        descriptorCanvas.height = Math.max(1, Math.round(sh));
+        descriptorContext.drawImage(video, sx, sy, sw, sh, 0, 0, descriptorCanvas.width, descriptorCanvas.height);
+        return faceapi.detectSingleFace(descriptorCanvas, options).withFaceLandmarks().withFaceDescriptor();
+    }
+
+    async function sendTrackEventIfNeeded(track, detection, now) {
+        const widthRatio = detection.box.width / video.videoWidth;
+        const areaRatio = boxArea(detection.box) / (video.videoWidth * video.videoHeight);
+        if (!track.confirmed || !track.descriptor || widthRatio < 0.20) {
             return;
         }
-        overlayContext.clearRect(0, 0, overlaySize.width, overlaySize.height);
-        if (detections.length === 0) {
-            updateDebugText(`faces=0 motion=${motion.mean.toFixed(1)}/${(motion.ratio * 100).toFixed(1)}%`);
-            missedFaceFrameCount += 1;
-            if (!personPresent || missedFaceFrameCount > 3) {
-                nearFaceFrameCount = 0;
-            }
-            if (personPresent && now - lastFaceSeenAt > 9000) {
-                markPersonLeft();
-            }
-            return;
+        if (!track.entered) {
+            track.entered = true;
+            track.lastEventAt = now;
+            await sendFaceEvent("person-entered", track, detection, widthRatio, areaRatio);
+            activatePersonPresence();
+        } else if (now - track.lastEventAt >= 8000) {
+            track.lastEventAt = now;
+            await sendFaceEvent("person-updated", track, detection, widthRatio, areaRatio);
         }
-        missedFaceFrameCount = 0;
-        const target = detections
-            .map((item) => ({ item, area: item.detection.box.width * item.detection.box.height }))
-            .sort((left, right) => right.area - left.area)[0].item;
-        const resized = faceapi.resizeResults([target], overlaySize)[0];
-        drawTargetFace(resized);
-        const faceWidthRatio = target.detection.box.width / video.videoWidth;
-        const faceAreaRatio = (target.detection.box.width * target.detection.box.height) / (video.videoWidth * video.videoHeight);
-        lastFaceSeenAt = now;
-        updateDebugText(`faces=${detections.length} width=${(faceWidthRatio * 100).toFixed(1)}% score=${target.detection.score.toFixed(2)}`);
-        if (faceWidthRatio >= 0.20) {
-            nearFaceFrameCount += 1;
-            farFaceFrameCount = 0;
-            if (nearFaceFrameCount < 2) {
-                return;
+    }
+
+    function expireUnmatchedTracks(assignments, now) {
+        const matchedTrackIds = new Set(assignments.map(({ track }) => track.trackId));
+        for (const track of [...faceTracks.values()]) {
+            if (matchedTrackIds.has(track.trackId)) {
+                continue;
             }
-            if (!personPresent) {
-                await handlePersonEntered(target, faceWidthRatio, faceAreaRatio);
-            } else if (now - lastFaceSentAt >= 8000) {
-                lastFaceSentAt = now;
-                await sendFaceEvent("person-updated", target, faceWidthRatio, faceAreaRatio);
-            }
-        } else if (faceWidthRatio < 0.15) {
-            nearFaceFrameCount = 0;
-            farFaceFrameCount += 1;
-            if (farFaceFrameCount >= 12) {
-                markPersonLeft();
+            if (now - track.lastSeenAt >= 9000 || track.farFrames >= 12) {
+                faceTracks.delete(track.trackId);
+                if (track.entered) {
+                    sendPersonLeft(track);
+                }
             }
         }
     }
 
-    async function handlePersonEntered(target, faceWidthRatio, faceAreaRatio) {
-        if (!botRunning) {
+    function drawTrackedFaces(overlaySize) {
+        overlayContext.clearRect(0, 0, overlaySize.width, overlaySize.height);
+        for (const track of faceTracks.values()) {
+            const scaleX = overlaySize.width / video.videoWidth;
+            const scaleY = overlaySize.height / video.videoHeight;
+            overlayContext.strokeStyle = track.entered ? "#315f39" : "#666666";
+            overlayContext.lineWidth = 3;
+            overlayContext.strokeRect(track.box.x * scaleX, track.box.y * scaleY, track.box.width * scaleX, track.box.height * scaleY);
+            overlayContext.fillStyle = overlayContext.strokeStyle;
+            overlayContext.fillText(track.trackId, track.box.x * scaleX, Math.max(12, track.box.y * scaleY - 4));
+        }
+    }
+
+    function activatePersonPresence() {
+        if (personPresent || !botRunning) {
             return;
         }
         personPresent = true;
         const animationSequence = ++faceAnimationSequence;
         document.body.classList.add("person-present");
         face.classList.remove("awake", "blink", "eyes-opening");
+        runPresenceAnimation(animationSequence);
+    }
+
+    async function runPresenceAnimation(animationSequence) {
         await wait(300);
         if (animationSequence !== faceAnimationSequence || !personPresent || !botRunning) {
             return;
@@ -725,11 +870,6 @@
         if (animationSequence !== faceAnimationSequence || !personPresent || !botRunning) {
             return;
         }
-        lastFaceSentAt = performance.now();
-        await sendFaceEvent("person-entered", target, faceWidthRatio, faceAreaRatio);
-        if (animationSequence !== faceAnimationSequence || !personPresent || !botRunning) {
-            return;
-        }
         if (!audio.isMicrophoneActive()) {
             await audio.startMicrophone();
         }
@@ -739,23 +879,17 @@
         await blinkTwice(animationSequence);
     }
 
-    function drawTargetFace(detection) {
-        const box = detection.detection.box;
-        overlayContext.strokeStyle = "#315f39";
-        overlayContext.lineWidth = 3;
-        overlayContext.strokeRect(box.x, box.y, box.width, box.height);
-    }
-
-    async function sendFaceEvent(eventType, detection, faceWidthRatio, faceAreaRatio) {
-        const imageDataUrl = cropFaceImage(detection.detection.box);
+    async function sendFaceEvent(eventType, track, detection, faceWidthRatio, faceAreaRatio) {
+        const imageDataUrl = cropFaceImage(detection.box);
         const payload = {
             eventType,
             eventId: `${Date.now()}-${++eventSequence}`,
             clientTimestamp: new Date().toISOString(),
+            trackId: track.trackId,
             faceWidthRatio,
             faceAreaRatio,
-            detectionScore: detection.detection.score,
-            descriptor: Array.from(detection.descriptor),
+            detectionScore: detection.score,
+            descriptor: Array.from(track.descriptor),
             imageDataUrl,
         };
         const response = await fetch(`/face/event?group=${encodeURIComponent(groupInput.value)}&sessionId=${encodeURIComponent(sessionId)}`, {
@@ -765,7 +899,9 @@
         });
         if (response.ok) {
             const result = await response.json();
-            presence.textContent = result.known ? `${result.personName} / ${(result.distance || 0).toFixed(3)}` : "unknown person";
+            track.personId = result.known ? result.personId : null;
+            track.faceId = result.faceId || null;
+            presence.textContent = `${faceTracks.size} person(s) / ${result.known ? result.personName : "unknown"}`;
         }
     }
 
@@ -782,15 +918,24 @@
         return cropCanvas.toDataURL("image/jpeg", 0.75);
     }
 
-    function markPersonLeft() {
+    function sendPersonLeft(track) {
+        fetch(`/face/event?group=${encodeURIComponent(groupInput.value)}&sessionId=${encodeURIComponent(sessionId)}`, {
+            method: "POST",
+            headers: {"Content-Type": "application/json; charset=utf-8"},
+            body: JSON.stringify({ eventType: "person-left", eventId: `${Date.now()}-${++eventSequence}`, clientTimestamp: new Date().toISOString(), trackId: track.trackId }),
+        }).catch(() => {});
+        if ([...faceTracks.values()].some((item) => item.entered)) {
+            return;
+        }
+        markAllPeopleLeft();
+    }
+
+    function markAllPeopleLeft() {
         if (!personPresent) {
             return;
         }
         personPresent = false;
         const animationSequence = ++faceAnimationSequence;
-        nearFaceFrameCount = 0;
-        farFaceFrameCount = 0;
-        missedFaceFrameCount = 0;
         presence.textContent = "no person";
         document.body.classList.remove("person-present");
         if (audio.isMicrophoneActive()) {
@@ -801,23 +946,12 @@
                 face.classList.remove("awake", "blink", "eyes-opening");
             }
         }, 400);
-        fetch(`/face/event?group=${encodeURIComponent(groupInput.value)}&sessionId=${encodeURIComponent(sessionId)}`, {
-            method: "POST",
-            headers: {"Content-Type": "application/json; charset=utf-8"},
-            body: JSON.stringify({
-                eventType: "person-left",
-                eventId: `${Date.now()}-${++eventSequence}`,
-                clientTimestamp: new Date().toISOString()
-            }),
-        }).catch(() => {});
     }
 
     function resetFaceState() {
         personPresent = false;
         faceAnimationSequence += 1;
-        nearFaceFrameCount = 0;
-        farFaceFrameCount = 0;
-        missedFaceFrameCount = 0;
+        faceTracks.clear();
         presence.textContent = "no person";
         document.body.classList.remove("person-present");
         face.classList.remove("awake", "blink", "eyes-opening");
@@ -825,6 +959,10 @@
 
     function handleFacePresence(payload) {
         if (payload.state === "person-left") {
+            if ([...faceTracks.values()].some((track) => track.entered)) {
+                presence.textContent = `${[...faceTracks.values()].filter((track) => track.entered).length} person(s)`;
+                return;
+            }
             presence.textContent = "no person";
             setSubtitle("だれもいなくなりました", 1800);
             return;
@@ -899,6 +1037,75 @@
 
     function updateDebugText(message) {
         debugText.textContent = message;
+    }
+
+    function updateFaceDebug(faceCount) {
+        const lines = [
+            `face=${faceCount} load=${faceLoadLevel} avg=${average(faceProcessDurations, 10).toFixed(0)}ms`,
+            ...[...faceTracks.values()].map((track) => `${track.trackId} ${track.faceId || "none"}`),
+        ];
+        updateDebugText(lines.join("\n"));
+    }
+
+    function boxArea(box) {
+        return box.width * box.height;
+    }
+
+    function boxCenter(box) {
+        return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    }
+
+    function boxCenterDistance(left, right) {
+        const a = boxCenter(left);
+        const b = boxCenter(right);
+        return Math.hypot(a.x - b.x, a.y - b.y);
+    }
+
+    function iou(left, right) {
+        const overlapWidth = Math.max(0, Math.min(left.x + left.width, right.x + right.width) - Math.max(left.x, right.x));
+        const overlapHeight = Math.max(0, Math.min(left.y + left.height, right.y + right.height) - Math.max(left.y, right.y));
+        const overlap = overlapWidth * overlapHeight;
+        return overlap / Math.max(1, boxArea(left) + boxArea(right) - overlap);
+    }
+
+    function descriptorDistance(left, right) {
+        let sum = 0;
+        for (let index = 0; index < left.length; index += 1) {
+            const difference = left[index] - right[index];
+            sum += difference * difference;
+        }
+        return Math.sqrt(sum);
+    }
+
+    function average(values, count) {
+        const selected = values.slice(-count);
+        return selected.length === 0 ? 0 : selected.reduce((sum, value) => sum + value, 0) / selected.length;
+    }
+
+    function recordFaceProcessDuration(duration) {
+        faceProcessDurations.push(duration);
+        if (faceProcessDurations.length > 20) {
+            faceProcessDurations.shift();
+        }
+        const profile = faceLoadProfiles[faceLoadLevel];
+        if (average(faceProcessDurations, 10) > profile.periodMs * 0.7) {
+            overloadCount += 1;
+            if (overloadCount >= 3 && faceLoadLevel < faceLoadProfiles.length - 1) {
+                faceLoadLevel += 1;
+                overloadCount = 0;
+            }
+        } else {
+            overloadCount = 0;
+        }
+        if (faceLoadLevel > 0
+            && average(faceProcessDurations, 20) < profile.periodMs * 0.35
+            && audio.playbackScheduleGapMs() < 50) {
+            faceLoadLevel -= 1;
+            overloadCount = 0;
+        }
+        if (audio.playbackScheduleGapMs() > 100) {
+            skipNextFaceProcess = true;
+        }
     }
 </script>
 </body>

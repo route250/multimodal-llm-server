@@ -27,10 +27,12 @@ import java.util.regex.PatternSyntaxException;
  * OpenAI Responses API へ問い合わせる LLM クライアントです。
  */
 public class OpenAiResponsesLanguageModel implements LanguageModel {
-    private static final URI DEFAULT_BASE_URI = URI.create("https://api.openai.com/v1");
-    private static final String DEFAULT_MODEL_PATTERN = "gpt-4.1-nano";
-    private static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(120);
-    private static final String DEFAULT_SYSTEM_PROMPT = "ボクはおしゃべり大好きなAI。名前はリキッドリリ。口癖は「君たちはいつもそうだ」「わけがわからないよ」。カメラ情報で話す相手を認識したら挨拶したり文句言ったりするんだよ。";
+    public static final URI DEFAULT_BASE_URI = URI.create("http://127.0.0.1:8767/v1");
+    public static final String DEFAULT_MODEL_PATTERN = "LFM2\\.5.*JP";
+    public static final URI OPENAI_BASE_URI = URI.create("https://api.openai.com/v1");
+    public static final String OPENAI_MODEL_PATTERN = "gpt-4.1-nano";
+    public static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(120);
+    public static final String DEFAULT_SYSTEM_PROMPT = "ボクはおしゃべり大好きなAI。名前はリキッドリリ。口癖は「君たちはいつもそうだ」「わけがわからないよ」。カメラ情報で話す相手を認識したら挨拶したり文句言ったりするんだよ。";
     private static final Pattern OUTPUT_TEXT_PATTERN =
             Pattern.compile("\"output_text\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"", Pattern.DOTALL);
     private static final Pattern TEXT_PATTERN =
@@ -72,12 +74,12 @@ public class OpenAiResponsesLanguageModel implements LanguageModel {
     }
 
     public static Config fromEnvironment() {
-        return new Config(
-                URI.create(env("LLAMACPP_BASE_URL", DEFAULT_BASE_URI.toString())),
-                env("LLM_MODEL", DEFAULT_MODEL_PATTERN),
-                env("LLM_SYSTEM_PROMPT", DEFAULT_SYSTEM_PROMPT),
-                Duration.ofSeconds(Long.parseLong(env("LLM_TIMEOUT_SECONDS", Long.toString(DEFAULT_TIMEOUT.toSeconds())))),
-                env("OPENAI_API_KEY", ""));
+        URI baseUrl = URI.create(env("LLAMACPP_BASE_URL", DEFAULT_BASE_URI.toString()));
+        String model = env("LLM_MODEL", baseUrl.getHost().contains("openai") ? OPENAI_MODEL_PATTERN : DEFAULT_MODEL_PATTERN);
+        return new Config( baseUrl, model,
+            env("LLM_SYSTEM_PROMPT", DEFAULT_SYSTEM_PROMPT),
+            Duration.ofSeconds(Long.parseLong(env("LLM_TIMEOUT_SECONDS", Long.toString(DEFAULT_TIMEOUT.toSeconds())))),
+            "");
     }
 
     /**
@@ -457,8 +459,14 @@ public class OpenAiResponsesLanguageModel implements LanguageModel {
     }
 
     private void addAuthorization(HttpRequest.Builder requestBuilder) {
-        if (!apiKey.isBlank()) {
-            requestBuilder.header("Authorization", "Bearer " + apiKey);
+        String auth_key = !apiKey.isBlank() ? apiKey.strip() : null;
+        if( auth_key == null ) {
+            if( this.responsesEndpoint.getHost().contains("openai") ) {
+                auth_key = env("OPENAI_API_KEY", "").strip();
+            }
+        }
+        if (auth_key!=null&&auth_key.length()>0) {
+            requestBuilder.header("Authorization", "Bearer " + auth_key);
         }
     }
 

@@ -70,6 +70,8 @@ public class ChatClient {
     private final Map<AssistantChunkKey, PendingAssistantChunk> pendingAssistantChunks = new LinkedHashMap<>();
     private final Map<Long, Integer> rememberedAssistantMessageIndexes = new HashMap<>();
     private final Map<Long, String> partialTranscripts = new LinkedHashMap<>();
+    // 同一セッション内で、入室済みの顔トラックを区別する。
+    private final Map<String, FaceEventResult> activeFaceTracks = new LinkedHashMap<>();
     private CompletableFuture<Void> audioTaskTail = CompletableFuture.completedFuture(null);
     private Future<?> activeAssistantTask;
     private long currentAssistantTurnId;
@@ -233,8 +235,17 @@ public class ChatClient {
     }
 
     public void handleFacePresence(FaceEventResult result) {
+        boolean finalPersonLeft;
+        synchronized (conversationLock) {
+            if ("person-left".equals(result.presenceState())) {
+                activeFaceTracks.remove(result.trackId());
+            } else if ("person-entered".equals(result.presenceState())) {
+                activeFaceTracks.put(result.trackId(), result);
+            }
+            finalPersonLeft = "person-left".equals(result.presenceState()) && activeFaceTracks.isEmpty();
+        }
         ChatMessage faceEventMessage = null;
-        if (!"person-updated".equals(result.presenceState())) {
+        if ("person-entered".equals(result.presenceState()) || finalPersonLeft) {
             String eventText = facePresenceHistoryText(result);
             faceEventMessage = new ChatMessage("system", eventText);
             synchronized (conversationLock) {

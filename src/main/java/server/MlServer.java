@@ -396,7 +396,7 @@ public class MlServer implements AutoCloseable {
 
     private FaceEventResult faceEventResult(FaceEventRequest request) {
         if ("person-left".equals(request.eventType())) {
-            return FaceEventResult.left();
+            return FaceEventResult.left().withTrackId(request.trackId());
         }
 
         FacePossibility registered = faceDB.register(request.descriptor(), request.imageDataUrl());
@@ -411,7 +411,8 @@ public class MlServer implements AutoCloseable {
                     registered.faceId,
                     registered.jsonPath,
                     registered.imagePath,
-                    request.presenceState());
+                    request.presenceState(),
+                    request.trackId());
         }
         return new FaceEventResult(
                 "accepted",
@@ -422,7 +423,8 @@ public class MlServer implements AutoCloseable {
                 registered.faceId,
                 registered.jsonPath,
                 registered.imagePath,
-                request.presenceState());
+                request.presenceState(),
+                request.trackId());
     }
 
     private static FacePossibility.PersonPossibility nearest(FacePossibility.PersonPossibility[] possibilities) {

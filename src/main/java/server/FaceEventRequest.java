@@ -11,17 +11,20 @@ import java.util.regex.Pattern;
  */
 record FaceEventRequest(
         String eventType,
+        String trackId,
         double[] descriptor,
         String imageDataUrl) {
     private static final Pattern DESCRIPTOR_PATTERN = Pattern.compile("\"descriptor\"\\s*:\\s*\\[([^\\]]*)]", Pattern.DOTALL);
 
     static FaceEventRequest fromJson(String body) {
         String eventType = JsonFields.stringOrDefault(body, "eventType", "person-detected");
+        String trackId = JsonFields.stringOrDefault(body, "trackId", "legacy");
         if ("person-left".equals(eventType)) {
-            return new FaceEventRequest(eventType, null, null);
+            return new FaceEventRequest(eventType, trackId, null, null);
         }
         return new FaceEventRequest(
                 eventType,
+                trackId,
                 descriptor(body),
                 JsonFields.string(body, "imageDataUrl"));
     }

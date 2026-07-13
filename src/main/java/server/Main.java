@@ -1,8 +1,10 @@
 package server;
 
-import audio.AudioDiagnostics;
 import java.io.IOException;
+
 import javax.net.ssl.SSLContext;
+
+import audio.AudioDiagnostics;
 
 public class Main {
     private static final String DEFAULT_HOST = "0.0.0.0";
@@ -10,6 +12,7 @@ public class Main {
 
     public static void main(String[] args) throws IOException {
         AudioDiagnostics.clearOnStartup();
+        new StartupCheck().verify();
         SSLContext sslContext = LocalHttpsCertificate.sslContext();
         MlServer server = new MlServer(resolveHost(args), resolvePort(args), sslContext);
         server.start();
