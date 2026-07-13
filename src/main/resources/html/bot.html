@@ -677,7 +677,7 @@
             await sendTrackEventIfNeeded(track, detection, now);
         }
         expireUnmatchedTracks(assignments, now);
-        drawTrackedFaces(overlaySize);
+        drawTrackedFaces(overlaySize, now);
         updateFaceDebug(detections.length);
     }
 
@@ -728,14 +728,15 @@
         if (distance > 0.45) {
             return null;
         }
-        const sizeCost = Math.abs(boxArea(track.box) - boxArea(detection.box)) / Math.max(1, boxArea(track.box));
+        const sizeCost = Math.abs(boxArea(track.detection.box) - boxArea(detection.box)) / Math.max(1, boxArea(track.detection.box));
         return { cost: centerDistance / diagonal + sizeCost + distance };
     }
 
     function createFaceTrack(detection, now) {
         return {
             trackId: `track-${++trackSequence}`,
-            box: { ...detection.box },
+            // face-api の検出結果を保持し、プレビュー用矩形は face-api の座標変換で描画する。
+            detection: detection.detection,
             descriptorBoxArea: 0,
             velocity: { x: 0, y: 0 },
             descriptor: null,
@@ -753,11 +754,11 @@
     }
 
     function updateTrack(track, detection, now) {
-        const previousCenter = boxCenter(track.box);
+        const previousCenter = boxCenter(track.detection.box);
         const nextCenter = boxCenter(detection.box);
         const elapsed = Math.max(1, now - track.lastSeenAt);
         track.velocity = { x: (nextCenter.x - previousCenter.x) / elapsed, y: (nextCenter.y - previousCenter.y) / elapsed };
-        track.box = { ...detection.box };
+        track.detection = detection.detection;
         track.lastSeenAt = now;
         track.missedFrames = 0;
         track.matchedFrames += 1;
@@ -767,13 +768,14 @@
 
     function predictedBox(track) {
         const elapsed = Math.max(0, performance.now() - track.lastSeenAt);
-        return { ...track.box, x: track.box.x + track.velocity.x * elapsed, y: track.box.y + track.velocity.y * elapsed };
+        const box = track.detection.box;
+        return { ...box, x: box.x + track.velocity.x * elapsed, y: box.y + track.velocity.y * elapsed };
     }
 
     function shouldRefreshDescriptor(track, profile, now) {
         return !track.descriptor
             || now - track.lastDescriptorAt >= profile.descriptorIntervalMs
-            || Math.abs(boxArea(track.box) - track.descriptorBoxArea) / Math.max(1, track.descriptorBoxArea) >= 0.5;
+            || Math.abs(boxArea(track.detection.box) - track.descriptorBoxArea) / Math.max(1, track.descriptorBoxArea) >= 0.5;
     }
 
     async function updateTrackDescriptor(track, detection, options, now) {
@@ -830,17 +832,21 @@
         }
     }
 
-    function drawTrackedFaces(overlaySize) {
+    function drawTrackedFaces(overlaySize, now) {
         overlayContext.clearRect(0, 0, overlaySize.width, overlaySize.height);
         for (const track of faceTracks.values()) {
-            const scaleX = overlaySize.width / video.videoWidth;
-            const scaleY = overlaySize.height / video.videoHeight;
+            const resized = faceapi.resizeResults(track.detection, overlaySize);
+            const box = resized.box;
             overlayContext.strokeStyle = track.entered ? "#315f39" : "#666666";
-            overlayContext.lineWidth = 3;
-            overlayContext.strokeRect(track.box.x * scaleX, track.box.y * scaleY, track.box.width * scaleX, track.box.height * scaleY);
+            // 特徴量が未取得なら点線、今回取得なら太線、それ以外は細線でトラック状態を示す。
+            const descriptorUpdatedThisFrame = track.lastDescriptorAt === now;
+            overlayContext.lineWidth = descriptorUpdatedThisFrame ? 3 : 1;
+            overlayContext.setLineDash(track.descriptor ? [] : [6, 4]);
+            overlayContext.strokeRect(box.x, box.y, box.width, box.height);
             overlayContext.fillStyle = overlayContext.strokeStyle;
-            overlayContext.fillText(track.trackId, track.box.x * scaleX, Math.max(12, track.box.y * scaleY - 4));
+            overlayContext.fillText(track.trackId, box.x, Math.max(12, box.y - 4));
         }
+        overlayContext.setLineDash([]);
     }
 
     function activatePersonPresence() {
