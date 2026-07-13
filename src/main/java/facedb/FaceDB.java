@@ -49,8 +49,11 @@ public class FaceDB {
                 // 先頭のプレフィックスをスキップ
                 for( ; st<ed && value.charAt(st)=='0'; st++);
                 try {
+                    if (st == ed) {
+                        return 0;
+                    }
                     return Long.parseLong(value.substring(st,ed));
-                } catch( Error ex ) {}
+                } catch( Exception ex ) {}
             }
         } catch( Throwable ex ) {
         }
@@ -69,8 +72,9 @@ public class FaceDB {
         return FACE_ID_PREFIX + String.format("%06d", faceIdx);
     }
 
-    private synchronized String createTrackId() throws IOException {
+    public synchronized String createTrackId() throws IOException {
         try {
+            Files.createDirectories(this.dbpath);
             // ディレクトリが作成できたら成功
             for( int i=0; i<1000; i++) {
                 String trackId = to_trackId( this.maxTrackIdx++ );
@@ -131,33 +135,35 @@ public class FaceDB {
             ex.printStackTrace();
         }
         // 最後の番号を探す
-        try( Stream<Path> st = Files.list(this.dbpath) ) {
-            for( Iterator<Path> it = st.iterator(); it.hasNext(); ) {
-                Path trackDir = it.next();
-                if( !Files.isDirectory(trackDir) ) continue;
-                String name = trackDir.getFileName().toString();
-                long trackIdx = to_trackIdx(name);
-                if( trackIdx>=0 ) {
-                    FaceTrack track = new FaceTrack(trackIdx);
-                    this.tracks.put(track.trackId,track);
-                    try( Stream<Path> stt = Files.list(trackDir) ) {
-                        for( Iterator<Path> iit = stt.iterator(); iit.hasNext(); ) {
-                            Path faceFile = iit.next();
-                            if( !Files.isRegularFile(faceFile) ) continue;
-                            long faceIdx = to_faceIdx( faceFile.getFileName().toString() );
-                            if( faceIdx>=0 ) {
-                                if( faceIdx>this.maxFaceIdx ) {
-                                    this.maxFaceIdx = faceIdx;
+        if( Files.isDirectory(this.dbpath) ) {
+            try( Stream<Path> st = Files.list(this.dbpath) ) {
+                for( Iterator<Path> trackIt = st.iterator(); trackIt.hasNext(); ) {
+                    Path trackDir = trackIt.next();
+                    if( !Files.isDirectory(trackDir) ) continue;
+                    String name = trackDir.getFileName().toString();
+                    long trackIdx = to_trackIdx(name);
+                    if( trackIdx>=0 ) {
+                        Path trackFile = trackDir.resolve(to_trackId(trackIdx)+".json");
+                        FaceTrack track = Files.isRegularFile(trackFile)
+                                ? new FaceTrack(trackIdx, Files.readString(trackFile, StandardCharsets.UTF_8))
+                                : new FaceTrack(trackIdx);
+                        this.tracks.put(track.trackId,track);
+                        try( Stream<Path> stt = Files.list(trackDir) ) {
+                            for( Iterator<Path> faceIt = stt.iterator(); faceIt.hasNext(); ) {
+                                Path faceDir = faceIt.next();
+                                if( !Files.isDirectory(faceDir) ) continue;
+                                long faceIdx = to_faceIdx( faceDir.getFileName().toString() );
+                                if( faceIdx>=0 ) {
+                                    this.maxFaceIdx = Math.max(this.maxFaceIdx, faceIdx + 1);
+                                    Path faceFile = faceDir.resolve(to_faceId(faceIdx)+".json");
+                                    String json = Files.readString(faceFile, StandardCharsets.UTF_8);
+                                    FaceSample face = new FaceSample(trackIdx, faceIdx, json );
+                                    track.add(face);
                                 }
-                                String json = Files.readString(faceFile, StandardCharsets.UTF_8);
-                                FaceSample face = new FaceSample(trackIdx, faceIdx, json );
-                                track.add(face);
                             }
                         }
                     }
-                }
-                if( trackIdx>this.maxTrackIdx ) {
-                    this.maxTrackIdx = trackIdx;
+                    this.maxTrackIdx = Math.max(this.maxTrackIdx, trackIdx + 1);
                 }
             }
         }
@@ -367,11 +373,12 @@ public class FaceDB {
             String json = Json.object(Json.fields(
                     "trackId", this.trackId,
                     "createdAt", this.createdAt,
-                    "personId", this.personId));
+                    "personId", externalPersonIdOrUnknown(this.personId)));
             return json;
         }
         public void save(Path dir ) throws IOException {
             Path trackDir = dir.resolve( this.trackId );
+            Files.createDirectories(trackDir);
             Path jsonPath = trackDir.resolve( this.trackId + ".json");
             String json = this.to_json();
             Files.writeString(jsonPath, json + System.lineSeparator(), StandardCharsets.UTF_8);
@@ -399,6 +406,9 @@ public class FaceDB {
         ArrayList<FacePossibility.PersonPossibility> possibilities = new ArrayList<>();
         for( FaceTrack track : this.tracks.values() ) {
             int personIdx = track.getPersonIdx();
+            if (personIdx < 0) {
+                continue;
+            }
             String name = personIdx < this.persons.size() ? this.persons.get(personIdx) : "";
             if (name == null || name.isBlank()) {
                 continue;
@@ -423,12 +433,13 @@ public class FaceDB {
         private final long createdAt;
         private double[] descriptor;
 
-        private FaceSample( long trackIdx, long faceIdx) {
+        private FaceSample( long trackIdx, long faceIdx, double[] descriptor) {
             this.trackIdx = trackIdx;
             this.trackId = to_trackId(trackIdx);
             this.faceIdx = faceIdx;
             this.faceId = to_faceId(faceIdx);
             this.createdAt = System.currentTimeMillis();
+            this.descriptor = descriptor;
         }
         private FaceSample(long trackIdx, long faceIdx, String json ) {
             this.trackIdx = trackIdx;
@@ -441,7 +452,7 @@ public class FaceDB {
         public String to_json() {
             String json = Json.object(Json.fields(
                 "trackId", this.trackId,
-                    "faceId", this.faceIdx,
+                    "faceId", this.faceId,
                     "createdAt", this.createdAt,
                     "descriptor", Json.raw(descriptorJson(this.descriptor))));
             return json;
@@ -460,11 +471,12 @@ public class FaceDB {
         FacePossibility.PersonPossibility[] possibilities = predict(descriptor);
         // メモリに保存
         String faceId = this.createFaceId(track.trackIdx);
-        FaceSample faceSample = new FaceSample(track.trackIdx,to_faceIdx(faceId));
+        FaceSample faceSample = new FaceSample(track.trackIdx,to_faceIdx(faceId),descriptor);
         track.add(faceSample);
         // ファイルに保存する
         Path trackDir = this.dbpath.resolve( track.trackId );
         Path faceDir = trackDir.resolve( faceSample.faceId );
+        Files.createDirectories(faceDir);
         Path jsonPath = faceDir.resolve( faceSample.faceId + ".json");
         String json = faceSample.to_json();
         Files.writeString(jsonPath, json + System.lineSeparator(), StandardCharsets.UTF_8);
@@ -475,13 +487,20 @@ public class FaceDB {
         return new FacePossibility( trackId, faceId, possibilities );
     }
     public synchronized void assign( String trackId, String name ) {
+        String normalizedName = normalizeName(name);
+        if (trackId == null || trackId.isBlank() || normalizedName.isEmpty()) {
+            throw new IllegalArgumentException("trackId and name are required");
+        }
+        FaceTrack track = this.tracks.get(trackId);
+        if( track==null ) {
+            throw new IllegalArgumentException("trackId is not found: " + trackId);
+        }
         try {
-            FaceTrack track = this.tracks.get(trackId);
-            track.setPersonId(personId(name));
+            track.setPersonId(personId(normalizedName));
             // ファイルに保存する
             track.save(this.dbpath);   
-        } catch( Throwable ex ) {
-            return;
+        } catch( IOException ex ) {
+            throw new IllegalStateException("can not save track: " + trackId, ex);
         }
     }
 

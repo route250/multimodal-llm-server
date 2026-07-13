@@ -19,5 +19,10 @@ public class FacePossibility {
         this.faceId = faceId;
         this.personPossibilities = p;
     }
-
+    public FacePossibility.PersonPossibility nearest() {
+        if (this.personPossibilities == null || this.personPossibilities.length == 0) {
+            return null;
+        }
+        return this.personPossibilities[0];
+    }
 }

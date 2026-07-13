@@ -522,7 +522,8 @@ public class AudioProcessor {
                                     transcriptionAudio,
                                     transcriptionStartSampleIndex,
                                     endSampleIndexExclusive,
-                                    kind),
+                                    kind,
+                                    rms),
                             transcriptionExecutor);
         }
     }
@@ -535,11 +536,13 @@ public class AudioProcessor {
             AudioBuffer transcriptionAudio,
             long startSampleIndex,
             long endSampleIndexExclusive,
-            TranscriptionKind kind) {
+            TranscriptionKind kind,
+            float rms) {
         try {
             String prompt = "";
             synchronized(this) {
-                if( startSampleIndex < transcriptionLastSampleIndex+8000 ) {
+                if( startSampleIndex < transcriptionLastSampleIndex+8000
+                        && !shouldSuppressPrompt(startSampleIndex, endSampleIndexExclusive, rms)) {
                     prompt = transcriptionPrompt;
                 }
             }
@@ -649,6 +652,11 @@ public class AudioProcessor {
             squareSum += sample * sample;
         }
         return (float) Math.sqrt(squareSum / (endSampleIndexExclusive - startSampleIndex));
+    }
+
+    private static boolean shouldSuppressPrompt(long startSampleIndex, long endSampleIndexExclusive, float rms) {
+        return endSampleIndexExclusive - startSampleIndex < SHORT_AUDIO_PROMPT_SUPPRESSION_SAMPLES
+                && rms < LOW_RMS_PROMPT_SUPPRESSION_THRESHOLD;
     }
 
     /**

@@ -6,6 +6,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Optional;
 import java.util.Set;
@@ -41,14 +42,16 @@ import audio.AudioProcessor.TranscriptionKind;
 import audio.AudioProcessor.TranscriptionResult;
 import audio.AudioProcessor.TranscriptionStarted;
 import audio.vad.smartturn.LazySmartTurnV3;
+import facedb.FaceDB;
+import facedb.FacePossibility;
 
 public class ChatClient {
     private static final int MAX_HISTORY_MESSAGES = 20;
     private static final List<ToolDefinition> LLM_TOOLS = List.of(new ToolDefinition(
             "assign_face_name",
-            "faceIdに人物名を登録します。ユーザーが自分の名前を名乗ったときに呼び出します。",
+            "trackIdに人物名を登録します。ユーザーが自分の名前を名乗ったときに呼び出します。",
             """
-                    {"type":"object","properties":{"faceId":{"type":"string"},"name":{"type":"string"}},"required":["faceId","name"],"additionalProperties":false}\
+                    {"type":"object","properties":{"trackId":{"type":"string"},"name":{"type":"string"}},"required":["trackId","name"],"additionalProperties":false}\
                     """));
 
     private final String id;
@@ -63,6 +66,7 @@ public class ChatClient {
     private final Object conversationLock = new Object();
     private final Object playbackControlLock = new Object();
     private final Object partialTranscriptLock = new Object();
+    private final Object faceTrackLock = new Object();
     private final List<ChatMessage> conversationHistory = new ArrayList<>();
     private final Set<Long> canceledAssistantTurnIds = new HashSet<>();
     private final Set<Long> rememberedUserAssistantTurnIds = new HashSet<>();
@@ -71,6 +75,7 @@ public class ChatClient {
     private final Map<Long, Integer> rememberedAssistantMessageIndexes = new HashMap<>();
     private final Map<Long, String> partialTranscripts = new LinkedHashMap<>();
     // 同一セッション内で、入室済みの顔トラックを区別する。
+    private final Map<String, String> trackmap = new LinkedHashMap<>();
     private final Map<String, FaceEventResult> activeFaceTracks = new LinkedHashMap<>();
     private CompletableFuture<Void> audioTaskTail = CompletableFuture.completedFuture(null);
     private Future<?> activeAssistantTask;
@@ -234,6 +239,51 @@ public class ChatClient {
         }
     }
 
+    public FaceEventResult handleFacePresence(FaceDB faceDB,FaceEventRequest request ) throws IOException {
+        if ("person-left".equals(request.eventType())) {
+            synchronized (faceTrackLock) {
+                this.trackmap.remove(request.trackId());
+            }
+            FaceEventResult result = FaceEventResult.left().withTrackId(request.trackId());
+            handleFacePresence(result);
+            return result;
+        }
+        String trackId;
+        synchronized (faceTrackLock) {
+            trackId = this.trackmap.get(request.trackId());
+            if( trackId==null) {
+                trackId = faceDB.createTrackId();
+                this.trackmap.put(request.trackId(),trackId);
+            }
+        }
+        FacePossibility registered = faceDB.register(trackId,request.descriptor(), request.imageDataUrl());
+        FacePossibility.PersonPossibility nearest = registered.nearest();
+        FaceEventResult result;
+        if (nearest == null) {
+            result = new FaceEventResult(
+                    "accepted",
+                    "unknown",
+                    "unknown",
+                    null,
+                    false,
+                    registered.faceId,
+                    request.presenceState(),
+                    request.trackId());
+        } else {
+            result = new FaceEventResult(
+                "accepted",
+                nearest.personId,
+                nearest.name,
+                (double) nearest.distance,
+                true,
+                registered.faceId,
+                request.presenceState(),
+                request.trackId());
+        }
+        handleFacePresence(result);
+        return result;
+    }
+
     public void handleFacePresence(FaceEventResult result) {
         boolean finalPersonLeft;
         synchronized (conversationLock) {
@@ -258,7 +308,6 @@ public class ChatClient {
             startAssistantReplyFromHistory(faceEventMessage);
         }
     }
-
     List<ChatMessage> conversationHistoryForTest() {
         synchronized (conversationLock) {
             return List.copyOf(conversationHistory);
@@ -268,13 +317,15 @@ public class ChatClient {
     private static String facePresenceHistoryText(FaceEventResult result) {
         String personName = null;
         String faceId = "";
+        String trackId = "";
         String m;
         if ("person-left".equals(result.presenceState())) {
             m = "[カメラ情報] { \"comment\": \"だれもいなくなりました\"}";
         } else {
             faceId = result.faceId() == null || result.faceId().isBlank() ? "" : result.faceId();
+            trackId = result.trackId() == null || result.trackId().isBlank() ? "" : result.trackId();
             personName = result.personName() == null || result.personName().isBlank() ? "知らない人" : result.personName();
-            m = "[カメラ情報] { \"name\": \"" + personName + "\", \"faceId\": \""+faceId+"\", \"comment\": \"人物を認識しました\" }";
+            m = "[カメラ情報] { \"name\": \"" + personName + "\", \"trackId\": \"" + trackId + "\", \"faceId\": \""+faceId+"\", \"comment\": \"人物を認識しました\" }";
         }
         System.out.println(m);
         return m;
@@ -613,29 +664,44 @@ public class ChatClient {
                     "status", "failed",
                     "error", "unknown tool: " + toolCall.name())));
         }
-        String faceId = JsonFields.stringOrDefault(toolCall.arguments(), "faceId", "").trim();
+        String trackId = JsonFields.stringOrDefault(toolCall.arguments(), "trackId", "").trim();
         String name = JsonFields.stringOrDefault(toolCall.arguments(), "name", "").trim();
-        if (faceId.isBlank() || "unknown".equals(faceId) || "none".equals(faceId) || name.isBlank()) {
+        if (trackId.isBlank() || "unknown".equals(trackId) || "none".equals(trackId) || name.isBlank()) {
             AudioDiagnostics.log("llm-tool-call-ignored", diagnosticsContext, Json.fields(
                     "assistantTurnId", assistantTurnId,
                     "toolName", toolCall.name(),
                     "reason", "invalid-argument",
-                    "faceId", faceId,
+                    "trackId", trackId,
                     "name", name));
             return new ToolCallResult(toolCall, Json.object(Json.fields(
                     "status", "failed",
-                    "error", "faceId and name are required",
-                    "faceId", faceId,
+                    "error", "trackId and name are required",
+                    "trackId", trackId,
                     "name", name)));
         }
-        chatGroup.assignFaceName(faceId, name);
+        try {
+            chatGroup.assignFaceName(trackId, name);
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            AudioDiagnostics.log("llm-tool-call-ignored", diagnosticsContext, Json.fields(
+                    "assistantTurnId", assistantTurnId,
+                    "toolName", toolCall.name(),
+                    "reason", "assign-failed",
+                    "trackId", trackId,
+                    "name", name,
+                    "error", e.getMessage()));
+            return new ToolCallResult(toolCall, Json.object(Json.fields(
+                    "status", "failed",
+                    "error", e.getMessage(),
+                    "trackId", trackId,
+                    "name", name)));
+        }
         AudioDiagnostics.log("face-name-assigned", diagnosticsContext, Json.fields(
                 "assistantTurnId", assistantTurnId,
-                "faceId", faceId,
+                "trackId", trackId,
                 "name", name));
         return new ToolCallResult(toolCall, Json.object(Json.fields(
                 "status", "ok",
-                "faceId", faceId,
+                "trackId", trackId,
                 "name", name)));
     }
 

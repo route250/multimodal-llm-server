@@ -119,8 +119,8 @@ public class MlServer implements AutoCloseable {
         return this.executor.submit(task);
     }
 
-    void assignFaceName(String faceId, String name) {
-        faceDB.assign(faceId, name);
+    void assignFaceName(String trackId, String name) {
+        faceDB.assign(trackId, name);
     }
 
     private void handleChatSettings(HttpExchange exchange) throws IOException {
@@ -376,58 +376,21 @@ public class MlServer implements AutoCloseable {
             sendText(exchange, 404, "application/json; charset=utf-8", "{\"error\":\"chat group not found\"}\n");
             return;
         }
-
+        ChatClient client = chatGroup.client(sessionId);
+        if( client==null ) {
+            sendText(exchange, 404, "application/json; charset=utf-8", "{\"error\":\"chat session not found\"}\n");
+            return;
+        }
         String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
         FaceEventResult result;
         try {
             FaceEventRequest request = FaceEventRequest.fromJson(body);
-            result = faceEventResult(request);
-        } catch (IllegalArgumentException e) {
+            result = client.handleFacePresence(this.faceDB,request);
+        } catch (IllegalArgumentException|IOException e) {
             sendText(exchange, 400, "application/json; charset=utf-8", errorJson(e.getMessage()));
             return;
         }
-
-        ChatClient client = chatGroup.client(sessionId);
-        if (client != null) {
-            client.handleFacePresence(result);
-        }
         sendText(exchange, 202, "application/json; charset=utf-8", result.toJson());
-    }
-
-    private FaceEventResult faceEventResult(FaceEventRequest request) {
-        if ("person-left".equals(request.eventType())) {
-            return FaceEventResult.left().withTrackId(request.trackId());
-        }
-
-        FacePossibility registered = faceDB.register(request.descriptor(), request.imageDataUrl());
-        FacePossibility.PersonPossibility nearest = nearest(registered.personPossibilities);
-        if (nearest == null) {
-            return new FaceEventResult(
-                    "accepted",
-                    "unknown",
-                    "unknown",
-                    null,
-                    false,
-                    registered.faceId,
-                    request.presenceState(),
-                    request.trackId());
-        }
-        return new FaceEventResult(
-                "accepted",
-                nearest.personId,
-                nearest.name,
-                (double) nearest.distance,
-                true,
-                registered.faceId,
-                request.presenceState(),
-                request.trackId());
-    }
-
-    private static FacePossibility.PersonPossibility nearest(FacePossibility.PersonPossibility[] possibilities) {
-        if (possibilities == null || possibilities.length == 0) {
-            return null;
-        }
-        return possibilities[0];
     }
 
     private void createDefaultChatGroups() {

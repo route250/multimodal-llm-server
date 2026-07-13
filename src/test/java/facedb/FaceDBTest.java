@@ -1,16 +1,14 @@
 package facedb;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import json.JsonFields;
-import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.Base64;
+import json.JsonFields;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -19,115 +17,133 @@ class FaceDBTest {
     Path tempDir;
 
     @Test
-    void saveWritesFaceSampleJsonUnderDbPath() throws Exception {
+    void registerWritesFaceSampleUnderTrackDirectory() throws Exception {
         FaceDB db = new FaceDB(tempDir);
+        String trackId = db.createTrackId();
 
-        db.register(new double[] {0.1, 0.2, 0.3}, jpegBase64(new byte[] {(byte) 0xff, (byte) 0xd8, (byte) 0xff, (byte) 0xd9}));
-        db.assign("face000000", "alice");
+        FacePossibility registered = db.register(
+                trackId,
+                new double[] {0.1, 0.2, 0.3},
+                jpegBase64(new byte[] {(byte) 0xff, (byte) 0xd8, (byte) 0xff, (byte) 0xd9}));
 
-        Path saved = tempDir.resolve("face000000.json");
+        assertEquals("trak-000000", trackId);
+        assertEquals("face-000000", registered.faceId);
+        Path saved = faceJson(trackId, registered.faceId);
         assertTrue(Files.isRegularFile(saved));
 
         String json = Files.readString(saved, StandardCharsets.UTF_8);
-        assertEquals("face000000", JsonFields.string(json, "faceId"));
+        assertEquals(trackId, JsonFields.string(json, "trackId"));
+        assertEquals("face-000000", JsonFields.string(json, "faceId"));
         assertTrue(JsonFields.longValue(json, "createdAt") > 0L);
-        assertEquals("person0000", JsonFields.string(json, "personId"));
         assertTrue(json.contains("\"descriptor\":[0.1,0.2,0.3]"));
     }
 
     @Test
-    void loadReadsSequentialFaceFilesUntilFirstMissingIndex() throws Exception {
-        FaceDB source = new FaceDB(tempDir);
-        source.register(new double[] {0.1, 0.2}, jpegBase64(new byte[] {(byte) 0xff, (byte) 0xd8, 1, (byte) 0xff, (byte) 0xd9}));
-        source.assign("face000000", "alice");
-        source.register(new double[] {0.3, 0.4}, jpegBase64(new byte[] {(byte) 0xff, (byte) 0xd8, 2, (byte) 0xff, (byte) 0xd9}));
-        source.assign("face000001", "bob");
-
-        FaceDB loaded = new FaceDB(tempDir);
-        loaded.load();
-
-        ArrayList<double[]> descriptors = descriptors(loaded);
-        ArrayList<?> faceSamples = faceSamples(loaded);
-        ArrayList<String> persons = persons(loaded);
-        assertEquals(2, descriptors.size());
-        assertArrayEquals(new double[] {0.1, 0.2}, descriptors.get(0));
-        assertArrayEquals(new double[] {0.3, 0.4}, descriptors.get(1));
-        assertEquals("alice", persons.get(faceSamplePersonId(faceSamples.get(0))));
-        assertEquals("bob", persons.get(faceSamplePersonId(faceSamples.get(1))));
-    }
-
-    @Test
-    void loadStopsAtFirstMissingFaceFile() throws Exception {
-        FaceDB source = new FaceDB(tempDir);
-        source.register(new double[] {0.1}, jpegBase64(new byte[] {(byte) 0xff, (byte) 0xd8, 1, (byte) 0xff, (byte) 0xd9}));
-        source.assign("face000000", "alice");
-        Files.writeString(tempDir.resolve("face000002.json"),
-                "{\"faceId\":\"face000002\",\"createdAt\":300,\"personId\":\"person0001\",\"descriptor\":[0.3]}",
-                StandardCharsets.UTF_8);
-
-        FaceDB loaded = new FaceDB(tempDir);
-        loaded.load();
-
-        assertEquals(1, descriptors(loaded).size());
-        assertEquals(0, faceSamplePersonId(faceSamples(loaded).get(0)));
-    }
-
-    @Test
-    void assignAddsMissingPersonAndStoresPersonId() throws Exception {
+    void assignAddsMissingPersonAndStoresPersonIdOnTrack() throws Exception {
         FaceDB db = new FaceDB(tempDir);
-        db.register(new double[] {0.1}, jpegBase64(new byte[] {(byte) 0xff, (byte) 0xd8, 1, (byte) 0xff, (byte) 0xd9}));
+        String trackId = db.createTrackId();
+        db.register(trackId, new double[] {0.1}, jpegBase64(new byte[] {(byte) 0xff, (byte) 0xd8, 1, (byte) 0xff, (byte) 0xd9}));
 
-        db.assign("face000000", "alice");
+        db.assign(trackId, "alice");
 
-        assertEquals("alice", persons(db).get(0));
-        assertEquals(0, faceSamplePersonId(faceSamples(db).get(0)));
-        String json = Files.readString(tempDir.resolve("face000000.json"), StandardCharsets.UTF_8);
-        assertEquals("person0000", JsonFields.string(json, "personId"));
+        String trackJson = Files.readString(trackJson(trackId), StandardCharsets.UTF_8);
+        assertEquals("person0000", JsonFields.string(trackJson, "personId"));
         String personsJson = Files.readString(tempDir.resolve("persons.json"), StandardCharsets.UTF_8);
         assertTrue(personsJson.contains("\"personId\":\"person0000\""));
         assertTrue(personsJson.contains("\"name\":\"alice\""));
     }
 
     @Test
-    void renameUsesFaceIdToUpdatePersonNameWithoutChangingFaceSamplePersonId() throws Exception {
+    void loadRestoresAssignedTracksAndPredictsNamedPeople() throws Exception {
+        FaceDB source = new FaceDB(tempDir);
+        String aliceTrackId = source.createTrackId();
+        source.register(aliceTrackId, new double[] {0.1, 0.1}, jpegBase64(new byte[] {(byte) 0xff, (byte) 0xd8, 1, (byte) 0xff, (byte) 0xd9}));
+        source.assign(aliceTrackId, "alice");
+        String bobTrackId = source.createTrackId();
+        source.register(bobTrackId, new double[] {0.3, 0.3}, jpegBase64(new byte[] {(byte) 0xff, (byte) 0xd8, 2, (byte) 0xff, (byte) 0xd9}));
+        source.assign(bobTrackId, "bob");
+
+        FaceDB loaded = new FaceDB(tempDir);
+        loaded.load();
+
+        FacePossibility.PersonPossibility[] possibilities = loaded.predict(new double[] {0.1, 0.1});
+        assertEquals(2, possibilities.length);
+        assertEquals("person0000", possibilities[0].personId);
+        assertEquals("alice", possibilities[0].name);
+        assertEquals(0.0, possibilities[0].distance, 0.000001);
+        assertEquals("person0001", possibilities[1].personId);
+        assertEquals("bob", possibilities[1].name);
+        assertEquals(Math.sqrt(0.08), possibilities[1].distance, 0.000001);
+    }
+
+    @Test
+    void createTrackIdContinuesAfterLoad() throws Exception {
+        FaceDB source = new FaceDB(tempDir);
+        source.createTrackId();
+        source.createTrackId();
+
+        FaceDB loaded = new FaceDB(tempDir);
+        loaded.load();
+
+        assertEquals("trak-000002", loaded.createTrackId());
+    }
+
+    @Test
+    void registerFaceIdContinuesAfterLoad() throws Exception {
+        FaceDB source = new FaceDB(tempDir);
+        String sourceTrackId = source.createTrackId();
+        source.register(sourceTrackId, new double[] {0.1}, jpegBase64(new byte[] {(byte) 0xff, (byte) 0xd8, 1, (byte) 0xff, (byte) 0xd9}));
+
+        FaceDB loaded = new FaceDB(tempDir);
+        loaded.load();
+        String loadedTrackId = loaded.createTrackId();
+        FacePossibility registered = loaded.register(
+                loadedTrackId,
+                new double[] {0.2},
+                jpegBase64(new byte[] {(byte) 0xff, (byte) 0xd8, 2, (byte) 0xff, (byte) 0xd9}));
+
+        assertEquals("face-000001", registered.faceId);
+    }
+
+    @Test
+    void renameUsesTrackIdToUpdatePersonName() throws Exception {
         FaceDB db = new FaceDB(tempDir);
-        db.register(new double[] {0.1}, jpegBase64(new byte[] {(byte) 0xff, (byte) 0xd8, 1, (byte) 0xff, (byte) 0xd9}));
-        db.assign("face000000", "alice");
+        String trackId = db.createTrackId();
+        db.register(trackId, new double[] {0.1}, jpegBase64(new byte[] {(byte) 0xff, (byte) 0xd8, 1, (byte) 0xff, (byte) 0xd9}));
+        db.assign(trackId, "alice");
 
-        db.rename("face000000", "alicia");
+        db.rename(trackId, "alicia");
 
-        assertEquals("alicia", persons(db).get(0));
-        assertEquals(0, faceSamplePersonId(faceSamples(db).get(0)));
         assertTrue(Files.readString(tempDir.resolve("persons.json"), StandardCharsets.UTF_8).contains("\"name\":\"alicia\""));
     }
 
     @Test
-    void saveImageWritesJpegDataUrlUnderDbPath() throws Exception {
+    void saveImageWritesJpegDataUrlUnderTrackDirectory() throws Exception {
         FaceDB db = new FaceDB(tempDir);
+        String trackId = db.createTrackId();
         byte[] jpeg = new byte[] {(byte) 0xff, (byte) 0xd8, 1, 2, (byte) 0xff, (byte) 0xd9};
         String dataUrl = "data:image/jpeg;base64," + Base64.getEncoder().encodeToString(jpeg);
 
-        FacePossibility registered = db.register(new double[] {0.1}, dataUrl);
+        FacePossibility registered = db.register(trackId, new double[] {0.1}, dataUrl);
 
-        assertEquals("face000000", registered.faceId);
-        assertEquals(tempDir.resolve("face000000.json").toAbsolutePath().normalize().toString(), registered.jsonPath);
-        assertEquals(tempDir.resolve("face000000.jpg").toAbsolutePath().normalize().toString(), registered.imagePath);
         assertEquals(0, registered.personPossibilities.length);
-        assertArrayEquals(jpeg, Files.readAllBytes(tempDir.resolve("face000000.jpg")));
+        assertArrayEquals(jpeg, Files.readAllBytes(faceImage(trackId, registered.faceId)));
     }
 
     @Test
     void registerReturnsNamedPersonPossibilitiesBeforeSavingNewSample() throws Exception {
         FaceDB db = new FaceDB(tempDir);
         String image = jpegBase64(new byte[] {(byte) 0xff, (byte) 0xd8, 1, (byte) 0xff, (byte) 0xd9});
-        db.register(new double[] {0.1, 0.1}, image);
-        db.assign("face000000", "alice");
+        String knownTrackId = db.createTrackId();
+        db.register(knownTrackId, new double[] {0.1, 0.1}, image);
+        db.assign(knownTrackId, "alice");
 
-        FacePossibility registered = db.register(new double[] {0.1, 0.1}, image);
+        String newTrackId = db.createTrackId();
+        FacePossibility registered = db.register(newTrackId, new double[] {0.1, 0.1}, image);
 
-        assertEquals("face000001", registered.faceId);
-        assertEquals(tempDir.resolve("face000001.json").toAbsolutePath().normalize().toString(), registered.jsonPath);
-        assertEquals(tempDir.resolve("face000001.jpg").toAbsolutePath().normalize().toString(), registered.imagePath);
+        assertEquals("face-000001", registered.faceId);
+        assertTrue(Files.isRegularFile(faceJson(newTrackId, registered.faceId)));
+        assertTrue(Files.isRegularFile(faceImage(newTrackId, registered.faceId)));
         assertEquals(1, registered.personPossibilities.length);
         assertEquals("person0000", registered.personPossibilities[0].personId);
         assertEquals("alice", registered.personPossibilities[0].name);
@@ -137,24 +153,29 @@ class FaceDBTest {
     @Test
     void saveImageAcceptsRawBase64() throws Exception {
         FaceDB db = new FaceDB(tempDir);
+        String trackId = db.createTrackId();
         byte[] jpeg = new byte[] {(byte) 0xff, (byte) 0xd8, 9, 8, (byte) 0xff, (byte) 0xd9};
 
-        db.register(new double[] {0.1}, Base64.getEncoder().encodeToString(jpeg));
+        FacePossibility registered = db.register(trackId, new double[] {0.1}, Base64.getEncoder().encodeToString(jpeg));
 
-        assertArrayEquals(jpeg, Files.readAllBytes(tempDir.resolve("face000000.jpg")));
+        assertArrayEquals(jpeg, Files.readAllBytes(faceImage(trackId, registered.faceId)));
     }
 
     @Test
     void predictReturnsNamedFacesUnderThresholdByDistance() throws Exception {
         FaceDB db = new FaceDB(tempDir);
         String image = jpegBase64(new byte[] {(byte) 0xff, (byte) 0xd8, 1, (byte) 0xff, (byte) 0xd9});
-        db.register(new double[] {0.2, 0.2}, image);
-        db.assign("face000000", "alice");
-        db.register(new double[] {0.1, 0.1}, image);
-        db.assign("face000001", "bob");
-        db.register(new double[] {0.6, 0.6}, image);
-        db.assign("face000002", "carol");
-        db.register(new double[] {0.0, 0.0}, image);
+        String aliceTrackId = db.createTrackId();
+        db.register(aliceTrackId, new double[] {0.2, 0.2}, image);
+        db.assign(aliceTrackId, "alice");
+        String bobTrackId = db.createTrackId();
+        db.register(bobTrackId, new double[] {0.1, 0.1}, image);
+        db.assign(bobTrackId, "bob");
+        String carolTrackId = db.createTrackId();
+        db.register(carolTrackId, new double[] {0.6, 0.6}, image);
+        db.assign(carolTrackId, "carol");
+        String unknownTrackId = db.createTrackId();
+        db.register(unknownTrackId, new double[] {0.0, 0.0}, image);
 
         FacePossibility.PersonPossibility[] possibilities = db.predict(new double[] {0.0, 0.0});
 
@@ -167,31 +188,16 @@ class FaceDBTest {
         assertEquals(Math.sqrt(0.08), possibilities[1].distance, 0.000001);
     }
 
-    @SuppressWarnings("unchecked")
-    private static ArrayList<double[]> descriptors(FaceDB db) throws Exception {
-        Field field = FaceDB.class.getDeclaredField("descriptors");
-        field.setAccessible(true);
-        return (ArrayList<double[]>) field.get(db);
+    private Path trackJson(String trackId) {
+        return tempDir.resolve(trackId).resolve(trackId + ".json");
     }
 
-    @SuppressWarnings("unchecked")
-    private static ArrayList<?> faceSamples(FaceDB db) throws Exception {
-        Field field = FaceDB.class.getDeclaredField("faceSamples");
-        field.setAccessible(true);
-        return (ArrayList<?>) field.get(db);
+    private Path faceJson(String trackId, String faceId) {
+        return tempDir.resolve(trackId).resolve(faceId).resolve(faceId + ".json");
     }
 
-    @SuppressWarnings("unchecked")
-    private static ArrayList<String> persons(FaceDB db) throws Exception {
-        Field field = FaceDB.class.getDeclaredField("persons");
-        field.setAccessible(true);
-        return (ArrayList<String>) field.get(db);
-    }
-
-    private static int faceSamplePersonId(Object faceSample) throws Exception {
-        Field field = faceSample.getClass().getDeclaredField("personId");
-        field.setAccessible(true);
-        return (int) field.get(faceSample);
+    private Path faceImage(String trackId, String faceId) {
+        return tempDir.resolve(trackId).resolve(faceId).resolve(faceId + ".jpg");
     }
 
     private static String jpegBase64(byte[] jpeg) {

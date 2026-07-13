@@ -30,8 +30,8 @@ class OpenAiResponsesLanguageModelLlamaCppTest {
                 "LFM2\\.5",
                 """
                         あなたは顔認証つき受付アシスタントです。\
-                        会話履歴にFaceIdがあり、来訪者が自分の名前を名乗ったら、必ずassign_face_nameツールを呼び出してください。\
-                        ツール引数のfaceIdには会話履歴のFaceIdをそのまま入れ、nameには来訪者が名乗った名前だけを入れてください。\
+                        会話履歴にTrackIdがあり、来訪者が自分の名前を名乗ったら、必ずassign_face_nameツールを呼び出してください。\
+                        ツール引数のtrackIdには会話履歴のTrackIdをそのまま入れ、nameには来訪者が名乗った名前だけを入れてください。\
                         """,
                 Duration.ofSeconds(120)));
         List<ToolCall> toolCalls = new ArrayList<>();
@@ -39,7 +39,7 @@ class OpenAiResponsesLanguageModelLlamaCppTest {
 
         model.respondStreamingEvents(
                 List.of(
-                        new ChatMessage("user", "[環境イベント] unknownさんがきました FaceId=face000001 来訪者に1文で話しかけてください。"),
+                        new ChatMessage("user", "[カメラ情報] { \"name\": \"unknown\", \"trackId\": \"trak-000001\", \"faceId\": \"face-000001\", \"comment\": \"人物を認識しました\" }"),
                         new ChatMessage("assistant", "あなたのお名前をおしえてください。"),
                         new ChatMessage("user", "私の名前は、太郎です")),
                 List.of(OpenAiResponsesLanguageModelTest.assignFaceNameTool()),
@@ -58,7 +58,7 @@ class OpenAiResponsesLanguageModelLlamaCppTest {
         assertFalse(toolCalls.isEmpty(), () -> "tool call was not returned. text response=" + text);
         ToolCall toolCall = toolCalls.get(0);
         assertEquals("assign_face_name", toolCall.name());
-        assertTrue(toolCall.arguments().contains("\"faceId\":\"face000001\""),
+        assertTrue(toolCall.arguments().contains("\"trackId\":\"trak-000001\""),
                 () -> "unexpected tool arguments: " + toolCall.arguments());
         assertTrue(toolCall.arguments().contains("\"name\":\"太郎\""),
                 () -> "unexpected tool arguments: " + toolCall.arguments());

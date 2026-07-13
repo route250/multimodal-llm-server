@@ -77,7 +77,7 @@ class ChatClientAudioProcessingTest {
 
     @Test
     void frontendEnablesBrowserEchoCancellationAndLocalTenVadPause() throws Exception {
-        String html = Files.readString(Path.of("src/main/resources/html/index.html"));
+        String html = Files.readString(Path.of("src/main/resources/html/chat.html"));
         String audioJs = Files.readString(Path.of("src/main/resources/html/js/chat-audio.js"));
         String eventsJs = Files.readString(Path.of("src/main/resources/html/js/chat-events.js"));
         String frontend = html + "\n" + audioJs + "\n" + eventsJs;

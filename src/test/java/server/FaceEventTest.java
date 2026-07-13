@@ -15,6 +15,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import facedb.FaceDB;
@@ -35,52 +36,57 @@ class FaceEventTest {
     void faceEventEndpointSavesJsonAndJpeg(@TempDir Path tempDir) throws Exception {
         try (MlServer server = new MlServer(0, new FaceDB(tempDir))) {
             server.start();
+            HttpClient client = localHttpsClient();
+            CompletableFuture<HttpResponse<Void>> connection = openChatConnection(client, server, "test-face");
             String body = faceEventBody(descriptor(0.1));
 
-            HttpResponse<String> response = localHttpsClient().send(
+            HttpResponse<String> response = client.send(
                     HttpRequest.newBuilder(URI.create("https://localhost:" + server.port()
                                     + "/face/event?group=group-1&sessionId=test-face"))
                             .header("Content-Type", "application/json; charset=utf-8")
                             .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
                             .build(),
                     HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            connection.cancel(true);
 
             assertEquals(202, response.statusCode());
             assertTrue(response.body().contains("\"known\":false"));
-            assertEquals("face000000", jsonString(response.body(), "faceId"));
-            String jsonPath = jsonString(response.body(), "jsonPath");
-            String imagePath = jsonString(response.body(), "imagePath");
-            assertNotNull(jsonPath);
-            assertNotNull(imagePath);
-            assertTrue(Files.isRegularFile(Path.of(jsonPath)));
-            assertTrue(Files.isRegularFile(Path.of(imagePath)));
-            assertTrue(Files.size(Path.of(imagePath)) > 0);
+            assertEquals("legacy", jsonString(response.body(), "trackId"));
+            assertEquals("face-000000", jsonString(response.body(), "faceId"));
+            assertTrue(Files.isRegularFile(tempDir.resolve("trak-000000").resolve("face-000000").resolve("face-000000.json")));
+            Path imagePath = tempDir.resolve("trak-000000").resolve("face-000000").resolve("face-000000.jpg");
+            assertTrue(Files.isRegularFile(imagePath));
+            assertTrue(Files.size(imagePath) > 0);
         }
     }
 
     @Test
     void faceEventEndpointMatchesNamedFaceFromFaceDB(@TempDir Path tempDir) throws Exception {
         FaceDB db = new FaceDB(tempDir);
-        db.register(descriptor(0.2), jpegBase64(new byte[] {(byte) 0xff, (byte) 0xd8, 1, (byte) 0xff, (byte) 0xd9}));
-        db.assign("face000000", "山田");
+        String knownTrackId = db.createTrackId();
+        db.register(knownTrackId, descriptor(0.2), jpegBase64(new byte[] {(byte) 0xff, (byte) 0xd8, 1, (byte) 0xff, (byte) 0xd9}));
+        db.assign(knownTrackId, "山田");
 
         try (MlServer server = new MlServer(0, db)) {
             server.start();
-            HttpResponse<String> response = localHttpsClient().send(
+            HttpClient client = localHttpsClient();
+            CompletableFuture<HttpResponse<Void>> connection = openChatConnection(client, server, "test-face");
+            HttpResponse<String> response = client.send(
                     HttpRequest.newBuilder(URI.create("https://localhost:" + server.port()
                                     + "/face/event?group=group-1&sessionId=test-face"))
                             .header("Content-Type", "application/json; charset=utf-8")
                             .POST(HttpRequest.BodyPublishers.ofString(faceEventBody(descriptor(0.2)), StandardCharsets.UTF_8))
                             .build(),
                     HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            connection.cancel(true);
 
             assertEquals(202, response.statusCode());
             assertTrue(response.body().contains("\"known\":true"));
-            assertEquals("face000001", jsonString(response.body(), "faceId"));
+            assertEquals("face-000001", jsonString(response.body(), "faceId"));
             assertEquals("person0000", jsonString(response.body(), "personId"));
             assertEquals("山田", jsonString(response.body(), "personName"));
-            assertTrue(Files.isRegularFile(tempDir.resolve("face000001.json")));
-            assertTrue(Files.isRegularFile(tempDir.resolve("face000001.jpg")));
+            assertTrue(Files.isRegularFile(tempDir.resolve("trak-000001").resolve("face-000001").resolve("face-000001.json")));
+            assertTrue(Files.isRegularFile(tempDir.resolve("trak-000001").resolve("face-000001").resolve("face-000001.jpg")));
         }
     }
 
@@ -88,7 +94,9 @@ class FaceEventTest {
     void personLeftDoesNotRegisterFaceDBFile(@TempDir Path tempDir) throws Exception {
         try (MlServer server = new MlServer(0, new FaceDB(tempDir))) {
             server.start();
-            HttpResponse<String> response = localHttpsClient().send(
+            HttpClient client = localHttpsClient();
+            CompletableFuture<HttpResponse<Void>> connection = openChatConnection(client, server, "test-face");
+            HttpResponse<String> response = client.send(
                     HttpRequest.newBuilder(URI.create("https://localhost:" + server.port()
                                     + "/face/event?group=group-1&sessionId=test-face"))
                             .header("Content-Type", "application/json; charset=utf-8")
@@ -97,12 +105,12 @@ class FaceEventTest {
                                     """, StandardCharsets.UTF_8))
                             .build(),
                     HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            connection.cancel(true);
 
             assertEquals(202, response.statusCode());
             assertEquals("person-left", jsonString(response.body(), "presenceState"));
             assertEquals("none", jsonString(response.body(), "faceId"));
-            assertFalse(Files.exists(tempDir.resolve("face000000.json")));
-            assertFalse(Files.exists(tempDir.resolve("face000000.jpg")));
+            assertFalse(Files.exists(tempDir.resolve("trak-000000")));
         }
     }
 
@@ -117,21 +125,21 @@ class FaceEventTest {
                     new TranscriptAudioProcessor("unused"),
                     languageModel);
 
-            client.handleFacePresence(FaceEventResult.unknownFace("face000000"));
+            client.handleFacePresence(FaceEventResult.unknownFace("face-000000"));
             assertTrue(languageModel.awaitCalls(1));
             client.handleFacePresence(FaceEventResult.left());
 
             assertEquals(1, languageModel.calls().size());
             assertEquals(List.of(
-                    "user:[環境イベント] unknownさんがきました FaceId=face000000 来訪者に1文で話しかけてください。"),
+                    "system:[カメラ情報] { \"name\": \"unknown\", \"trackId\": \"legacy\", \"faceId\": \"face-000000\", \"comment\": \"人物を認識しました\" }"),
                     languageModel.calls().get(0));
             var history = client.conversationHistoryForTest();
             assertEquals(2, history.size());
-            assertEquals("user", history.get(0).role());
-            assertEquals("[環境イベント] unknownさんがきました FaceId=face000000 来訪者に1文で話しかけてください。",
+            assertEquals("system", history.get(0).role());
+            assertEquals("[カメラ情報] { \"name\": \"unknown\", \"trackId\": \"legacy\", \"faceId\": \"face-000000\", \"comment\": \"人物を認識しました\" }",
                     history.get(0).text());
-            assertEquals("user", history.get(1).role());
-            assertEquals("[環境イベント] だれもいなくなりました", history.get(1).text());
+            assertEquals("system", history.get(1).role());
+            assertEquals("[カメラ情報] { \"comment\": \"だれもいなくなりました\"}", history.get(1).text());
         }
     }
 
@@ -160,7 +168,8 @@ class FaceEventTest {
     @Test
     void assignFaceNameToolCallUpdatesFaceDB(@TempDir Path tempDir) throws Exception {
         FaceDB db = new FaceDB(tempDir);
-        db.register(descriptor(0.1), jpegBase64(new byte[] {(byte) 0xff, (byte) 0xd8, 1, (byte) 0xff, (byte) 0xd9}));
+        String trackId = db.createTrackId();
+        db.register(trackId, descriptor(0.1), jpegBase64(new byte[] {(byte) 0xff, (byte) 0xd8, 1, (byte) 0xff, (byte) 0xd9}));
         try (MlServer server = new MlServer(0, db)) {
             ChatGroup group = new ChatGroup("group-test", server);
             ChatClient listener = group.join("listener");
@@ -169,7 +178,7 @@ class FaceEventTest {
                     "fc_1",
                     "call_1",
                     "assign_face_name",
-                    "{\"faceId\":\"face000000\",\"name\":\"太郎\"}"));
+                    "{\"trackId\":\"trak-000000\",\"name\":\"太郎\"}"));
             ChatClient client = new ChatClient(
                     "client-1",
                     group,
@@ -185,8 +194,8 @@ class FaceEventTest {
             ServerEvent confirmation = pollUntil(listener, event -> "assistant-audio-chunk".equals(event.type()));
             assertNotNull(confirmation);
             assertTrue(confirmation.message().contains("登録しました。"));
-            String faceJson = Files.readString(tempDir.resolve("face000000.json"), StandardCharsets.UTF_8);
-            assertEquals("person0000", JsonFields.string(faceJson, "personId"));
+            String trackJson = Files.readString(tempDir.resolve("trak-000000").resolve("trak-000000.json"), StandardCharsets.UTF_8);
+            assertEquals("person0000", JsonFields.string(trackJson, "personId"));
             String personsJson = Files.readString(tempDir.resolve("persons.json"), StandardCharsets.UTF_8);
             assertTrue(personsJson.contains("\"name\":\"太郎\""));
         }
@@ -253,6 +262,20 @@ class FaceEventTest {
         SSLContext sslContext = SSLContext.getInstance("TLS");
         sslContext.init(null, trustManagers, null);
         return HttpClient.newBuilder().sslContext(sslContext).build();
+    }
+
+    private static CompletableFuture<HttpResponse<Void>> openChatConnection(
+            HttpClient client,
+            MlServer server,
+            String sessionId) throws Exception {
+        CompletableFuture<HttpResponse<Void>> connection = client.sendAsync(
+                HttpRequest.newBuilder(URI.create("https://localhost:" + server.port()
+                                + "/chat/connect?group=group-1&sessionId=" + sessionId))
+                        .GET()
+                        .build(),
+                HttpResponse.BodyHandlers.discarding());
+        Thread.sleep(100);
+        return connection;
     }
 
     private static void drainJoinEvents(ChatClient client) {

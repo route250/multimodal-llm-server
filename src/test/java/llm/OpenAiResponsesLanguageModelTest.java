@@ -101,13 +101,13 @@ class OpenAiResponsesLanguageModelTest {
                 """, """
                 {"type":"response.output_item.added","item":{"id":"fc_1","arguments":"","call_id":"call_1","name":"assign_face_name","type":"function_call","status":"in_progress"}}
                 """, """
-                {"type":"response.function_call_arguments.delta","delta":"{\\"faceId\\":\\"","item_id":"fc_1"}
+                {"type":"response.function_call_arguments.delta","delta":"{\\"trackId\\":\\"","item_id":"fc_1"}
                 """, """
-                {"type":"response.function_call_arguments.delta","delta":"face000001\\",\\"name\\":\\"山田\\"}","item_id":"fc_1"}
+                {"type":"response.function_call_arguments.delta","delta":"trak-000001\\",\\"name\\":\\"山田\\"}","item_id":"fc_1"}
                 """, """
-                {"type":"response.function_call_arguments.done","item_id":"fc_1","arguments":"{\\"faceId\\":\\"face000001\\",\\"name\\":\\"山田\\"}","name":"assign_face_name"}
+                {"type":"response.function_call_arguments.done","item_id":"fc_1","arguments":"{\\"trackId\\":\\"trak-000001\\",\\"name\\":\\"山田\\"}","name":"assign_face_name"}
                 """, """
-                {"type":"response.output_item.done","item":{"id":"fc_1","type":"function_call","status":"completed","arguments":"{\\"faceId\\":\\"face000001\\",\\"name\\":\\"山田\\"}","call_id":"call_1","name":"assign_face_name"}}
+                {"type":"response.output_item.done","item":{"id":"fc_1","type":"function_call","status":"completed","arguments":"{\\"trackId\\":\\"trak-000001\\",\\"name\\":\\"山田\\"}","call_id":"call_1","name":"assign_face_name"}}
                 """), 200, new AtomicReference<>(), new AtomicReference<>())) {
             OpenAiResponsesLanguageModel model = new OpenAiResponsesLanguageModel(new OpenAiResponsesLanguageModel.Config(
                     server.baseUri(),
@@ -134,7 +134,7 @@ class OpenAiResponsesLanguageModelTest {
             assertEquals("fc_1", toolCalls.get(0).id());
             assertEquals("call_1", toolCalls.get(0).callId());
             assertEquals("assign_face_name", toolCalls.get(0).name());
-            assertEquals("{\"faceId\":\"face000001\",\"name\":\"山田\"}", toolCalls.get(0).arguments());
+            assertEquals("{\"trackId\":\"trak-000001\",\"name\":\"山田\"}", toolCalls.get(0).arguments());
         }
     }
 
@@ -190,7 +190,7 @@ class OpenAiResponsesLanguageModelTest {
             assertTrue(body.get().contains("\"tools\":["));
             assertTrue(body.get().contains("\"type\":\"function\""));
             assertTrue(body.get().contains("\"name\":\"assign_face_name\""));
-            assertTrue(body.get().contains("\"required\":[\"faceId\",\"name\"]"));
+            assertTrue(body.get().contains("\"required\":[\"trackId\",\"name\"]"));
         }
     }
 
@@ -210,12 +210,12 @@ class OpenAiResponsesLanguageModelTest {
                     "fc_1",
                     "call_1",
                     "assign_face_name",
-                    "{\"faceId\":\"face000001\",\"name\":\"太郎\"}");
+                    "{\"trackId\":\"trak-000001\",\"name\":\"太郎\"}");
 
             model.respondStreamingEvents(
                     List.of(new ChatMessage("user", "私の名前は太郎です")),
                     List.of(assignFaceNameTool()),
-                    List.of(new ToolCallResult(toolCall, "{\"status\":\"ok\",\"faceId\":\"face000001\",\"name\":\"太郎\"}")),
+                    List.of(new ToolCallResult(toolCall, "{\"status\":\"ok\",\"trackId\":\"trak-000001\",\"name\":\"太郎\"}")),
                     new StreamingResponseHandler() {
                         @Override
                         public void onTextDelta(String delta) {
@@ -227,7 +227,7 @@ class OpenAiResponsesLanguageModelTest {
             assertTrue(body.get().contains("\"type\":\"function_call\""));
             assertTrue(body.get().contains("\"call_id\":\"call_1\""));
             assertTrue(body.get().contains("\"type\":\"function_call_output\""));
-            assertTrue(body.get().contains("\"output\":\"{\\\"status\\\":\\\"ok\\\",\\\"faceId\\\":\\\"face000001\\\",\\\"name\\\":\\\"太郎\\\"}\""));
+            assertTrue(body.get().contains("\"output\":\"{\\\"status\\\":\\\"ok\\\",\\\"trackId\\\":\\\"trak-000001\\\",\\\"name\\\":\\\"太郎\\\"}\""));
         }
     }
 
@@ -275,9 +275,9 @@ class OpenAiResponsesLanguageModelTest {
     static ToolDefinition assignFaceNameTool() {
         return new ToolDefinition(
                 "assign_face_name",
-                "顔IDに人物名を登録します。ユーザーが自分の名前を名乗ったときに呼び出します。",
+                "trackIdに人物名を登録します。ユーザーが自分の名前を名乗ったときに呼び出します。",
                 """
-                        {"type":"object","properties":{"faceId":{"type":"string"},"name":{"type":"string"}},"required":["faceId","name"],"additionalProperties":false}\
+                        {"type":"object","properties":{"trackId":{"type":"string"},"name":{"type":"string"}},"required":["trackId","name"],"additionalProperties":false}\
                         """);
     }
 
