@@ -436,8 +436,11 @@
     let skipNextFaceProcess = false;
     let faceLoadLevel = 0;
     let overloadCount = 0;
+    let previousOverlaySnapshot = null;
     const faceProcessDurations = [];
     const faceTracks = new Map();
+    const overlayBoxTolerancePx = 8;
+    const overlaySizeToleranceRatio = 0.06;
     const faceLoadProfiles = [
         { periodMs: 250, inputSize: 416, descriptorIntervalMs: 1000 },
         { periodMs: 500, inputSize: 320, descriptorIntervalMs: 1000 },
@@ -608,6 +611,7 @@
         vadDeferredAt = 0;
         skipNextFaceProcess = false;
         faceTracks.clear();
+        previousOverlaySnapshot = null;
         overlayContext.clearRect(0, 0, overlay.width, overlay.height);
         updateDebugText(modelsReady ? "model: ready / camera: stopped" : "model: loading / camera: stopped");
     }
@@ -833,20 +837,76 @@
     }
 
     function drawTrackedFaces(overlaySize, now) {
+        const snapshot = createOverlaySnapshot(overlaySize, now);
+        if (isSameOverlaySnapshot(previousOverlaySnapshot, snapshot)) {
+            return;
+        }
+
         overlayContext.clearRect(0, 0, overlaySize.width, overlaySize.height);
-        for (const track of faceTracks.values()) {
-            const resized = faceapi.resizeResults(track.detection, overlaySize);
-            const box = resized.box;
-            overlayContext.strokeStyle = track.entered ? "#315f39" : "#666666";
-            // 特徴量が未取得なら点線、今回取得なら太線、それ以外は細線でトラック状態を示す。
-            const descriptorUpdatedThisFrame = track.lastDescriptorAt === now;
-            overlayContext.lineWidth = descriptorUpdatedThisFrame ? 3 : 1;
-            overlayContext.setLineDash(track.descriptor ? [] : [6, 4]);
-            overlayContext.strokeRect(box.x, box.y, box.width, box.height);
-            overlayContext.fillStyle = overlayContext.strokeStyle;
-            overlayContext.fillText(track.trackId, box.x, Math.max(12, box.y - 4));
+        for (const item of snapshot.items) {
+            overlayContext.strokeStyle = item.strokeStyle;
+            overlayContext.lineWidth = item.lineWidth;
+            overlayContext.setLineDash(item.lineDash);
+            overlayContext.strokeRect(item.box.x, item.box.y, item.box.width, item.box.height);
+            overlayContext.fillStyle = item.strokeStyle;
+            overlayContext.fillText(item.label, item.box.x, Math.max(12, item.box.y - 4));
         }
         overlayContext.setLineDash([]);
+        previousOverlaySnapshot = snapshot;
+    }
+
+    function createOverlaySnapshot(overlaySize, now) {
+        return {
+            width: overlaySize.width,
+            height: overlaySize.height,
+            items: [...faceTracks.values()].map((track) => {
+                const resized = faceapi.resizeResults(track.detection, overlaySize);
+                const descriptorUpdatedThisFrame = track.lastDescriptorAt === now;
+                return {
+                    trackId: track.trackId,
+                    label: track.trackId,
+                    box: resized.box,
+                    strokeStyle: track.entered ? "#315f39" : "#666666",
+                    lineWidth: descriptorUpdatedThisFrame ? 3 : 1,
+                    lineDash: track.descriptor ? [] : [6, 4],
+                };
+            }),
+        };
+    }
+
+    function isSameOverlaySnapshot(previous, next) {
+        if (!previous
+            || previous.width !== next.width
+            || previous.height !== next.height
+            || previous.items.length !== next.items.length) {
+            return false;
+        }
+        for (let index = 0; index < next.items.length; index += 1) {
+            if (!isSameOverlayItem(previous.items[index], next.items[index])) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    function isSameOverlayItem(previous, next) {
+        return previous.trackId === next.trackId
+            && previous.label === next.label
+            && previous.strokeStyle === next.strokeStyle
+            && previous.lineWidth === next.lineWidth
+            && isSameLineDash(previous.lineDash, next.lineDash)
+            && isSameOverlayBox(previous.box, next.box);
+    }
+
+    function isSameLineDash(previous, next) {
+        return previous.length === next.length && previous.every((value, index) => value === next[index]);
+    }
+
+    function isSameOverlayBox(previous, next) {
+        return Math.abs(previous.x - next.x) <= overlayBoxTolerancePx
+            && Math.abs(previous.y - next.y) <= overlayBoxTolerancePx
+            && Math.abs(previous.width - next.width) <= Math.max(overlayBoxTolerancePx, previous.width * overlaySizeToleranceRatio)
+            && Math.abs(previous.height - next.height) <= Math.max(overlayBoxTolerancePx, previous.height * overlaySizeToleranceRatio);
     }
 
     function activatePersonPresence() {
@@ -958,6 +1018,7 @@
         personPresent = false;
         faceAnimationSequence += 1;
         faceTracks.clear();
+        previousOverlaySnapshot = null;
         presence.textContent = "no person";
         document.body.classList.remove("person-present");
         face.classList.remove("awake", "blink", "eyes-opening");
@@ -982,8 +1043,14 @@
     function resizeOverlay() {
         const rect = video.getBoundingClientRect();
         const ratio = window.devicePixelRatio || 1;
-        overlay.width = Math.max(1, Math.round(rect.width * ratio));
-        overlay.height = Math.max(1, Math.round(rect.height * ratio));
+        const width = Math.max(1, Math.round(rect.width * ratio));
+        const height = Math.max(1, Math.round(rect.height * ratio));
+        const sizeChanged = overlay.width !== width || overlay.height !== height;
+        if (sizeChanged) {
+            overlay.width = width;
+            overlay.height = height;
+            previousOverlaySnapshot = null;
+        }
         overlay.style.width = `${rect.width}px`;
         overlay.style.height = `${rect.height}px`;
         overlayContext.setTransform(ratio, 0, 0, ratio, 0, 0);
