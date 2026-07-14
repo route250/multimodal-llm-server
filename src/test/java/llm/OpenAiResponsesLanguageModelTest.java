@@ -232,6 +232,65 @@ class OpenAiResponsesLanguageModelTest {
     }
 
     @Test
+    void returnsTextAndToolCallsWithoutStreaming() throws Exception {
+        AtomicReference<String> body = new AtomicReference<>();
+        try (FakeServer server = new FakeServer("""
+                {"output":[
+                  {"type":"function_call","id":"fc_1","call_id":"call_1","name":"assign_face_name","arguments":"{\\"trackId\\":\\"trak-000001\\",\\"name\\":\\"山田\\"}"},
+                  {"type":"message","content":[{"type":"output_text","text":"確認します。"}]}
+                ],"output_text":"確認します。"}
+                """, 200, new AtomicReference<>(), body)) {
+            OpenAiResponsesLanguageModel model = new OpenAiResponsesLanguageModel(new OpenAiResponsesLanguageModel.Config(
+                    server.baseUri(),
+                    "gemma[-_]?4[-]?e2b",
+                    "日本語で答えてください。",
+                    Duration.ofSeconds(5)));
+
+            LanguageModelResponse response = model.respond(
+                    List.of(new ChatMessage("user", "私の名前は山田です")),
+                    List.of(assignFaceNameTool()));
+
+            assertEquals("確認します。", response.text());
+            assertEquals(1, response.toolCalls().size());
+            assertEquals("assign_face_name", response.toolCalls().get(0).name());
+            assertEquals("{\"trackId\":\"trak-000001\",\"name\":\"山田\"}",
+                    response.toolCalls().get(0).arguments());
+            assertTrue(body.get().contains("\"stream\":false"));
+            assertTrue(body.get().contains("\"tools\":["));
+        }
+    }
+
+    @Test
+    void postsToolResultsWithoutStreaming() throws Exception {
+        AtomicReference<String> body = new AtomicReference<>();
+        try (FakeServer server = new FakeServer("""
+                {"output":[{"type":"message","content":[{"type":"output_text","text":"登録しました。"}]}],"output_text":"登録しました。"}
+                """, 200, new AtomicReference<>(), body)) {
+            OpenAiResponsesLanguageModel model = new OpenAiResponsesLanguageModel(new OpenAiResponsesLanguageModel.Config(
+                    server.baseUri(),
+                    "gemma[-_]?4[-]?e2b",
+                    "日本語で答えてください。",
+                    Duration.ofSeconds(5)));
+            ToolCall toolCall = new ToolCall(
+                    "fc_1",
+                    "call_1",
+                    "assign_face_name",
+                    "{\"trackId\":\"trak-000001\",\"name\":\"山田\"}");
+
+            LanguageModelResponse response = model.respond(
+                    List.of(new ChatMessage("user", "私の名前は山田です")),
+                    List.of(assignFaceNameTool()),
+                    List.of(new ToolCallResult(toolCall, "{\"status\":\"ok\"}")));
+
+            assertEquals("登録しました。", response.text());
+            assertTrue(response.toolCalls().isEmpty());
+            assertTrue(body.get().contains("\"type\":\"function_call\""));
+            assertTrue(body.get().contains("\"type\":\"function_call_output\""));
+            assertTrue(body.get().contains("\"stream\":false"));
+        }
+    }
+
+    @Test
     void throwsOnHttpError() throws Exception {
         try (FakeServer server = new FakeServer("""
                 {"error":"not ready"}

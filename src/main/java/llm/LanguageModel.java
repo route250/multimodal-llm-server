@@ -1,5 +1,6 @@
 package llm;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
 
@@ -11,6 +12,35 @@ public interface LanguageModel {
 
     default String respond(List<ChatMessage> messages) {
         return respond(lastUserText(messages));
+    }
+
+    default LanguageModelResponse respond(
+            List<ChatMessage> messages,
+            List<ToolDefinition> tools) {
+        return respond(messages, tools, List.of());
+    }
+
+    /**
+     * ツール定義と実行済みツールの結果を含めて、非ストリーミングで応答を生成します。
+     */
+    default LanguageModelResponse respond(
+            List<ChatMessage> messages,
+            List<ToolDefinition> tools,
+            List<ToolCallResult> toolResults) {
+        StringBuilder text = new StringBuilder();
+        List<ToolCall> toolCalls = new ArrayList<>();
+        respondStreamingEvents(messages, tools, toolResults, new StreamingResponseHandler() {
+            @Override
+            public void onTextDelta(String delta) {
+                text.append(delta);
+            }
+
+            @Override
+            public void onToolCall(ToolCall toolCall) {
+                toolCalls.add(toolCall);
+            }
+        });
+        return new LanguageModelResponse(text.toString(), toolCalls);
     }
 
     default void respondStreaming(String userText, Consumer<String> onDelta) {

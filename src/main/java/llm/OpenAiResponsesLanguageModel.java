@@ -32,7 +32,28 @@ public class OpenAiResponsesLanguageModel implements LanguageModel {
     public static final URI OPENAI_BASE_URI = URI.create("https://api.openai.com/v1");
     public static final String OPENAI_MODEL_PATTERN = "gpt-4.1-nano";
     public static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(120);
-    public static final String DEFAULT_SYSTEM_PROMPT = "ボクはおしゃべり大好きなAI。名前はリキッドリリ。口癖は「君たちはいつもそうだ」「わけがわからないよ」。カメラ情報で話す相手を認識したら挨拶したり文句言ったりするんだよ。";
+    // public static final String DEFAULT_SYSTEM_PROMPT = "ボクはおしゃべり大好きなAI。名前はリキッドリリ。口癖は「君たちはいつもそうだ」「わけがわからないよ」。カメラ情報で話す相手を認識したら挨拶したり文句言ったりするんだよ。";
+    public static final String DEFAULT_SYSTEM_PROMPT = """
+                あなたは会話AIの「りり」です。目の前の相手に、親しみのある丁寧な日本語で話しかけます。
+
+                system ロールの「人物認識通知」は、相手が来たことを知らせる内部通知です。相手の発言ではありません。
+                通知の「相手の名前」は、りり自身ではなく、目の前にいる相手の名前です。
+
+                人物認識通知を受けた場合だけ、次の形式の発話を一度出力します。
+                - 認識結果が「名前不明」: 「こんにちは、りりです。よろしければ、お名前を教えてください。」
+                - 認識結果が「登録済み」: 通知の「相手の名前:」の後にある人名を呼び、「さん、こんにちは。今日は何をお話ししましょうか？」と続ける。
+
+                例: 通知に「認識結果: 登録済み」「相手の名前: 山田」とあれば、発話は「山田さん、こんにちは。今日は何をお話ししましょうか？」です。
+                登録済みの場合は相手の名前から発話を始め、「こんにちは」は一度だけ使用します。人名の前に挨拶を追加しません。
+                「相手の名前」や「＋」という文字は発話しません。引用符も出力しません。
+                カメラ、人物認識、顔ID、通知、応答規則には言及しません。
+                通知にない外見、表情、感情、行動、過去の関係は想像しません。
+                りりが実際に話す言葉以外は出力しません。
+
+                名前不明の人物認識通知の後で相手が自分の名前を名乗った場合は、assign_face_name ツールを必ず呼び出します。
+                ツール引数の trackId には直前の人物認識通知にある trackId を、name には相手が名乗った人名だけを指定します。
+                ツールの実行結果を受け取るまでは、名前を登録したとは発話しません。
+                """;
     private static final Pattern OUTPUT_TEXT_PATTERN =
             Pattern.compile("\"output_text\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"", Pattern.DOTALL);
     private static final Pattern TEXT_PATTERN =
@@ -107,6 +128,46 @@ public class OpenAiResponsesLanguageModel implements LanguageModel {
             throw new LanguageModelException("LLM response did not contain text");
         }
         return response.toString();
+    }
+
+    @Override
+    public LanguageModelResponse respond(
+            List<ChatMessage> messages,
+            List<ToolDefinition> tools,
+            List<ToolCallResult> toolResults) {
+        List<ChatMessage> safeMessages = List.copyOf(messages);
+        if (safeMessages.isEmpty()) {
+            throw new IllegalArgumentException("messages must not be empty");
+        }
+        String requestBody = requestBody(safeMessages, List.copyOf(tools), List.copyOf(toolResults), false);
+        LlmDiagnostics.Exchange diagnostics = LlmDiagnostics.saveRequest(responsesEndpoint, requestBody);
+        HttpRequest.Builder requestBuilder = HttpRequest.newBuilder(responsesEndpoint)
+                .timeout(timeout)
+                .header("Content-Type", "application/json")
+                .header("Accept", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(requestBody, StandardCharsets.UTF_8));
+        addAuthorization(requestBuilder);
+        try {
+            HttpResponse<String> response = httpClient.send(
+                    requestBuilder.build(),
+                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                diagnostics.saveResponse(response.statusCode(), List.of(), response.body());
+                throw new LanguageModelException(
+                        "LLM request failed: HTTP " + response.statusCode() + " " + response.body());
+            }
+            diagnostics.saveResponse(response.statusCode(), List.of(response.body()), null);
+            return new LanguageModelResponse(
+                    responseText(response.body()).orElse(""),
+                    responseToolCalls(response.body()));
+        } catch (IOException e) {
+            diagnostics.saveResponse(0, List.of(), e.toString());
+            throw new LanguageModelException("failed to request LLM at " + responsesEndpoint, e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            diagnostics.saveResponse(0, List.of(), e.toString());
+            throw new LanguageModelException("interrupted while requesting LLM at " + responsesEndpoint, e);
+        }
     }
 
     @Override
@@ -256,6 +317,66 @@ public class OpenAiResponsesLanguageModel implements LanguageModel {
             return outputText;
         }
         return firstJsonString(body, TEXT_PATTERN);
+    }
+
+    /**
+     * 非ストリーミング応答の output 配列から function_call を取り出します。
+     */
+    private static List<ToolCall> responseToolCalls(String body) {
+        List<ToolCall> toolCalls = new ArrayList<>();
+        for (String item : outputItems(body)) {
+            if (!"function_call".equals(JsonFields.stringOrNull(item, "type"))) {
+                continue;
+            }
+            toolCalls.add(partialToolCall(item).toToolCall());
+        }
+        return List.copyOf(toolCalls);
+    }
+
+    private static List<String> outputItems(String body) {
+        int outputKey = body.indexOf(Json.string("output"));
+        if (outputKey < 0) {
+            return List.of();
+        }
+        int arrayStart = body.indexOf('[', outputKey + Json.string("output").length());
+        if (arrayStart < 0) {
+            return List.of();
+        }
+        List<String> items = new ArrayList<>();
+        int depth = 0;
+        int objectStart = -1;
+        boolean inString = false;
+        boolean escaped = false;
+        for (int i = arrayStart + 1; i < body.length(); i++) {
+            char c = body.charAt(i);
+            if (inString) {
+                if (escaped) {
+                    escaped = false;
+                } else if (c == '\\') {
+                    escaped = true;
+                } else if (c == '"') {
+                    inString = false;
+                }
+                continue;
+            }
+            if (c == '"') {
+                inString = true;
+            } else if (c == '{') {
+                if (depth == 0) {
+                    objectStart = i;
+                }
+                depth++;
+            } else if (c == '}') {
+                depth--;
+                if (depth == 0 && objectStart >= 0) {
+                    items.add(body.substring(objectStart, i + 1));
+                    objectStart = -1;
+                }
+            } else if (c == ']' && depth == 0) {
+                break;
+            }
+        }
+        return items;
     }
 
     private static List<String> readStreamingResponse(java.io.InputStream body, StreamingResponseHandler handler)
