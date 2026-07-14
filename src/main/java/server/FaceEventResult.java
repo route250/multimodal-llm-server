@@ -17,7 +17,7 @@ public record FaceEventResult(
         // distance がしきい値以下で既知人物として扱えるかを表します。SSE、HTTP レスポンス、保存 JSON に出します。
         boolean known,
         // FaceDB が採番した顔サンプル ID です。未保存の退出イベントでは none です。
-        String faceId,
+        String sampleId,
         // 顔の在室状態です。SSE の state と会話履歴追加判定に使います。
         String presenceState,
         // ページ表示中だけ有効な、ブラウザが発行した顔トラッキング ID です。
@@ -30,8 +30,8 @@ public record FaceEventResult(
         return new FaceEventResult("accepted", "unknown", "unknown", distance, false, "unknown", "person-entered", "legacy");
     }
 
-    public static FaceEventResult unknownFace(String faceId) {
-        return new FaceEventResult("accepted", "unknown", "unknown", null, false, faceId, "person-entered", "legacy");
+    public static FaceEventResult unknownFace(String sampleId) {
+        return new FaceEventResult("accepted", "unknown", "unknown", null, false, sampleId, "person-entered", "legacy");
     }
 
     public static FaceEventResult left() {
@@ -39,11 +39,11 @@ public record FaceEventResult(
     }
 
     public FaceEventResult withPresenceState(String presenceState) {
-        return new FaceEventResult(status, personId, personName, distance, known, faceId, presenceState, trackId);
+        return new FaceEventResult(status, personId, personName, distance, known, sampleId, presenceState, trackId);
     }
 
     public FaceEventResult withTrackId(String trackId) {
-        return new FaceEventResult(status, personId, personName, distance, known, faceId, presenceState, trackId);
+        return new FaceEventResult(status, personId, personName, distance, known, sampleId, presenceState, trackId);
     }
 
     public String toJson() {
@@ -54,7 +54,7 @@ public record FaceEventResult(
                 "distance", distance,
                 "known", known,
                 "trackId", trackId,
-                "faceId", faceId,
+                "sampleId", sampleId,
                 "presenceState", presenceState
             )) + "\n";
     }

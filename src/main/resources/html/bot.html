@@ -753,7 +753,7 @@
             entered: false,
             lastEventAt: 0,
             personId: null,
-            faceId: null,
+            sampleId: null,
         };
     }
 
@@ -966,7 +966,7 @@
         if (response.ok) {
             const result = await response.json();
             track.personId = result.known ? result.personId : null;
-            track.faceId = result.faceId || null;
+            track.sampleId = result.sampleId || null;
             presence.textContent = `${faceTracks.size} person(s) / ${result.known ? result.personName : "unknown"}`;
         }
     }
@@ -1115,7 +1115,7 @@
     function updateFaceDebug(faceCount) {
         const lines = [
             `face=${faceCount} load=${faceLoadLevel} avg=${average(faceProcessDurations, 10).toFixed(0)}ms`,
-            ...[...faceTracks.values()].map((track) => `${track.trackId} ${track.faceId || "none"}`),
+            ...[...faceTracks.values()].map((track) => `${track.trackId} ${track.sampleId || "none"}`),
         ];
         updateDebugText(lines.join("\n"));
     }

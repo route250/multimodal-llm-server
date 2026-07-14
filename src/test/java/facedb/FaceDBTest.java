@@ -17,7 +17,7 @@ class FaceDBTest {
     Path tempDir;
 
     @Test
-    void registerWritesFaceSampleUnderTrackDirectory() throws Exception {
+    void registerWritesSampleFilesUnderTrackDirectory() throws Exception {
         FaceDB db = new FaceDB(tempDir);
         String trackId = db.createTrackId();
 
@@ -27,13 +27,13 @@ class FaceDBTest {
                 jpegBase64(new byte[] {(byte) 0xff, (byte) 0xd8, (byte) 0xff, (byte) 0xd9}));
 
         assertEquals("trak-000000", trackId);
-        assertEquals("face-000000", registered.faceId);
-        Path saved = faceJson(trackId, registered.faceId);
+        assertEquals("sample-000000", registered.sampleId);
+        Path saved = sampleJson(trackId, registered.sampleId);
         assertTrue(Files.isRegularFile(saved));
 
         String json = Files.readString(saved, StandardCharsets.UTF_8);
         assertEquals(trackId, JsonFields.string(json, "trackId"));
-        assertEquals("face-000000", JsonFields.string(json, "faceId"));
+        assertEquals("sample-000000", JsonFields.string(json, "sampleId"));
         assertTrue(JsonFields.longValue(json, "createdAt") > 0L);
         assertTrue(json.contains("\"descriptor\":[0.1,0.2,0.3]"));
     }
@@ -77,7 +77,7 @@ class FaceDBTest {
     }
 
     @Test
-    void createTrackIdContinuesAfterLoad() throws Exception {
+    void loadDeletesUnnamedTracks() throws Exception {
         FaceDB source = new FaceDB(tempDir);
         source.createTrackId();
         source.createTrackId();
@@ -85,11 +85,11 @@ class FaceDBTest {
         FaceDB loaded = new FaceDB(tempDir);
         loaded.load();
 
-        assertEquals("trak-000002", loaded.createTrackId());
+        assertEquals("trak-000000", loaded.createTrackId());
     }
 
     @Test
-    void registerFaceIdContinuesAfterLoad() throws Exception {
+    void registerSampleIdStartsFromZeroForEachTrack() throws Exception {
         FaceDB source = new FaceDB(tempDir);
         String sourceTrackId = source.createTrackId();
         source.register(sourceTrackId, new double[] {0.1}, jpegBase64(new byte[] {(byte) 0xff, (byte) 0xd8, 1, (byte) 0xff, (byte) 0xd9}));
@@ -102,7 +102,7 @@ class FaceDBTest {
                 new double[] {0.2},
                 jpegBase64(new byte[] {(byte) 0xff, (byte) 0xd8, 2, (byte) 0xff, (byte) 0xd9}));
 
-        assertEquals("face-000001", registered.faceId);
+        assertEquals("sample-000000", registered.sampleId);
     }
 
     @Test
@@ -127,7 +127,7 @@ class FaceDBTest {
         FacePossibility registered = db.register(trackId, new double[] {0.1}, dataUrl);
 
         assertEquals(0, registered.personPossibilities.length);
-        assertArrayEquals(jpeg, Files.readAllBytes(faceImage(trackId, registered.faceId)));
+        assertArrayEquals(jpeg, Files.readAllBytes(sampleImage(trackId, registered.sampleId)));
     }
 
     @Test
@@ -141,9 +141,9 @@ class FaceDBTest {
         String newTrackId = db.createTrackId();
         FacePossibility registered = db.register(newTrackId, new double[] {0.1, 0.1}, image);
 
-        assertEquals("face-000001", registered.faceId);
-        assertTrue(Files.isRegularFile(faceJson(newTrackId, registered.faceId)));
-        assertTrue(Files.isRegularFile(faceImage(newTrackId, registered.faceId)));
+        assertEquals("sample-000000", registered.sampleId);
+        assertTrue(Files.isRegularFile(sampleJson(newTrackId, registered.sampleId)));
+        assertTrue(Files.isRegularFile(sampleImage(newTrackId, registered.sampleId)));
         assertEquals(1, registered.personPossibilities.length);
         assertEquals("person0000", registered.personPossibilities[0].personId);
         assertEquals("alice", registered.personPossibilities[0].name);
@@ -158,7 +158,36 @@ class FaceDBTest {
 
         FacePossibility registered = db.register(trackId, new double[] {0.1}, Base64.getEncoder().encodeToString(jpeg));
 
-        assertArrayEquals(jpeg, Files.readAllBytes(faceImage(trackId, registered.faceId)));
+        assertArrayEquals(jpeg, Files.readAllBytes(sampleImage(trackId, registered.sampleId)));
+    }
+
+    @Test
+    void finishStoresFeatureRangeInTrackJson() throws Exception {
+        FaceDB db = new FaceDB(tempDir);
+        String trackId = db.createTrackId();
+        String image = jpegBase64(new byte[] {(byte) 0xff, (byte) 0xd8, 1, (byte) 0xff, (byte) 0xd9});
+        db.register(trackId, new double[] {0.0, 0.0}, image);
+        db.register(trackId, new double[] {2.0, 0.0}, image);
+
+        db.finish(trackId);
+
+        String json = Files.readString(trackJson(trackId), StandardCharsets.UTF_8);
+        assertTrue(json.contains("\"featureRange\":{\"center\":[1.0,0.0],\"radius\":1.0}"));
+    }
+
+    @Test
+    void assignPropagatesPersonThroughMatchingTrackChain() throws Exception {
+        FaceDB db = new FaceDB(tempDir);
+        String image = jpegBase64(new byte[] {(byte) 0xff, (byte) 0xd8, 1, (byte) 0xff, (byte) 0xd9});
+        String firstTrackId = finishedTrack(db, image, 0.0, 0.4);
+        String middleTrackId = finishedTrack(db, image, 0.3, 0.7);
+        String lastTrackId = finishedTrack(db, image, 0.6, 1.0);
+
+        db.assign(firstTrackId, "alice");
+
+        assertEquals("person0000", JsonFields.string(Files.readString(trackJson(firstTrackId)), "personId"));
+        assertEquals("person0000", JsonFields.string(Files.readString(trackJson(middleTrackId)), "personId"));
+        assertEquals("person0000", JsonFields.string(Files.readString(trackJson(lastTrackId)), "personId"));
     }
 
     @Test
@@ -192,12 +221,21 @@ class FaceDBTest {
         return tempDir.resolve(trackId).resolve(trackId + ".json");
     }
 
-    private Path faceJson(String trackId, String faceId) {
-        return tempDir.resolve(trackId).resolve(faceId).resolve(faceId + ".json");
+    private Path sampleJson(String trackId, String sampleId) {
+        return tempDir.resolve(trackId).resolve(sampleId + ".json");
     }
 
-    private Path faceImage(String trackId, String faceId) {
-        return tempDir.resolve(trackId).resolve(faceId).resolve(faceId + ".jpg");
+    private Path sampleImage(String trackId, String sampleId) {
+        return tempDir.resolve(trackId).resolve(sampleId + ".jpg");
+    }
+
+    private String finishedTrack(FaceDB db, String image, double... descriptors) throws Exception {
+        String trackId = db.createTrackId();
+        for (double descriptor : descriptors) {
+            db.register(trackId, new double[] {descriptor}, image);
+        }
+        db.finish(trackId);
+        return trackId;
     }
 
     private static String jpegBase64(byte[] jpeg) {

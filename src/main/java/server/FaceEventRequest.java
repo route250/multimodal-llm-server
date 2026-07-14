@@ -1,15 +1,16 @@
 package server;
 
-import json.JsonFields;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import json.JsonFields;
+
 /**
  * ブラウザから届いた顔イベント JSON を、サーバ内部で扱う値に変換します。
  */
-record FaceEventRequest(
+public record FaceEventRequest(
         String eventType,
         String trackId,
         double[] descriptor,

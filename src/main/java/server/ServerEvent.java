@@ -1,10 +1,11 @@
 package server;
 
-import json.Json;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
+
 import audio.tts.AudioDelta;
+import json.Json;
 
 public record ServerEvent(String type, String message, Instant timestamp) {
     public static ServerEvent message(String message) {
@@ -108,7 +109,7 @@ public record ServerEvent(String type, String message, Instant timestamp) {
         String json = Json.object(Json.fields(
                 "state", result.presenceState(),
                 "trackId", result.trackId(),
-                "faceId", result.faceId(),
+                "sampleId", result.sampleId(),
                 "personId", result.personId(),
                 "personName", result.personName(),
                 "distance", result.distance(),

@@ -12,11 +12,11 @@ public class FacePossibility {
         }
     }
     public final String trackId;
-    public final String faceId;
+    public final String sampleId;
     public final FacePossibility.PersonPossibility[] personPossibilities;
-    public FacePossibility(String trackId, String faceId, FacePossibility.PersonPossibility[] p ) {
+    public FacePossibility(String trackId, String sampleId, FacePossibility.PersonPossibility[] p ) {
         this.trackId = trackId;
-        this.faceId = faceId;
+        this.sampleId = sampleId;
         this.personPossibilities = p;
     }
     public FacePossibility.PersonPossibility nearest() {

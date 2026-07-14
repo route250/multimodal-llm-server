@@ -39,7 +39,7 @@ class OpenAiResponsesLanguageModelLlamaCppTest {
 
         model.respondStreamingEvents(
                 List.of(
-                        new ChatMessage("user", "[カメラ情報] { \"name\": \"unknown\", \"trackId\": \"trak-000001\", \"faceId\": \"face-000001\", \"comment\": \"人物を認識しました\" }"),
+                        new ChatMessage("user", "[カメラ情報] { \"name\": \"unknown\", \"trackId\": \"trak-000001\", \"comment\": \"人物を認識しました\" }"),
                         new ChatMessage("assistant", "あなたのお名前をおしえてください。"),
                         new ChatMessage("user", "私の名前は、太郎です")),
                 List.of(OpenAiResponsesLanguageModelTest.assignFaceNameTool()),

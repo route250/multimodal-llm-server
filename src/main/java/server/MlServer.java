@@ -1,13 +1,5 @@
 package server;
 
-import audio.AudioDiagnostics;
-import com.sun.net.httpserver.HttpExchange;
-import com.sun.net.httpserver.HttpsConfigurator;
-import com.sun.net.httpserver.HttpsServer;
-import facedb.FaceDB;
-import facedb.FacePossibility;
-import json.Json;
-import json.JsonFields;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
@@ -24,7 +16,17 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+
 import javax.net.ssl.SSLContext;
+
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpsConfigurator;
+import com.sun.net.httpserver.HttpsServer;
+
+import audio.AudioDiagnostics;
+import facedb.FaceDB;
+import json.Json;
+import json.JsonFields;
 import llm.LanguageModelException;
 import llm.OpenAiResponsesLanguageModel;
 

@@ -1,10 +1,5 @@
 package server;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -18,18 +13,25 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import facedb.FaceDB;
-import json.JsonFields;
+
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.X509TrustManager;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import facedb.FaceDB;
+import json.JsonFields;
 import llm.ChatMessage;
 import llm.StreamingResponseHandler;
 import llm.ToolCall;
 import llm.ToolCallResult;
 import llm.ToolDefinition;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
 
 class FaceEventTest {
     @Test
@@ -52,9 +54,9 @@ class FaceEventTest {
             assertEquals(202, response.statusCode());
             assertTrue(response.body().contains("\"known\":false"));
             assertEquals("legacy", jsonString(response.body(), "trackId"));
-            assertEquals("face-000000", jsonString(response.body(), "faceId"));
-            assertTrue(Files.isRegularFile(tempDir.resolve("trak-000000").resolve("face-000000").resolve("face-000000.json")));
-            Path imagePath = tempDir.resolve("trak-000000").resolve("face-000000").resolve("face-000000.jpg");
+            assertEquals("sample-000000", jsonString(response.body(), "sampleId"));
+            assertTrue(Files.isRegularFile(tempDir.resolve("trak-000000").resolve("sample-000000.json")));
+            Path imagePath = tempDir.resolve("trak-000000").resolve("sample-000000.jpg");
             assertTrue(Files.isRegularFile(imagePath));
             assertTrue(Files.size(imagePath) > 0);
         }
@@ -82,11 +84,11 @@ class FaceEventTest {
 
             assertEquals(202, response.statusCode());
             assertTrue(response.body().contains("\"known\":true"));
-            assertEquals("face-000001", jsonString(response.body(), "faceId"));
+            assertEquals("sample-000000", jsonString(response.body(), "sampleId"));
             assertEquals("person0000", jsonString(response.body(), "personId"));
             assertEquals("山田", jsonString(response.body(), "personName"));
-            assertTrue(Files.isRegularFile(tempDir.resolve("trak-000001").resolve("face-000001").resolve("face-000001.json")));
-            assertTrue(Files.isRegularFile(tempDir.resolve("trak-000001").resolve("face-000001").resolve("face-000001.jpg")));
+            assertTrue(Files.isRegularFile(tempDir.resolve("trak-000001").resolve("sample-000000.json")));
+            assertTrue(Files.isRegularFile(tempDir.resolve("trak-000001").resolve("sample-000000.jpg")));
         }
     }
 
@@ -109,7 +111,7 @@ class FaceEventTest {
 
             assertEquals(202, response.statusCode());
             assertEquals("person-left", jsonString(response.body(), "presenceState"));
-            assertEquals("none", jsonString(response.body(), "faceId"));
+            assertEquals("none", jsonString(response.body(), "sampleId"));
             assertFalse(Files.exists(tempDir.resolve("trak-000000")));
         }
     }
@@ -125,18 +127,18 @@ class FaceEventTest {
                     new TranscriptAudioProcessor("unused"),
                     languageModel);
 
-            client.handleFacePresence(FaceEventResult.unknownFace("face-000000"));
+            client.handleFacePresence(FaceEventResult.unknownFace("sample-000000"));
             assertTrue(languageModel.awaitCalls(1));
             client.handleFacePresence(FaceEventResult.left());
 
             assertEquals(1, languageModel.calls().size());
             assertEquals(List.of(
-                    "system:[カメラ情報] { \"name\": \"unknown\", \"trackId\": \"legacy\", \"faceId\": \"face-000000\", \"comment\": \"人物を認識しました\" }"),
+                    "system:[カメラ情報] { \"name\": \"unknown\", \"trackId\": \"legacy\", \"comment\": \"人物を認識しました\" }"),
                     languageModel.calls().get(0));
             var history = client.conversationHistoryForTest();
             assertEquals(2, history.size());
             assertEquals("system", history.get(0).role());
-            assertEquals("[カメラ情報] { \"name\": \"unknown\", \"trackId\": \"legacy\", \"faceId\": \"face-000000\", \"comment\": \"人物を認識しました\" }",
+            assertEquals("[カメラ情報] { \"name\": \"unknown\", \"trackId\": \"legacy\", \"comment\": \"人物を認識しました\" }",
                     history.get(0).text());
             assertEquals("system", history.get(1).role());
             assertEquals("[カメラ情報] { \"comment\": \"だれもいなくなりました\"}", history.get(1).text());
@@ -168,9 +170,9 @@ class FaceEventTest {
     @Test
     void assignFaceNameToolCallUpdatesFaceDB(@TempDir Path tempDir) throws Exception {
         FaceDB db = new FaceDB(tempDir);
-        String trackId = db.createTrackId();
-        db.register(trackId, descriptor(0.1), jpegBase64(new byte[] {(byte) 0xff, (byte) 0xd8, 1, (byte) 0xff, (byte) 0xd9}));
         try (MlServer server = new MlServer(0, db)) {
+            String trackId = db.createTrackId();
+            db.register(trackId, descriptor(0.1), jpegBase64(new byte[] {(byte) 0xff, (byte) 0xd8, 1, (byte) 0xff, (byte) 0xd9}));
             ChatGroup group = new ChatGroup("group-test", server);
             ChatClient listener = group.join("listener");
             drainJoinEvents(listener);
@@ -274,7 +276,7 @@ class FaceEventTest {
                         .GET()
                         .build(),
                 HttpResponse.BodyHandlers.discarding());
-        Thread.sleep(100);
+        Thread.sleep(500);
         return connection;
     }
 

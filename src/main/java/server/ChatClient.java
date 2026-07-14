@@ -1,13 +1,13 @@
 package server;
 
+import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.io.IOException;
-import java.nio.file.Path;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Callable;
@@ -15,7 +15,23 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Future;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.LinkedBlockingQueue;
+
 import audio.AudioDiagnostics;
+import audio.AudioProcessor;
+import audio.AudioProcessor.SpeechStateChange;
+import audio.AudioProcessor.TranscriptionKind;
+import audio.AudioProcessor.TranscriptionResult;
+import audio.AudioProcessor.TranscriptionStarted;
+import audio.stt.Lfm2AudioSpeechToText;
+import audio.stt.SpeechToTextException;
+import audio.tts.AudioDelta;
+import audio.tts.Lfm2AudioTextToSpeech;
+import audio.tts.StreamingTextChunker;
+import audio.tts.TextToSpeech;
+import audio.tts.TextToSpeechException;
+import audio.vad.smartturn.LazySmartTurnV3;
+import facedb.FaceDB;
+import facedb.FacePossibility;
 import json.Json;
 import json.JsonFields;
 import llm.ChatMessage;
@@ -28,22 +44,6 @@ import llm.ToolCallResult;
 import llm.ToolDefinition;
 import model.download.SmartTurnV3ModelDownloader;
 import onnx.OnnxModelException;
-import audio.stt.Lfm2AudioSpeechToText;
-import audio.stt.SpeechToTextException;
-import audio.stt.Transcription;
-import audio.tts.AudioDelta;
-import audio.tts.Lfm2AudioTextToSpeech;
-import audio.tts.StreamingTextChunker;
-import audio.tts.TextToSpeech;
-import audio.tts.TextToSpeechException;
-import audio.AudioProcessor;
-import audio.AudioProcessor.SpeechStateChange;
-import audio.AudioProcessor.TranscriptionKind;
-import audio.AudioProcessor.TranscriptionResult;
-import audio.AudioProcessor.TranscriptionStarted;
-import audio.vad.smartturn.LazySmartTurnV3;
-import facedb.FaceDB;
-import facedb.FacePossibility;
 
 public class ChatClient {
     private static final int MAX_HISTORY_MESSAGES = 20;
@@ -241,9 +241,11 @@ public class ChatClient {
 
     public FaceEventResult handleFacePresence(FaceDB faceDB,FaceEventRequest request ) throws IOException {
         if ("person-left".equals(request.eventType())) {
+            String trackId;
             synchronized (faceTrackLock) {
-                this.trackmap.remove(request.trackId());
+                trackId = this.trackmap.remove(request.trackId());
             }
+            faceDB.finish(trackId);
             FaceEventResult result = FaceEventResult.left().withTrackId(request.trackId());
             handleFacePresence(result);
             return result;
@@ -266,7 +268,7 @@ public class ChatClient {
                     "unknown",
                     null,
                     false,
-                    registered.faceId,
+                    registered.sampleId,
                     request.presenceState(),
                     request.trackId());
         } else {
@@ -276,7 +278,7 @@ public class ChatClient {
                 nearest.name,
                 (double) nearest.distance,
                 true,
-                registered.faceId,
+                registered.sampleId,
                 request.presenceState(),
                 request.trackId());
         }
@@ -316,16 +318,14 @@ public class ChatClient {
 
     private static String facePresenceHistoryText(FaceEventResult result) {
         String personName = null;
-        String faceId = "";
         String trackId = "";
         String m;
         if ("person-left".equals(result.presenceState())) {
             m = "[カメラ情報] { \"comment\": \"だれもいなくなりました\"}";
         } else {
-            faceId = result.faceId() == null || result.faceId().isBlank() ? "" : result.faceId();
             trackId = result.trackId() == null || result.trackId().isBlank() ? "" : result.trackId();
             personName = result.personName() == null || result.personName().isBlank() ? "知らない人" : result.personName();
-            m = "[カメラ情報] { \"name\": \"" + personName + "\", \"trackId\": \"" + trackId + "\", \"faceId\": \""+faceId+"\", \"comment\": \"人物を認識しました\" }";
+            m = "[カメラ情報] { \"name\": \"" + personName + "\", \"trackId\": \"" + trackId + "\", \"comment\": \"人物を認識しました\" }";
         }
         System.out.println(m);
         return m;
