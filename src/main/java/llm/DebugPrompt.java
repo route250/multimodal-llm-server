@@ -2,15 +2,18 @@ package llm;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+
+import com.openai.core.JsonValue;
+import com.openai.models.responses.FunctionTool;
+import com.openai.models.responses.ResponseFunctionToolCall;
 
 import llm.OpenAiResponsesLanguageModel.Config;
 import server.ChatClient;
 
 public class DebugPrompt {
 
-    public static void main(String[] args) throws Exception {
-
-        String systemPrompt = """
+    static final String SYSTEM_PROMPT = """
                 あなたは会話AIの「りり」です。目の前の相手に、親しみのある丁寧な日本語で話しかけます。
 
                 system ロールの「人物認識通知」は、相手が来たことを知らせる内部通知です。相手の発言ではありません。
@@ -30,12 +33,123 @@ public class DebugPrompt {
                 名前不明の人物認識通知の後で相手が自分の名前を名乗った場合は、assign_face_name ツールを必ず呼び出します。
                 ツール引数の trackId には直前の人物認識通知にある trackId を、name には相手が名乗った人名だけを指定します。
                 ツールの実行結果を受け取るまでは、名前を登録したとは発話しません。
+
+                あなたは会話AIです。AIの発言だけを出力して下さい。
                 """;
+        static final String SYSTEM_PROMPT2 = """
+                あなたは会話AIの「りり」です。目の前の相手と親しみのある会話をします。AIの発言だけを出力して下さい。
+                """;
+    public static void main(String[] args) throws Exception {
+        test2();
+    }
+    public static void test2() {
+
+        List<LLM.Tool> tools = List.of( new WeatherTool(), new PersonTool() );
+        Config baseConfig = OpenAiResponsesLanguageModel.fromEnvironment();
+
+        String inputRole = "system";
+        List<List<LLM.Message>> test_case_list = List.of(
+                List.of(
+                    new LLM.Message(inputRole, "人物認識通知\n認識結果: 名前不明\n相手の名前: 不明\ntrackId: faceId-00001"),
+                    new LLM.Message("user", "はい、わたしの名前はかおりです。")
+                ),
+                List.of(new LLM.Message(inputRole, "人物認識通知\n認識結果: 登録済み\n相手の名前: かおり\ntrackId: faceId-00001"))
+        );
+        for( List<LLM.Message> test_case : test_case_list ) {
+
+            System.out.println("-----------");
+
+            LLM llm = new LlmOpenAI( baseConfig.baseUri().toString(), "p", baseConfig.model(), false );
+            List<LLM.Message> messages = new ArrayList<>();
+            messages.add( new LLM.Message("system",SYSTEM_PROMPT2));
+
+            for( LLM.Message input_message : test_case ) {
+                System.out.println("[CALL]"+input_message);
+                messages.add(input_message);
+                List<LLM.Message> output = llm.call( messages, tools );
+                for( LLM.Message output_message : output ) {
+                    System.out.println( "[OUTPUT]"+output_message );
+                    messages.add(output_message);
+                }
+            }
+        }
+    }
+    public static class WeatherTool implements LLM.Tool {
+
+        @Override
+        public FunctionTool definiton() {
+        FunctionTool.Parameters parameters = FunctionTool.Parameters.builder()
+                .putAdditionalProperty("type", JsonValue.from("object"))
+                .putAdditionalProperty("properties", JsonValue.from(Map.of(
+                        "location", Map.of(
+                                "type", "string",
+                                "description", "天気を取得する都市名"))))
+                .putAdditionalProperty("required", JsonValue.from(List.of("location")))
+                .putAdditionalProperty("additionalProperties", JsonValue.from(false))
+                .build();
+        return FunctionTool.builder()
+                .name("get_weather")
+                .description("指定された都市の現在の天気を取得します。かならず天気を確認して回答すること。")
+                .parameters(parameters)
+                .strict(true)
+                .build();
+        }
+
+        @Override
+        public String exec(ResponseFunctionToolCall functionCall) {
+            System.out.println("###CALLED###");
+            if (!functionCall.name().equals("get_weather")) {
+                throw new IllegalArgumentException("未登録のツールです: " + functionCall.name());
+            }
+            return "{\"condition\":\"晴れ\",\"temperatureC\":25}";
+        }
+
+    }
+
+    public static class PersonTool implements LLM.Tool {
+
+        @Override
+        public FunctionTool definiton() {
+        FunctionTool.Parameters parameters = FunctionTool.Parameters.builder()
+                .putAdditionalProperty("type", JsonValue.from("object"))
+                .putAdditionalProperty("properties", JsonValue.from(Map.of(
+                        "trackId", Map.of(
+                                "type", "string",
+                                "description", "人物認識通知のtrackId"),
+                        "name", Map.of(
+                            "type", "string",
+                            "description", "trackIdに登録する名前"
+                        )
+                )))
+                .putAdditionalProperty("required", JsonValue.from(List.of("location")))
+                .putAdditionalProperty("additionalProperties", JsonValue.from(false))
+                .build();
+        return FunctionTool.builder()
+                .name("persons")
+                .description("人物認識通知のtrackIdにユーザ名を登録します。登録したら次回からユーザ名を推論できます。")
+                .parameters(parameters)
+                .strict(true)
+                .build();
+        }
+
+        @Override
+        public String exec(ResponseFunctionToolCall functionCall) {
+            System.out.println("###CALLED###");
+            if (!functionCall.name().equals("persons")) {
+                throw new IllegalArgumentException("未登録のツールです: " + functionCall.name());
+            }
+            return "{\"condition\":\"晴れ\",\"temperatureC\":25}";
+        }
+
+    }
+
+    public static void test1() {
+
         Config baseConfig = OpenAiResponsesLanguageModel.fromEnvironment();
         Config conf = new Config(
                 baseConfig.baseUri(),
                 baseConfig.model(), // LFM2.5-1.2B-JP-202606 を想定
-                systemPrompt,
+                SYSTEM_PROMPT,
                 baseConfig.timeout(),
                 baseConfig.apiKey()
         );
