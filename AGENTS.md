@@ -35,7 +35,7 @@ mvn -q -DskipTests compile
 ポート指定:
 
 ```bash
-./run-server.sh 18080
+./run-server.sh 13080
 ```
 
 ## 実装方針

@@ -8,6 +8,8 @@ import com.openai.core.JsonValue;
 import com.openai.models.responses.FunctionTool;
 import com.openai.models.responses.ResponseFunctionToolCall;
 
+import json.Json;
+import json.JsonFields;
 import llm.OpenAiResponsesLanguageModel.Config;
 import server.ChatClient;
 
@@ -118,15 +120,15 @@ public class DebugPrompt {
                                 "description", "人物認識通知のtrackId"),
                         "name", Map.of(
                             "type", "string",
-                            "description", "trackIdに登録する名前"
+                            "description", "trackIdに登録する名前。禁止:不明,unknown"
                         )
                 )))
-                .putAdditionalProperty("required", JsonValue.from(List.of("location")))
+                .putAdditionalProperty("required", JsonValue.from(List.of("trackId", "name")))
                 .putAdditionalProperty("additionalProperties", JsonValue.from(false))
                 .build();
         return FunctionTool.builder()
                 .name("persons")
-                .description("人物認識通知のtrackIdにユーザ名を登録します。登録したら次回からユーザ名を推論できます。")
+                .description("ユーザから聞いた名前を登録します。人物認識通知の名前が`不明`をなっている場合は、ユーザに名前を聞いて登録してください。不明やunknownは登録できません。")
                 .parameters(parameters)
                 .strict(true)
                 .build();
@@ -138,7 +140,23 @@ public class DebugPrompt {
             if (!functionCall.name().equals("persons")) {
                 throw new IllegalArgumentException("未登録のツールです: " + functionCall.name());
             }
-            return "{\"condition\":\"晴れ\",\"temperatureC\":25}";
+            String arguments = functionCall.arguments();
+            String trackId = JsonFields.stringOrDefault(arguments, "trackId", "").trim();
+            String name = JsonFields.stringOrDefault(arguments, "name", "").trim();
+            if (trackId.isBlank() || name.isBlank() || "unknown".equalsIgnoreCase(name) || "不明".equals(name)) {
+                return Json.object(Json.fields(
+                        "status", "failed",
+                        "error", "ユーザに名前を聞いて登録してね。",
+                        "trackId", trackId,
+                        "name", name));
+            }
+            System.out.printf("register person: trackId=%s, name=%s%n", trackId, name);
+            return Json.object(Json.fields(
+                    "status", "ok",
+                    "trackId", trackId,
+                    "name", name,
+                    "message", "登録できました。’"+name+"'さんとの会話を進めてください。"
+            ));
         }
 
     }

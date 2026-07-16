@@ -27,11 +27,11 @@ public record FaceEventResult(
     }
 
     public static FaceEventResult unknown(Double distance) {
-        return new FaceEventResult("accepted", "unknown", "unknown", distance, false, "unknown", "person-entered", "legacy");
+        return new FaceEventResult("accepted", "none", "none", distance, false, "none", "person-entered", "legacy");
     }
 
     public static FaceEventResult unknownFace(String sampleId) {
-        return new FaceEventResult("accepted", "unknown", "unknown", null, false, sampleId, "person-entered", "legacy");
+        return new FaceEventResult("accepted", "none", "none", null, false, sampleId, "person-entered", "legacy");
     }
 
     public static FaceEventResult left() {

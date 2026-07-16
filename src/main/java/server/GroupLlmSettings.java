@@ -14,9 +14,9 @@ import llm.OpenAiResponsesLanguageModel;
 /** Group ごとの LLM 設定を .local 配下へ保存します。 */
 final class GroupLlmSettings {
     private static final String FILE_NAME = "llm.json";
-    static final String DEFAULT_BASE_URL = "http://localhost:8767/v1";
-    static final String DEFAULT_MODEL = "LFM2\\.5";
-    static final String DEFAULT_SYSTEM_PROMPT = "ボクはおしゃべり大好きなAI。名前はリキッドリリ。口癖は「君たちはいつもそうだ」「わけがわからないよ」。カメラ情報で話す相手を認識したら挨拶したり文句言ったりするんだよ。";
+    static final String DEFAULT_BASE_URL = OpenAiResponsesLanguageModel.DEFAULT_BASE_URI.toString();
+    static final String DEFAULT_MODEL = OpenAiResponsesLanguageModel.DEFAULT_MODEL_PATTERN;
+    static final String DEFAULT_SYSTEM_PROMPT = OpenAiResponsesLanguageModel.DEFAULT_SYSTEM_PROMPT;
     private final String baseUrl;
     private final String model;
     private final String apiKey;
@@ -31,7 +31,10 @@ final class GroupLlmSettings {
 
     static GroupLlmSettings defaults(String groupId) {
         if ("group-2".equals(groupId)) {
-            return new GroupLlmSettings("https://api.openai.com/v1", "gpt-4.1-nano", "", DEFAULT_SYSTEM_PROMPT);
+            return new GroupLlmSettings(
+                OpenAiResponsesLanguageModel.OPENAI_BASE_URI.toString(),
+                OpenAiResponsesLanguageModel.OPENAI_MODEL_PATTERN,
+                "", DEFAULT_SYSTEM_PROMPT);
         }
         return new GroupLlmSettings(DEFAULT_BASE_URL, DEFAULT_MODEL, "", DEFAULT_SYSTEM_PROMPT);
     }

@@ -278,7 +278,7 @@ public class FaceDB {
 
     private static int parseOptionalPersonId(String personId) {
         String value = personId == null ? "" : personId.trim();
-        if (value.isEmpty() || "unknown".equals(value)) {
+        if (value.isEmpty() || "unknown".equals(value) || "none".equals(value)) {
             return -1;
         }
         if (!value.matches("person\\d{4}")) {

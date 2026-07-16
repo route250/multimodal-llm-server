@@ -269,8 +269,8 @@ public class ChatClient {
         if (nearest == null) {
             result = new FaceEventResult(
                     "accepted",
-                    "unknown",
-                    "unknown",
+                    "",
+                    "",
                     null,
                     false,
                     registered.sampleId,
@@ -329,7 +329,7 @@ public class ChatClient {
             m = "人物認識通知\n認識結果: 不在\n相手の名前: 不在\ntrackId: 不在";
         } else {
             trackId = result.trackId() == null || result.trackId().isBlank() ? "" : result.trackId();
-            if( result.personName() == null || result.personName().isBlank() ) {
+            if( !result.known() || result.personName() == null || result.personName().isBlank() ) {
                 m = "人物認識通知\n認識結果: 名前不明\n相手の名前: 不明\ntrackId: " + trackId;
             } else {
                 m = "人物認識通知\n認識結果: 登録済み\n相手の名前: "+result.personName()+"\ntrackId: "+result.trackId();

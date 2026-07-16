@@ -8,18 +8,21 @@ import audio.AudioDiagnostics;
 
 public class Main {
     private static final String DEFAULT_HOST = "0.0.0.0";
-    private static final int DEFAULT_PORT = 8443;
+    private static final int DEFAULT_PORT = 13443;
+    private static final int DEFAULT_HTTP_PORT = 13080;
 
     public static void main(String[] args) throws IOException {
         AudioDiagnostics.clearOnStartup();
         new StartupCheck().verify();
         SSLContext sslContext = LocalHttpsCertificate.sslContext();
-        MlServer server = new MlServer(resolveHost(args), resolvePort(args), sslContext);
+        MlServer server = new MlServer(resolveHost(args), resolvePort(args), resolveHttpPort(args), sslContext);
         server.start();
         System.out.printf("HTTPS server listening: %s:%d%n", server.host(), server.port());
         for (String url : LocalHttpsCertificate.accessUrls(server.port())) {
             System.out.println("HTTPS server started: " + url);
         }
+        System.out.printf("HTTP server listening: %s:%d%n", server.host(), server.httpPort());
+        System.out.printf("HTTP server started: http://localhost:%d/%n", server.httpPort());
     }
 
     private static int resolvePort(String[] args) {
@@ -34,5 +37,12 @@ public class Main {
             return DEFAULT_HOST;
         }
         return args[1];
+    }
+
+    private static int resolveHttpPort(String[] args) {
+        if (args.length < 3) {
+            return DEFAULT_HTTP_PORT;
+        }
+        return Integer.parseInt(args[2]);
     }
 }

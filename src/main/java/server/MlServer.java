@@ -20,6 +20,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import javax.net.ssl.SSLContext;
 
 import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpServer;
 import com.sun.net.httpserver.HttpsConfigurator;
 import com.sun.net.httpserver.HttpsServer;
 
@@ -36,6 +37,7 @@ public class MlServer implements AutoCloseable {
     private static final Path LOCAL_ROOT = Paths.get(".local").toAbsolutePath().normalize();
 
     private final HttpsServer httpsServer;
+    private final HttpServer httpServer;
     private final ExecutorService executor;
     private final FaceDB faceDB;
     private final Map<String, ChatGroup> chatGroups = new ConcurrentHashMap<>();
@@ -51,7 +53,11 @@ public class MlServer implements AutoCloseable {
     }
 
     public MlServer(String host, int port, SSLContext sslContext) throws IOException {
-        this(host, port, new FaceDB(Path.of(".local", "facedb")), sslContext);
+        this(host, port, 0, new FaceDB(Path.of(".local", "facedb")), sslContext);
+    }
+
+    public MlServer(String host, int httpsPort, int httpPort, SSLContext sslContext) throws IOException {
+        this(host, httpsPort, httpPort, new FaceDB(Path.of(".local", "facedb")), sslContext);
     }
 
     MlServer(int port, FaceDB faceDB) throws IOException {
@@ -63,31 +69,48 @@ public class MlServer implements AutoCloseable {
     }
 
     MlServer(String host, int port, FaceDB faceDB, SSLContext sslContext) throws IOException {
+        this(host, port, 0, faceDB, sslContext);
+    }
+
+    MlServer(String host, int httpsPort, int httpPort, FaceDB faceDB, SSLContext sslContext) throws IOException {
         this.faceDB = faceDB;
         this.faceDB.load();
         createDefaultChatGroups();
-        httpsServer = HttpsServer.create(new InetSocketAddress(host, port), 0);
+        httpsServer = HttpsServer.create(new InetSocketAddress(host, httpsPort), 0);
         httpsServer.setHttpsConfigurator(new HttpsConfigurator(sslContext));
-        registerContexts();
+        registerContexts(httpsServer);
+        httpServer = httpPort > 0 ? HttpServer.create(new InetSocketAddress(host, httpPort), 0) : null;
+        if (httpServer != null) {
+            registerContexts(httpServer);
+        }
         executor = Executors.newVirtualThreadPerTaskExecutor();
         httpsServer.setExecutor(executor);
+        if (httpServer != null) {
+            httpServer.setExecutor(executor);
+        }
     }
 
-    private void registerContexts() {
-        httpsServer.createContext("/chat/request", this::handleChatRequest);
-        httpsServer.createContext("/chat/playback", this::handleChatPlayback);
-        httpsServer.createContext("/chat/client-log", this::handleChatClientLog);
-        httpsServer.createContext("/chat/connect", this::handleChatConnect);
-        httpsServer.createContext("/chat/settings", this::handleChatSettings);
-        httpsServer.createContext("/face/event", this::handleFaceEvent);
-        httpsServer.createContext("/", this::handleStaticFile);
+    private void registerContexts(HttpServer server) {
+        server.createContext("/chat/request", this::handleChatRequest);
+        server.createContext("/chat/playback", this::handleChatPlayback);
+        server.createContext("/chat/client-log", this::handleChatClientLog);
+        server.createContext("/chat/connect", this::handleChatConnect);
+        server.createContext("/chat/settings", this::handleChatSettings);
+        server.createContext("/face/event", this::handleFaceEvent);
+        server.createContext("/", this::handleStaticFile);
     }
 
     public void start() {
         httpsServer.start();
+        if (httpServer != null) {
+            httpServer.start();
+        }
     }
 
     public void stop() {
+        if (httpServer != null) {
+            httpServer.stop(0);
+        }
         httpsServer.stop(0);
         executor.shutdown();
     }
@@ -98,6 +121,10 @@ public class MlServer implements AutoCloseable {
 
     public String host() {
         return httpsServer.getAddress().getHostString();
+    }
+
+    public int httpPort() {
+        return httpServer == null ? 0 : httpServer.getAddress().getPort();
     }
 
     @Override
