@@ -74,7 +74,9 @@ public class LlmOpenAI implements LLM {
 
             List<ResponseInputItem> input_messages = new ArrayList<>();
             for( Message m : messages ) {
-                com.openai.models.responses.ResponseInputItem.Message.Builder mb = ResponseInputItem.Message.builder();
+                com.openai.models.responses.ResponseInputItem.Message.Builder mb =
+                        ResponseInputItem.Message.builder()
+                                .type(ResponseInputItem.Message.Type.MESSAGE);
                 if ("assistant".equals(m.role)) {
                     mb.role(Role.of("assistant"));
                 } else if ("system".equals(m.role)) {

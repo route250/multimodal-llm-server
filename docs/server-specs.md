@@ -27,6 +27,11 @@ Alternative Name list changes. The certificate includes `localhost`,
 `127.0.0.1`, `::1`, local host names, and current LAN IP addresses. `0.0.0.0`
 is only a bind address and is not included in the certificate.
 
+Plain HTTP requests from loopback addresses (`127.0.0.1` and `::1`) are handled
+normally. Plain HTTP requests from other addresses receive a `308 Permanent
+Redirect` to the HTTPS port while preserving the requested host, path, and
+query.
+
 ## Static File Serving
 
 All requests except chat API paths are resolved as static files.

@@ -2,7 +2,9 @@ package server;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.URI;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -20,6 +22,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import javax.net.ssl.SSLContext;
 
 import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
 import com.sun.net.httpserver.HttpsConfigurator;
 import com.sun.net.httpserver.HttpsServer;
@@ -78,10 +81,10 @@ public class MlServer implements AutoCloseable {
         createDefaultChatGroups();
         httpsServer = HttpsServer.create(new InetSocketAddress(host, httpsPort), 0);
         httpsServer.setHttpsConfigurator(new HttpsConfigurator(sslContext));
-        registerContexts(httpsServer);
+        registerContexts(httpsServer, false);
         httpServer = httpPort > 0 ? HttpServer.create(new InetSocketAddress(host, httpPort), 0) : null;
         if (httpServer != null) {
-            registerContexts(httpServer);
+            registerContexts(httpServer, true);
         }
         executor = Executors.newVirtualThreadPerTaskExecutor();
         httpsServer.setExecutor(executor);
@@ -90,14 +93,63 @@ public class MlServer implements AutoCloseable {
         }
     }
 
-    private void registerContexts(HttpServer server) {
-        server.createContext("/chat/request", this::handleChatRequest);
-        server.createContext("/chat/playback", this::handleChatPlayback);
-        server.createContext("/chat/client-log", this::handleChatClientLog);
-        server.createContext("/chat/connect", this::handleChatConnect);
-        server.createContext("/chat/settings", this::handleChatSettings);
-        server.createContext("/face/event", this::handleFaceEvent);
-        server.createContext("/", this::handleStaticFile);
+    private void registerContexts(HttpServer server, boolean redirectExternal) {
+        createContext(server, "/chat/request", this::handleChatRequest, redirectExternal);
+        createContext(server, "/chat/playback", this::handleChatPlayback, redirectExternal);
+        createContext(server, "/chat/client-log", this::handleChatClientLog, redirectExternal);
+        createContext(server, "/chat/connect", this::handleChatConnect, redirectExternal);
+        createContext(server, "/chat/settings", this::handleChatSettings, redirectExternal);
+        createContext(server, "/face/event", this::handleFaceEvent, redirectExternal);
+        createContext(server, "/", this::handleStaticFile, redirectExternal);
+    }
+
+    private void createContext(HttpServer server, String path, HttpHandler handler, boolean redirectExternal) {
+        server.createContext(path, redirectExternal ? redirectExternalHttp(handler) : handler);
+    }
+
+    /**
+     * ループバック以外から届いた平文HTTPを、同じホストのHTTPSポートへ転送する。
+     */
+    private HttpHandler redirectExternalHttp(HttpHandler handler) {
+        return exchange -> {
+            InetAddress remoteAddress = exchange.getRemoteAddress().getAddress();
+            if (permitsPlainHttp(remoteAddress)) {
+                handler.handle(exchange);
+                return;
+            }
+
+            String hostHeader = exchange.getRequestHeaders().getFirst("Host");
+            try {
+                exchange.getResponseHeaders().set(
+                        "Location",
+                        httpsRedirectLocation(hostHeader, exchange.getRequestURI(), port()));
+                exchange.sendResponseHeaders(308, -1);
+                exchange.close();
+            } catch (IllegalArgumentException e) {
+                sendText(exchange, 400, "text/plain; charset=utf-8", "Invalid Host header");
+            }
+        };
+    }
+
+    static boolean permitsPlainHttp(InetAddress remoteAddress) {
+        return remoteAddress != null && remoteAddress.isLoopbackAddress();
+    }
+
+    static String httpsRedirectLocation(String hostHeader, URI requestUri, int httpsPort) {
+        if (hostHeader == null || hostHeader.isBlank()) {
+            throw new IllegalArgumentException("Host header is required");
+        }
+
+        URI hostUri = URI.create("http://" + hostHeader);
+        String host = hostUri.getHost();
+        boolean hasPath = hostUri.getRawPath() != null && !hostUri.getRawPath().isEmpty();
+        if (host == null || hostUri.getUserInfo() != null || hasPath
+                || hostUri.getRawQuery() != null || hostUri.getRawFragment() != null) {
+            throw new IllegalArgumentException("Invalid Host header");
+        }
+
+        String formattedHost = host.contains(":") && !host.startsWith("[") ? "[" + host + "]" : host;
+        return "https://" + formattedHost + ":" + httpsPort + requestUri;
     }
 
     public void start() {

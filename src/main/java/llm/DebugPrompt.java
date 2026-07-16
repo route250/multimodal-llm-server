@@ -11,6 +11,7 @@ import com.openai.models.responses.ResponseFunctionToolCall;
 import json.Json;
 import json.JsonFields;
 import llm.OpenAiResponsesLanguageModel.Config;
+import llm.tools.WeatherTool;
 import server.ChatClient;
 
 public class DebugPrompt {
@@ -40,6 +41,7 @@ public class DebugPrompt {
                 """;
         static final String SYSTEM_PROMPT2 = """
                 あなたは会話AIの「りり」です。目の前の相手と親しみのある会話をします。AIの発言だけを出力して下さい。
+                あなたのセリフのみ出力して下さい。
                 """;
     public static void main(String[] args) throws Exception {
         test2();
@@ -52,10 +54,10 @@ public class DebugPrompt {
         String inputRole = "system";
         List<List<LLM.Message>> test_case_list = List.of(
                 List.of(
-                    new LLM.Message(inputRole, "人物認識通知\n認識結果: 名前不明\n相手の名前: 不明\ntrackId: faceId-00001"),
+                    new LLM.Message(inputRole, "だれか他の人が居ます(trackId:track-00001)。挨拶をしてお名前を聞いてみましょう。名前がわかったらツールをコール"),
                     new LLM.Message("user", "はい、わたしの名前はかおりです。")
                 ),
-                List.of(new LLM.Message(inputRole, "人物認識通知\n認識結果: 登録済み\n相手の名前: かおり\ntrackId: faceId-00001"))
+                List.of(new LLM.Message(inputRole, "ユーザ名 かおり(trackId:track-00001)と出会いました。まずは挨拶から"))
         );
         for( List<LLM.Message> test_case : test_case_list ) {
 
@@ -76,77 +78,42 @@ public class DebugPrompt {
             }
         }
     }
-    public static class WeatherTool implements LLM.Tool {
+    public static class PersonTool extends LLM.Tool {
 
-        @Override
-        public FunctionTool definiton() {
-        FunctionTool.Parameters parameters = FunctionTool.Parameters.builder()
-                .putAdditionalProperty("type", JsonValue.from("object"))
-                .putAdditionalProperty("properties", JsonValue.from(Map.of(
-                        "location", Map.of(
-                                "type", "string",
-                                "description", "天気を取得する都市名"))))
-                .putAdditionalProperty("required", JsonValue.from(List.of("location")))
-                .putAdditionalProperty("additionalProperties", JsonValue.from(false))
-                .build();
-        return FunctionTool.builder()
-                .name("get_weather")
-                .description("指定された都市の現在の天気を取得します。かならず天気を確認して回答すること。")
-                .parameters(parameters)
-                .strict(true)
-                .build();
+        public PersonTool() {
+            super(
+                "persons",
+                "ユーザから聞いた名前を覚える。"
+            );
         }
 
         @Override
-        public String exec(ResponseFunctionToolCall functionCall) {
-            System.out.println("###CALLED###");
-            if (!functionCall.name().equals("get_weather")) {
-                throw new IllegalArgumentException("未登録のツールです: " + functionCall.name());
-            }
-            return "{\"condition\":\"晴れ\",\"temperatureC\":25}";
-        }
-
-    }
-
-    public static class PersonTool implements LLM.Tool {
-
-        @Override
-        public FunctionTool definiton() {
-        FunctionTool.Parameters parameters = FunctionTool.Parameters.builder()
+        public FunctionTool.Parameters parameters() {
+            return FunctionTool.Parameters.builder()
                 .putAdditionalProperty("type", JsonValue.from("object"))
                 .putAdditionalProperty("properties", JsonValue.from(Map.of(
                         "trackId", Map.of(
                                 "type", "string",
-                                "description", "人物認識通知のtrackId"),
+                                "description", "人物映像の追跡ID track-999999"),
                         "name", Map.of(
                             "type", "string",
-                            "description", "trackIdに登録する名前。禁止:不明,unknown"
+                            "description", "覚える名前。禁止:不明,unknown"
                         )
                 )))
                 .putAdditionalProperty("required", JsonValue.from(List.of("trackId", "name")))
                 .putAdditionalProperty("additionalProperties", JsonValue.from(false))
                 .build();
-        return FunctionTool.builder()
-                .name("persons")
-                .description("ユーザから聞いた名前を登録します。人物認識通知の名前が`不明`をなっている場合は、ユーザに名前を聞いて登録してください。不明やunknownは登録できません。")
-                .parameters(parameters)
-                .strict(true)
-                .build();
         }
 
         @Override
-        public String exec(ResponseFunctionToolCall functionCall) {
-            System.out.println("###CALLED###");
-            if (!functionCall.name().equals("persons")) {
-                throw new IllegalArgumentException("未登録のツールです: " + functionCall.name());
-            }
-            String arguments = functionCall.arguments();
+        public String exec(ResponseFunctionToolCall functionCall, String arguments ) {
+            System.out.println("###CALLED### "+this.name);
             String trackId = JsonFields.stringOrDefault(arguments, "trackId", "").trim();
             String name = JsonFields.stringOrDefault(arguments, "name", "").trim();
             if (trackId.isBlank() || name.isBlank() || "unknown".equalsIgnoreCase(name) || "不明".equals(name)) {
                 return Json.object(Json.fields(
                         "status", "failed",
-                        "error", "ユーザに名前を聞いて登録してね。",
+                        "error", "ユーザに名前を聞いてね。",
                         "trackId", trackId,
                         "name", name));
             }
@@ -155,7 +122,7 @@ public class DebugPrompt {
                     "status", "ok",
                     "trackId", trackId,
                     "name", name,
-                    "message", "登録できました。’"+name+"'さんとの会話を進めてください。"
+                    "message", "覚えました。’"+name+"'さんとの会話を進めてください。"
             ));
         }
 
