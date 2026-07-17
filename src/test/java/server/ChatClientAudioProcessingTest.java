@@ -22,10 +22,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 import llm.ChatMessage;
-import llm.LanguageModel;
+import llm.LLM;
 import llm.LanguageModelException;
-import llm.StreamingResponseHandler;
-import llm.ToolDefinition;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
@@ -34,8 +32,6 @@ import audio.stt.Transcription;
 import audio.tts.AudioDelta;
 import audio.tts.TextToSpeech;
 import audio.AudioProcessor;
-import audio.AudioProcessor.SpeechState;
-import audio.AudioProcessor.SpeechStateChange;
 
 @Timeout(5)
 class ChatClientAudioProcessingTest {
@@ -183,7 +179,7 @@ class ChatClientAudioProcessingTest {
                     "processor",
                     group,
                     new TranscriptAudioProcessor("hello"),
-                    text -> "llm response: " + text);
+                    new StreamingLanguageModel("llm response: hello"));
             drainJoinEvents(client);
 
             processorClient.handle(audioRequest(new byte[]{0, 0}));
@@ -281,6 +277,30 @@ class ChatClientAudioProcessingTest {
             assertTrue(chunk.message().contains("\"audioDeltas\":[{\"data\":\"AAAA\""));
             assertEquals("message-done", done.type());
             assertEquals(List.of("テキスト応答。"), textToSpeech.texts);
+        }
+    }
+
+    @Test
+    void chatClientAddsItsSystemPromptToLlmMessages() throws Exception {
+        try (MlServer server = new MlServer(0)) {
+            ChatGroup group = new ChatGroup("group-test", server);
+            ChatClient listener = group.join("client-1");
+            RecordingConversationLanguageModel llm = new RecordingConversationLanguageModel("応答です。");
+            ChatClient processorClient = new ChatClient(
+                    "processor",
+                    group,
+                    new TranscriptAudioProcessor("unused"),
+                    llm,
+                    "日本語で答えてください。",
+                    new RecordingTextToSpeech());
+            drainJoinEvents(listener);
+
+            processorClient.handle(ChatRequest.from("text/plain; charset=utf-8", "こんにちは".getBytes()));
+
+            assertNotNull(pollUntil(listener, event -> "message-done".equals(event.type())));
+            assertEquals(List.of(List.of(
+                    "system:日本語で答えてください。",
+                    "user:こんにちは")), llm.calls);
         }
     }
 
@@ -800,7 +820,8 @@ class ChatClientAudioProcessingTest {
             ChatGroup group = new ChatGroup("group-test", server);
             ChatClient client = group.join("client-1");
             FailingThenTranscriptAudioProcessor processor = new FailingThenTranscriptAudioProcessor();
-            ChatClient processorClient = new ChatClient("processor", group, processor, text -> "llm response: " + text);
+            ChatClient processorClient = new ChatClient(
+                    "processor", group, processor, new StreamingLanguageModel("llm response"));
             drainJoinEvents(client);
 
             processorClient.handle(audioRequest(new byte[]{0, 0}));
@@ -879,10 +900,6 @@ class ChatClientAudioProcessingTest {
 
     private static boolean containsMessage(ChatClient client, String message) {
         return client.events().stream().anyMatch(event -> message.equals(event.message()));
-    }
-
-    private static boolean containsType(ChatClient client, String type) {
-        return client.events().stream().anyMatch(event -> type.equals(event.type()));
     }
 
     private static boolean containsMessageFragment(ChatClient client, String fragment) {
@@ -1230,7 +1247,23 @@ class ChatClientAudioProcessingTest {
         }
     }
 
-    private static class CountingLanguageModel implements LanguageModel {
+    private abstract static class TestLlm extends LLM {
+        TestLlm() {
+            super("http://localhost", "", "test-model", false);
+        }
+
+        @Override
+        public List<String> models() {
+            return List.of("test-model");
+        }
+
+        @Override
+        public String model() {
+            return "test-model";
+        }
+    }
+
+    private static class CountingLanguageModel extends TestLlm {
         private final String response;
         private int calls;
 
@@ -1243,13 +1276,15 @@ class ChatClientAudioProcessingTest {
         }
 
         @Override
-        public String respond(String userText) {
+        public List<Message> call(List<Message> messages, List<Tool> tools, Consumer<String> callback) {
             calls++;
-            return response.isBlank() ? userText : response;
+            String output = response.isBlank() ? messages.getLast().message : response;
+            callback.accept(output);
+            return List.of(new Message("assistant", output));
         }
     }
 
-    private static class StreamingLanguageModel implements LanguageModel {
+    private static class StreamingLanguageModel extends TestLlm {
         private final List<String> deltas;
 
         StreamingLanguageModel(String... deltas) {
@@ -1257,25 +1292,13 @@ class ChatClientAudioProcessingTest {
         }
 
         @Override
-        public String respond(String userText) {
-            return String.join("", deltas);
-        }
-
-        @Override
-        public void respondStreaming(String userText, java.util.function.Consumer<String> onDelta) {
-            deltas.forEach(onDelta);
-        }
-
-        @Override
-        public void respondStreamingEvents(
-                List<ChatMessage> messages,
-                List<ToolDefinition> tools,
-                StreamingResponseHandler handler) {
-            deltas.forEach(handler::onTextDelta);
+        public List<Message> call(List<Message> messages, List<Tool> tools, Consumer<String> callback) {
+            deltas.forEach(callback);
+            return List.of(new Message("assistant", String.join("", deltas)));
         }
     }
 
-    private static class RecordingConversationLanguageModel implements LanguageModel {
+    private static class RecordingConversationLanguageModel extends TestLlm {
         private final List<String> responses;
         private final List<List<String>> calls = new ArrayList<>();
         private int nextResponse;
@@ -1285,38 +1308,19 @@ class ChatClientAudioProcessingTest {
         }
 
         @Override
-        public String respond(String userText) {
-            return responses.get(nextResponse++);
-        }
-
-        @Override
-        public void respondStreaming(List<ChatMessage> messages, java.util.function.Consumer<String> onDelta) {
+        public List<Message> call(List<Message> messages, List<Tool> tools, Consumer<String> callback) {
             calls.add(messages.stream()
-                    .map(message -> message.role() + ":" + message.text())
+                    .map(message -> message.role + ":" + message.message)
                     .toList());
-            onDelta.accept(responses.get(nextResponse++));
-        }
-
-        @Override
-        public void respondStreamingEvents(
-                List<ChatMessage> messages,
-                List<ToolDefinition> tools,
-                StreamingResponseHandler handler) {
-            respondStreaming(messages, handler::onTextDelta);
+            String response = responses.get(nextResponse++);
+            callback.accept(response);
+            return List.of(new Message("assistant", response));
         }
     }
 
-    private static class FailingLanguageModel implements LanguageModel {
+    private static class FailingLanguageModel extends TestLlm {
         @Override
-        public String respond(String userText) {
-            throw new LanguageModelException("boom");
-        }
-
-        @Override
-        public void respondStreamingEvents(
-                List<ChatMessage> messages,
-                List<ToolDefinition> tools,
-                StreamingResponseHandler handler) {
+        public List<Message> call(List<Message> messages, List<Tool> tools, Consumer<String> callback) {
             throw new LanguageModelException("boom");
         }
     }

@@ -2,13 +2,10 @@ package llm;
 
 import com.openai.client.OpenAIClient;
 import com.openai.client.okhttp.OpenAIOkHttpClient;
-import com.openai.core.JsonValue;
 import com.openai.core.http.StreamResponse;
 import com.openai.models.Reasoning;
 import com.openai.models.ReasoningEffort;
 import com.openai.models.models.Model;
-import com.openai.models.responses.FunctionTool;
-import com.openai.models.responses.Response;
 import com.openai.models.responses.ResponseCreateParams;
 import com.openai.models.responses.ResponseCreateParams.Builder;
 import com.openai.models.responses.ResponseFunctionToolCall;
@@ -17,6 +14,8 @@ import com.openai.models.responses.ResponseStreamEvent;
 import com.openai.services.blocking.ModelService;
 import com.openai.models.responses.ResponseInputItem.Message.Role;
 
+import java.net.URI;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
@@ -24,19 +23,32 @@ import java.util.function.Consumer;
 import java.util.regex.Pattern;
 import java.util.regex.Matcher;
 
-public class LlmOpenAI implements LLM {
+public class LlmOpenAI extends LLM {
 
-        public final String baseUrl;
-        private String apikey;
-        private String model;
-        private String selected_model;
-        private boolean reasoning;
+        public static final URI DEFAULT_BASE_URI = URI.create("http://127.0.0.1:8767/v1");
+        public static final String DEFAULT_MODEL_PATTERN = "LFM2\\.5.*JP";
+        public static final URI OPENAI_BASE_URI = URI.create("https://api.openai.com/v1");
+        public static final String OPENAI_MODEL_PATTERN = "gpt-4.1-nano";
+        public static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(120);
 
         public LlmOpenAI( String baseUrl, String apikey, String model, boolean reasoning ) {
-            this.baseUrl = baseUrl;
-            this.apikey = apikey;
-            this.model = model;
-            this.reasoning = reasoning;
+            super( baseUrl, apikey==null||apikey.isEmpty()?"empty":apikey, model, reasoning );
+        }
+
+        public LlmOpenAI( Config config ) {
+            super(config);
+        }
+
+        public LlmOpenAI() {
+            this(fromEnvironment());
+        }
+
+        public static Config fromEnvironment() {
+            URI baseUrl = URI.create(env("LLAMACPP_BASE_URL", DEFAULT_BASE_URI.toString()));
+            String model = env("LLM_MODEL", baseUrl.getHost().contains("openai") ? OPENAI_MODEL_PATTERN : DEFAULT_MODEL_PATTERN);
+            return new Config( baseUrl, model,
+                Duration.ofSeconds(Long.parseLong(env("LLM_TIMEOUT_SECONDS", Long.toString(DEFAULT_TIMEOUT.toSeconds())))),
+                "");
         }
 
         public List<String> models() {

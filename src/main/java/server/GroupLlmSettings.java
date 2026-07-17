@@ -6,17 +6,17 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.time.Duration;
 import json.Json;
 import json.JsonFields;
-import llm.OpenAiResponsesLanguageModel;
+import llm.LLM;
+import llm.LlmOpenAI;
 
 /** Group ごとの LLM 設定を .local 配下へ保存します。 */
 final class GroupLlmSettings {
     private static final String FILE_NAME = "llm.json";
-    static final String DEFAULT_BASE_URL = OpenAiResponsesLanguageModel.DEFAULT_BASE_URI.toString();
-    static final String DEFAULT_MODEL = OpenAiResponsesLanguageModel.DEFAULT_MODEL_PATTERN;
-    static final String DEFAULT_SYSTEM_PROMPT = OpenAiResponsesLanguageModel.DEFAULT_SYSTEM_PROMPT;
+    static final String DEFAULT_BASE_URL = LlmOpenAI.DEFAULT_BASE_URI.toString();
+    static final String DEFAULT_MODEL = LlmOpenAI.DEFAULT_MODEL_PATTERN;
+    static final String DEFAULT_SYSTEM_PROMPT = ChatClient.DEFAULT_SYSTEM_PROMPT;
     private final String baseUrl;
     private final String model;
     private final String apiKey;
@@ -32,8 +32,8 @@ final class GroupLlmSettings {
     static GroupLlmSettings defaults(String groupId) {
         if ("group-2".equals(groupId)) {
             return new GroupLlmSettings(
-                OpenAiResponsesLanguageModel.OPENAI_BASE_URI.toString(),
-                OpenAiResponsesLanguageModel.OPENAI_MODEL_PATTERN,
+                LlmOpenAI.OPENAI_BASE_URI.toString(),
+                LlmOpenAI.OPENAI_MODEL_PATTERN,
                 "", DEFAULT_SYSTEM_PROMPT);
         }
         return new GroupLlmSettings(DEFAULT_BASE_URL, DEFAULT_MODEL, "", DEFAULT_SYSTEM_PROMPT);
@@ -60,6 +60,10 @@ final class GroupLlmSettings {
                 JsonFields.stringOrDefault(json, "systemPrompt", ""));
     }
 
+    String systemPrompt() {
+        return systemPrompt;
+    }
+
     void save(Path localRoot, String groupId) throws IOException {
         Path target = file(localRoot, groupId);
         Files.createDirectories(target.getParent());
@@ -72,13 +76,12 @@ final class GroupLlmSettings {
         }
     }
 
-    OpenAiResponsesLanguageModel.Config toConfig() {
-        OpenAiResponsesLanguageModel.Config defaults = OpenAiResponsesLanguageModel.fromEnvironment();
+    LLM.Config toConfig() {
+        LLM.Config defaults = LlmOpenAI.fromEnvironment();
         URI uri = URI.create(baseUrl);
-        return new OpenAiResponsesLanguageModel.Config(
+        return new LLM.Config(
                 uri,
                 model,
-                systemPrompt,
                 defaults.timeout(),
                 resolveApiKey(uri, apiKey, System.getenv("OPENAI_API_KEY")));
     }

@@ -446,8 +446,12 @@
         if (payload.state === "person-left") {
             return "だれもいなくなりました";
         }
-        const name = payload.personName || "unknown";
-        return `${name}さんがきました`;
+        const name = (payload.personName || "").trim();
+        if( name ) {
+            return `${name}さんがきました`;
+        } else {
+            return 'だれか来ました';
+        }
     }
 
     function scrollToBottom() {

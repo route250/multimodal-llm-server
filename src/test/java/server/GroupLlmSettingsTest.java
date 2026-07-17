@@ -37,7 +37,7 @@ class GroupLlmSettingsTest {
 
             assertEquals(GroupLlmSettings.DEFAULT_BASE_URL, defaults.toConfig().baseUri().toString());
             assertEquals(GroupLlmSettings.DEFAULT_MODEL, defaults.toConfig().model());
-            assertEquals(GroupLlmSettings.DEFAULT_SYSTEM_PROMPT, defaults.toConfig().systemPrompt());
+            assertEquals(ChatClient.DEFAULT_SYSTEM_PROMPT, defaults.systemPrompt());
         } finally {
             Files.deleteIfExists(localRoot);
         }

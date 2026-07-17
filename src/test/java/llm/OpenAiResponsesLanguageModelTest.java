@@ -26,7 +26,7 @@ class OpenAiResponsesLanguageModelTest {
                 """, """
                 {"type":"response.output_text.delta","delta":"\\nどうぞ"}
                 """), 200, path, body)) {
-            OpenAiResponsesLanguageModel model = new OpenAiResponsesLanguageModel(new OpenAiResponsesLanguageModel.Config(
+            OpenAiResponsesLanguageModel model = new OpenAiResponsesLanguageModel(new LLM.Config(
                     server.baseUri(),
                     "gemma[-_]?4[-]?e2b",
                     "日本語で答えてください。",
@@ -49,7 +49,7 @@ class OpenAiResponsesLanguageModelTest {
         try (FakeServer server = new FakeServer(sse("""
                 {"type":"response.output_text.delta","delta":"ok"}
                 """), 200, new AtomicReference<>(), new AtomicReference<>(), authorization)) {
-            OpenAiResponsesLanguageModel model = new OpenAiResponsesLanguageModel(new OpenAiResponsesLanguageModel.Config(
+            OpenAiResponsesLanguageModel model = new OpenAiResponsesLanguageModel(new LLM.Config(
                     server.baseUri(),
                     "gemma[-_]?4[-]?e2b",
                     "",
@@ -66,10 +66,10 @@ class OpenAiResponsesLanguageModelTest {
         try (FakeServer server = new FakeServer(sse("""
                 {"type":"response.output_text.delta","delta":"OK"}
                 """), 200, new AtomicReference<>(), new AtomicReference<>())) {
-            OpenAiResponsesLanguageModel model = new OpenAiResponsesLanguageModel(new OpenAiResponsesLanguageModel.Config(
+            OpenAiResponsesLanguageModel model = new OpenAiResponsesLanguageModel(new LLM.Config(
                     server.baseUri(), "gemma[-_]?4[-]?e2b", "", Duration.ofSeconds(5)));
 
-            OpenAiResponsesLanguageModel.Verification verification = model.verify();
+            LLM.Verification verification = model.verify();
 
             assertEquals("gemma_4e2b-it-q4_k_m", verification.model());
             assertEquals("OK", verification.response());
@@ -84,7 +84,7 @@ class OpenAiResponsesLanguageModelTest {
                 """, """
                 {"delta":"語順が逆でも","type":"response.output_text.delta"}
                 """), 200, new AtomicReference<>(), new AtomicReference<>())) {
-            OpenAiResponsesLanguageModel model = new OpenAiResponsesLanguageModel(new OpenAiResponsesLanguageModel.Config(
+            OpenAiResponsesLanguageModel model = new OpenAiResponsesLanguageModel(new LLM.Config(
                     server.baseUri(),
                     "gemma[-_]?4[-]?e2b",
                     "",
@@ -109,7 +109,7 @@ class OpenAiResponsesLanguageModelTest {
                 """, """
                 {"type":"response.output_item.done","item":{"id":"fc_1","type":"function_call","status":"completed","arguments":"{\\"trackId\\":\\"trak-000001\\",\\"name\\":\\"山田\\"}","call_id":"call_1","name":"assign_face_name"}}
                 """), 200, new AtomicReference<>(), new AtomicReference<>())) {
-            OpenAiResponsesLanguageModel model = new OpenAiResponsesLanguageModel(new OpenAiResponsesLanguageModel.Config(
+            OpenAiResponsesLanguageModel model = new OpenAiResponsesLanguageModel(new LLM.Config(
                     server.baseUri(),
                     "gemma[-_]?4[-]?e2b",
                     "",
@@ -144,7 +144,7 @@ class OpenAiResponsesLanguageModelTest {
         try (FakeServer server = new FakeServer(sse("""
                 {"type":"response.output_text.delta","delta":"続きです"}
                 """), 200, new AtomicReference<>(), body)) {
-            OpenAiResponsesLanguageModel model = new OpenAiResponsesLanguageModel(new OpenAiResponsesLanguageModel.Config(
+            OpenAiResponsesLanguageModel model = new OpenAiResponsesLanguageModel(new LLM.Config(
                     server.baseUri(),
                     "gemma[-_]?4[-]?e2b",
                     "日本語で答えてください。",
@@ -172,7 +172,7 @@ class OpenAiResponsesLanguageModelTest {
         try (FakeServer server = new FakeServer(sse("""
                 {"type":"response.output_text.delta","delta":"確認します"}
                 """), 200, new AtomicReference<>(), body)) {
-            OpenAiResponsesLanguageModel model = new OpenAiResponsesLanguageModel(new OpenAiResponsesLanguageModel.Config(
+            OpenAiResponsesLanguageModel model = new OpenAiResponsesLanguageModel(new LLM.Config(
                     server.baseUri(),
                     "gemma[-_]?4[-]?e2b",
                     "日本語で答えてください。",
@@ -200,7 +200,7 @@ class OpenAiResponsesLanguageModelTest {
         try (FakeServer server = new FakeServer(sse("""
                 {"type":"response.output_text.delta","delta":"登録しました"}
                 """), 200, new AtomicReference<>(), body)) {
-            OpenAiResponsesLanguageModel model = new OpenAiResponsesLanguageModel(new OpenAiResponsesLanguageModel.Config(
+            OpenAiResponsesLanguageModel model = new OpenAiResponsesLanguageModel(new LLM.Config(
                     server.baseUri(),
                     "gemma[-_]?4[-]?e2b",
                     "日本語で答えてください。",
@@ -240,7 +240,7 @@ class OpenAiResponsesLanguageModelTest {
                   {"type":"message","content":[{"type":"output_text","text":"確認します。"}]}
                 ],"output_text":"確認します。"}
                 """, 200, new AtomicReference<>(), body)) {
-            OpenAiResponsesLanguageModel model = new OpenAiResponsesLanguageModel(new OpenAiResponsesLanguageModel.Config(
+            OpenAiResponsesLanguageModel model = new OpenAiResponsesLanguageModel(new LLM.Config(
                     server.baseUri(),
                     "gemma[-_]?4[-]?e2b",
                     "日本語で答えてください。",
@@ -266,7 +266,7 @@ class OpenAiResponsesLanguageModelTest {
         try (FakeServer server = new FakeServer("""
                 {"output":[{"type":"message","content":[{"type":"output_text","text":"登録しました。"}]}],"output_text":"登録しました。"}
                 """, 200, new AtomicReference<>(), body)) {
-            OpenAiResponsesLanguageModel model = new OpenAiResponsesLanguageModel(new OpenAiResponsesLanguageModel.Config(
+            OpenAiResponsesLanguageModel model = new OpenAiResponsesLanguageModel(new LLM.Config(
                     server.baseUri(),
                     "gemma[-_]?4[-]?e2b",
                     "日本語で答えてください。",
@@ -295,7 +295,7 @@ class OpenAiResponsesLanguageModelTest {
         try (FakeServer server = new FakeServer("""
                 {"error":"not ready"}
                 """, 503, new AtomicReference<>(), new AtomicReference<>())) {
-            OpenAiResponsesLanguageModel model = new OpenAiResponsesLanguageModel(new OpenAiResponsesLanguageModel.Config(
+            OpenAiResponsesLanguageModel model = new OpenAiResponsesLanguageModel(new LLM.Config(
                     server.baseUri(),
                     "gemma[-_]?4[-]?e2b",
                     "",
@@ -310,7 +310,7 @@ class OpenAiResponsesLanguageModelTest {
         try (FakeServer server = new FakeServer(sse("""
                 {"output_text":"unused"}
                 """), 200, new AtomicReference<>(), new AtomicReference<>())) {
-            OpenAiResponsesLanguageModel model = new OpenAiResponsesLanguageModel(new OpenAiResponsesLanguageModel.Config(
+            OpenAiResponsesLanguageModel model = new OpenAiResponsesLanguageModel(new LLM.Config(
                     server.baseUri(),
                     "not-found-[0-9]+",
                     "",

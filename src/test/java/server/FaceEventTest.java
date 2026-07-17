@@ -13,10 +13,14 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.X509TrustManager;
+
+import com.openai.core.JsonValue;
+import com.openai.models.responses.ResponseFunctionToolCall;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -27,11 +31,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import facedb.FaceDB;
 import json.JsonFields;
-import llm.ChatMessage;
-import llm.StreamingResponseHandler;
-import llm.ToolCall;
-import llm.ToolCallResult;
-import llm.ToolDefinition;
+import llm.LLM;
 
 class FaceEventTest {
     @Test
@@ -133,15 +133,15 @@ class FaceEventTest {
 
             assertEquals(1, languageModel.calls().size());
             assertEquals(List.of(
-                    "system:[カメラ情報] { \"name\": \"unknown\", \"trackId\": \"legacy\", \"comment\": \"人物を認識しました\" }"),
+                    "system:人物認識通知\n認識結果: 名前不明\n相手の名前: 不明\ntrackId: legacy"),
                     languageModel.calls().get(0));
             var history = client.conversationHistoryForTest();
             assertEquals(2, history.size());
             assertEquals("system", history.get(0).role());
-            assertEquals("[カメラ情報] { \"name\": \"unknown\", \"trackId\": \"legacy\", \"comment\": \"人物を認識しました\" }",
+            assertEquals("人物認識通知\n認識結果: 名前不明\n相手の名前: 不明\ntrackId: legacy",
                     history.get(0).text());
             assertEquals("system", history.get(1).role());
-            assertEquals("[カメラ情報] { \"comment\": \"だれもいなくなりました\"}", history.get(1).text());
+            assertEquals("人物認識通知\n認識結果: 不在\n相手の名前: 不在\ntrackId: 不在", history.get(1).text());
         }
     }
 
@@ -150,11 +150,12 @@ class FaceEventTest {
         try (MlServer server = new MlServer(0)) {
             ChatGroup group = new ChatGroup("group-test", server);
             ChatClient listener = group.join("listener");
+            CountingLanguageModel languageModel = new CountingLanguageModel();
             ChatClient client = new ChatClient(
                     "client-1",
                     group,
                     new TranscriptAudioProcessor("unused"),
-                    new CountingLanguageModel());
+                    languageModel);
             drainJoinEvents(listener);
 
             client.handleFacePresence(FaceEventResult.unknown().withPresenceState("person-updated"));
@@ -164,6 +165,7 @@ class FaceEventTest {
             assertNotNull(event);
             assertEquals("face-presence", event.type());
             assertTrue(event.message().contains("\"state\":\"person-updated\""));
+            assertEquals(0, languageModel.calls);
         }
     }
 
@@ -176,11 +178,11 @@ class FaceEventTest {
             ChatGroup group = new ChatGroup("group-test", server);
             ChatClient listener = group.join("listener");
             drainJoinEvents(listener);
-            ToolCallingLanguageModel languageModel = new ToolCallingLanguageModel(new ToolCall(
+            ToolCallingLanguageModel languageModel = new ToolCallingLanguageModel(
                     "fc_1",
                     "call_1",
                     "assign_face_name",
-                    "{\"trackId\":\"trak-000000\",\"name\":\"太郎\"}"));
+                    "{\"trackId\":\"trak-000000\",\"name\":\"太郎\"}");
             ChatClient client = new ChatClient(
                     "client-1",
                     group,
@@ -192,7 +194,7 @@ class FaceEventTest {
                     "私の名前は、太郎です".getBytes(StandardCharsets.UTF_8)));
 
             assertTrue(languageModel.awaitCalls(1));
-            assertTrue(languageModel.tools().stream().anyMatch(tool -> "assign_face_name".equals(tool.name())));
+            assertTrue(languageModel.tools().stream().anyMatch(tool -> "assign_face_name".equals(tool.name)));
             ServerEvent confirmation = pollUntil(listener, event -> "assistant-audio-chunk".equals(event.type()));
             assertNotNull(confirmation);
             assertTrue(confirmation.message().contains("登録しました。"));
@@ -296,17 +298,33 @@ class FaceEventTest {
         return null;
     }
 
-    private static class CountingLanguageModel implements llm.LanguageModel {
-        int calls;
+    private abstract static class TestLlm extends LLM {
+        TestLlm() {
+            super("http://localhost", "", "test-model", false);
+        }
 
         @Override
-        public String respond(String userText) {
-            calls++;
-            return "unused";
+        public List<String> models() {
+            return List.of("test-model");
+        }
+
+        @Override
+        public String model() {
+            return "test-model";
         }
     }
 
-    private static class RecordingLanguageModel implements llm.LanguageModel {
+    private static class CountingLanguageModel extends TestLlm {
+        int calls;
+
+        @Override
+        public List<Message> call(List<Message> messages, List<Tool> tools, Consumer<String> callback) {
+            calls++;
+            return List.of();
+        }
+    }
+
+    private static class RecordingLanguageModel extends TestLlm {
         private final String response;
         private final CountDownLatch callsLatch = new CountDownLatch(1);
         private final List<List<String>> calls = new ArrayList<>();
@@ -316,27 +334,15 @@ class FaceEventTest {
         }
 
         @Override
-        public String respond(String userText) {
-            return response;
-        }
-
-        @Override
-        public void respondStreaming(List<ChatMessage> messages, java.util.function.Consumer<String> onDelta) {
+        public List<Message> call(List<Message> messages, List<Tool> tools, Consumer<String> callback) {
             synchronized (calls) {
                 calls.add(messages.stream()
-                        .map(message -> message.role() + ":" + message.text())
+                        .map(message -> message.role + ":" + message.message)
                         .toList());
             }
             callsLatch.countDown();
-            onDelta.accept(response);
-        }
-
-        @Override
-        public void respondStreamingEvents(
-                List<ChatMessage> messages,
-                List<ToolDefinition> tools,
-                StreamingResponseHandler handler) {
-            respondStreaming(messages, handler::onTextDelta);
+            callback.accept(response);
+            return List.of(new Message("assistant", response));
         }
 
         boolean awaitCalls(int count) throws InterruptedException {
@@ -370,50 +376,41 @@ class FaceEventTest {
         }
     }
 
-    private static class ToolCallingLanguageModel implements llm.LanguageModel {
-        private final ToolCall toolCall;
+    private static class ToolCallingLanguageModel extends TestLlm {
+        private final ResponseFunctionToolCall toolCall;
         private final CountDownLatch callsLatch = new CountDownLatch(1);
-        private final List<ToolDefinition> tools = new ArrayList<>();
+        private final List<Tool> tools = new ArrayList<>();
 
-        ToolCallingLanguageModel(ToolCall toolCall) {
-            this.toolCall = toolCall;
+        ToolCallingLanguageModel(String id, String callId, String name, String arguments) {
+            this.toolCall = ResponseFunctionToolCall.builder()
+                    .id(id)
+                    .callId(callId)
+                    .name(name)
+                    .arguments(arguments)
+                    .type(JsonValue.from("function_call"))
+                    .build();
         }
 
         @Override
-        public String respond(String userText) {
-            return "unused";
-        }
-
-        @Override
-        public void respondStreamingEvents(
-                List<ChatMessage> messages,
-                List<ToolDefinition> tools,
-                StreamingResponseHandler handler) {
+        public List<Message> call(List<Message> messages, List<Tool> tools, Consumer<String> callback) {
             synchronized (this.tools) {
                 this.tools.addAll(tools);
             }
-            handler.onToolCall(toolCall);
+            Tool tool = tools.stream()
+                    .filter(candidate -> toolCall.name().equals(candidate.name))
+                    .findFirst()
+                    .orElseThrow();
+            tool.exec(toolCall);
+            callback.accept("登録しました。");
             callsLatch.countDown();
-        }
-
-        @Override
-        public void respondStreamingEvents(
-                List<ChatMessage> messages,
-                List<ToolDefinition> tools,
-                List<ToolCallResult> toolResults,
-                StreamingResponseHandler handler) {
-            if (toolResults.isEmpty()) {
-                respondStreamingEvents(messages, tools, handler);
-                return;
-            }
-            handler.onTextDelta("登録しました。");
+            return List.of(new Message("assistant", "登録しました。"));
         }
 
         boolean awaitCalls(int count) throws InterruptedException {
             return callsLatch.await(1, TimeUnit.SECONDS);
         }
 
-        List<ToolDefinition> tools() {
+        List<Tool> tools() {
             synchronized (tools) {
                 return List.copyOf(tools);
             }

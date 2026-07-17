@@ -9,8 +9,8 @@ import audio.vad.TurnDetector;
 import audio.vad.smartturn.LazySmartTurnV3;
 import audio.vad.smartturn.SmartTurnV3;
 import java.util.concurrent.atomic.AtomicInteger;
-import llm.LanguageModel;
-import llm.OpenAiResponsesLanguageModel;
+import llm.LLM;
+import llm.LlmOpenAI;
 import model.download.SmartTurnV3ModelDownloader;
 
 /** サーバ起動前に外部の音声・言語モデルを実リクエストで検査します。 */
@@ -20,25 +20,25 @@ final class StartupCheck {
 
     private final SpeechToText speechToText;
     private final TextToSpeech textToSpeech;
-    private final LanguageModel languageModel;
+    private final LLM llm;
     private final TurnDetector turnDetector;
 
     StartupCheck() {
         this(
                 new Lfm2AudioSpeechToText(),
                 new Lfm2AudioTextToSpeech(),
-                new OpenAiResponsesLanguageModel(),
+                new LlmOpenAI(),
                 new LazySmartTurnV3(SmartTurnV3ModelDownloader.MODEL_PATH.toAbsolutePath().normalize()));
     }
 
     StartupCheck(
             SpeechToText speechToText,
             TextToSpeech textToSpeech,
-            LanguageModel languageModel,
+            LLM llm,
             TurnDetector turnDetector) {
         this.speechToText = speechToText;
         this.textToSpeech = textToSpeech;
-        this.languageModel = languageModel;
+        this.llm = llm;
         this.turnDetector = turnDetector;
     }
 
@@ -82,8 +82,8 @@ final class StartupCheck {
     }
 
     private void verifyLlm() {
-        String response = languageModel.respond(CHECK_TEXT);
-        if (response == null || response.isBlank()) {
+        LLM.Verification response = llm.verify();
+        if (response == null || response.response().isBlank()) {
             throw new IllegalStateException("LLM startup check returned no text");
         }
         System.out.println("Startup check passed: LLM");

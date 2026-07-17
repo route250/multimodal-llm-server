@@ -16,6 +16,10 @@ import java.util.concurrent.Future;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.LinkedBlockingQueue;
 
+import com.openai.core.JsonValue;
+import com.openai.models.responses.FunctionTool;
+import com.openai.models.responses.ResponseFunctionToolCall;
+
 import audio.AudioDiagnostics;
 import audio.AudioProcessor;
 import audio.AudioProcessor.SpeechStateChange;
@@ -35,36 +39,37 @@ import facedb.FacePossibility;
 import json.Json;
 import json.JsonFields;
 import llm.ChatMessage;
-import llm.LanguageModel;
+import llm.LLM;
+import llm.LlmOpenAI;
 import llm.LanguageModelException;
-import llm.OpenAiResponsesLanguageModel;
-import llm.StreamingResponseHandler;
-import llm.ToolCall;
-import llm.ToolCallResult;
-import llm.ToolDefinition;
 import model.download.SmartTurnV3ModelDownloader;
 import onnx.OnnxModelException;
 
 public class ChatClient {
+    /** 設定がない ChatClient が使用するシステムプロンプトです。 */
+    public static final String DEFAULT_SYSTEM_PROMPT = """
+                あなたは会話AIの「りり」です。目の前の相手と親しみのある会話をします。AIの発言だけを出力して下さい。
+                あなたのセリフのみ出力して下さい。
+                """;
     private static final int MAX_HISTORY_MESSAGES = 20;
-    public static final List<ToolDefinition> LLM_TOOLS = List.of(new ToolDefinition(
-            "assign_face_name",
-            """
-            trackIdに人物名を登録します。ユーザーが自分の名前を名乗ったときに呼び出します。
-            名前不明の人物認識通知の後で相手が自分の名前を名乗った場合は、assign_face_name ツールを必ず呼び出します。
-            ツール引数の trackId には直前の人物認識通知にある trackId を、name には相手が名乗った人名だけを指定します。
-            ツールの実行結果を受け取るまでは、名前を登録したとは発話しません。
-            """,
-            """
-                    {"type":"object","properties":{"trackId":{"type":"string"},"name":{"type":"string"}},"required":["trackId","name"],"additionalProperties":false}\
-                    """));
+    // public static final List<ToolDefinition> LLM_TOOLS = List.of(new ToolDefinition(
+    //         "assign_face_name",
+    //         """
+    //         trackIdに人物名を登録します。ユーザーが自分の名前を名乗ったときに呼び出します。
+    //         名前不明の人物認識通知の後で相手が自分の名前を名乗った場合は、assign_face_name ツールを必ず呼び出します。
+    //         ツール引数の trackId には直前の人物認識通知にある trackId を、name には相手が名乗った人名だけを指定します。
+    //         ツールの実行結果を受け取るまでは、名前を登録したとは発話しません。
+    //         """,
+    //         """
+    //                 {"type":"object","properties":{"trackId":{"type":"string"},"name":{"type":"string"}},"required":["trackId","name"],"additionalProperties":false}\
+    //                 """));
 
     private final String id;
     private final ChatGroup chatGroup;
     private final LinkedBlockingQueue<ServerEvent> events = new LinkedBlockingQueue<>();
     private final AudioProcessor audioProcessor;
     private final AudioDiagnostics.Context diagnosticsContext;
-    private volatile LanguageModel languageModel;
+    private volatile LanguageModelContext languageModel;
     private final TextToSpeech textToSpeech;
     private final Object audioTaskLock = new Object();
     private final Object lifecycleLock = new Object();
@@ -100,29 +105,48 @@ public class ChatClient {
                 new LazySmartTurnV3(smartTurnModelPath()),
                 new Lfm2AudioSpeechToText(),
                 chatGroup::execute),
-                new OpenAiResponsesLanguageModel(chatGroup.server().languageModelConfig(chatGroup.id())),
+                chatGroup.server().languageModelSettings(chatGroup.id()),
                 defaultTextToSpeech());
     }
 
-    ChatClient(String id, ChatGroup chatGroup, AudioProcessor audioProcessor) {
-        this(id, chatGroup, audioProcessor, new OpenAiResponsesLanguageModel(), TextToSpeech.disabled());
+    private ChatClient(
+            String id,
+            ChatGroup chatGroup,
+            AudioProcessor audioProcessor,
+            GroupLlmSettings settings,
+            TextToSpeech textToSpeech) {
+        this(id, chatGroup, audioProcessor, new LlmOpenAI(settings.toConfig()), settings.systemPrompt(), textToSpeech);
     }
 
-    ChatClient(String id, ChatGroup chatGroup, AudioProcessor audioProcessor, LanguageModel languageModel) {
-        this(id, chatGroup, audioProcessor, languageModel, TextToSpeech.disabled());
+    ChatClient(String id, ChatGroup chatGroup, AudioProcessor audioProcessor) {
+        this(id, chatGroup, audioProcessor, new LlmOpenAI(), DEFAULT_SYSTEM_PROMPT, TextToSpeech.disabled());
+    }
+
+    ChatClient(String id, ChatGroup chatGroup, AudioProcessor audioProcessor, LLM llm) {
+        this(id, chatGroup, audioProcessor, llm, DEFAULT_SYSTEM_PROMPT, TextToSpeech.disabled());
     }
 
     ChatClient(
             String id,
             ChatGroup chatGroup,
             AudioProcessor audioProcessor,
-            LanguageModel languageModel,
+            LLM llm,
+            TextToSpeech textToSpeech) {
+        this(id, chatGroup, audioProcessor, llm, DEFAULT_SYSTEM_PROMPT, textToSpeech);
+    }
+
+    ChatClient(
+            String id,
+            ChatGroup chatGroup,
+            AudioProcessor audioProcessor,
+            LLM llm,
+            String systemPrompt,
             TextToSpeech textToSpeech) {
         this.id = id;
         this.chatGroup = chatGroup;
         this.audioProcessor = audioProcessor;
         this.diagnosticsContext = AudioDiagnostics.context(chatGroup.id(), id);
-        this.languageModel = languageModel;
+        this.languageModel = new LanguageModelContext(llm, systemPrompt);
         this.textToSpeech = textToSpeech;
         this.audioProcessor.setDiagnosticsContext(chatGroup.id(), id);
         this.audioProcessor.setSpeechStateListener(this::handleSpeechStateChange);
@@ -134,8 +158,8 @@ public class ChatClient {
     }
 
     /** Group 設定の保存後に、次の LLM 呼び出しから使用するモデルを切り替えます。 */
-    void setLanguageModel(LanguageModel languageModel) {
-        this.languageModel = languageModel;
+    void setLanguageModel(LLM llm, String systemPrompt) {
+        this.languageModel = new LanguageModelContext(llm, systemPrompt);
     }
 
     public int nextId() {
@@ -331,8 +355,10 @@ public class ChatClient {
             trackId = result.trackId() == null || result.trackId().isBlank() ? "" : result.trackId();
             if( !result.known() || result.personName() == null || result.personName().isBlank() ) {
                 m = "人物認識通知\n認識結果: 名前不明\n相手の名前: 不明\ntrackId: " + trackId;
+                m = "だれか他の人が居ます(trackId:"+trackId+")。挨拶をしてお名前を聞いてみましょう。名前がわかったらツールをコール";
             } else {
                 m = "人物認識通知\n認識結果: 登録済み\n相手の名前: "+result.personName()+"\ntrackId: "+result.trackId();
+                m = "\"ユーザ名 "+result.personName()+"(trackId:"+result.trackId()+")と出会いました。友人として挨拶から\"";
             }
         }
         System.out.println(m);
@@ -592,125 +618,62 @@ public class ChatClient {
             List<ChatMessage> requestMessages,
             boolean publishUserMessage,
             boolean userMessageAlreadyInHistory) {
-            try {
-                if (publishUserMessage) {
-                    sendToGroupIfOpen(ServerEvent.userMessage(userMessage.text()));
-                }
-                sendToGroupIfOpen(ServerEvent.assistantState("LLM"));
-                List<ToolCallResult> toolResults = List.of();
-                LanguageModel currentLanguageModel = languageModel;
-                for (int toolRound = 0; toolRound < 4; toolRound++) {
-                    List<ToolCallResult> nextToolResults = new ArrayList<>();
-                    StreamingResponseHandler handler = new StreamingResponseHandler() {
-                        @Override
-                        public void onTextDelta(String delta) {
-                            if (!isAssistantTurnActive(assistantTurnId)) {
-                                return;
-                            }
-                            AudioDiagnostics.log("llm-message-delta", diagnosticsContext, Json.fields(
-                                    "assistantTurnId", assistantTurnId,
-                                    "deltaChars", delta.length()));
-                            speak(assistantTurnId, userMessage, userMessageAlreadyInHistory, chunker.append(delta));
-                        }
-
-                        @Override
-                        public void onToolCall(ToolCall toolCall) {
-                            if (!isAssistantTurnActive(assistantTurnId)) {
-                                return;
-                            }
-                            nextToolResults.add(handleToolCall(assistantTurnId, toolCall));
-                        }
-                    };
-                    if (toolResults.isEmpty()) {
-                        currentLanguageModel.respondStreamingEvents(requestMessages, LLM_TOOLS, handler);
-                    } else {
-                        currentLanguageModel.respondStreamingEvents(requestMessages, LLM_TOOLS, toolResults, handler);
-                    }
-                    if (nextToolResults.isEmpty() || !isAssistantTurnActive(assistantTurnId)) {
-                        break;
-                    }
-                    List<ToolCallResult> mergedToolResults = new ArrayList<>(toolResults);
-                    mergedToolResults.addAll(nextToolResults);
-                    toolResults = List.copyOf(mergedToolResults);
-                }
-                speak(assistantTurnId, userMessage, userMessageAlreadyInHistory, chunker.finish());
+        try {
+            if (publishUserMessage) {
+                sendToGroupIfOpen(ServerEvent.userMessage(userMessage.text()));
+            }
+            sendToGroupIfOpen(ServerEvent.assistantState("LLM"));
+            LanguageModelContext currentLanguageModel = languageModel;
+            List<LLM.Message> llmMessages = new ArrayList<>(requestMessages.size() + 1);
+            String currentSystemPrompt = currentLanguageModel.systemPrompt();
+            if (!currentSystemPrompt.isBlank()) {
+                llmMessages.add(new LLM.Message("system", currentSystemPrompt));
+            }
+            llmMessages.addAll(requestMessages.stream()
+                    .map(message -> new LLM.Message(message.role(), message.text()))
+                    .toList());
+            currentLanguageModel.llm().call(llmMessages, List.of(new PersonTool(assistantTurnId)), delta -> {
                 if (!isAssistantTurnActive(assistantTurnId)) {
                     return;
                 }
-                AudioDiagnostics.log("assistant-turn-message-done", diagnosticsContext, Json.fields(
-                        "assistantTurnId", assistantTurnId));
-                sendToGroupIfOpen(ServerEvent.messageDone());
-                finishAssistantTurn(assistantTurnId);
-            } catch (LanguageModelException e) {
-                rememberUserMessageWithoutAssistant(assistantTurnId);
-                if (isAssistantTurnActive(assistantTurnId)) {
-                    sendToGroupIfOpen(ServerEvent.system("llm request failed: " + e.getMessage()));
-                }
-                finishAssistantTurn(assistantTurnId);
-            } catch (TextToSpeechException e) {
-                rememberUserMessageWithoutAssistant(assistantTurnId);
-                if (isAssistantTurnActive(assistantTurnId)) {
-                    sendToGroupIfOpen(ServerEvent.system("tts request failed: " + e.getMessage()));
-                }
-                finishAssistantTurn(assistantTurnId);
-            } finally {
-                sendToGroupIfOpen(ServerEvent.assistantState("IDLE"));
+                AudioDiagnostics.log("llm-message-delta", diagnosticsContext, Json.fields(
+                        "assistantTurnId", assistantTurnId,
+                        "deltaChars", delta.length()));
+                speak(assistantTurnId, userMessage, userMessageAlreadyInHistory, chunker.append(delta));
+            });
+            speak(assistantTurnId, userMessage, userMessageAlreadyInHistory, chunker.finish());
+            if (!isAssistantTurnActive(assistantTurnId)) {
+                return;
             }
+            AudioDiagnostics.log("assistant-turn-message-done", diagnosticsContext, Json.fields(
+                    "assistantTurnId", assistantTurnId));
+            sendToGroupIfOpen(ServerEvent.messageDone());
+            finishAssistantTurn(assistantTurnId);
+        } catch (LanguageModelException e) {
+            rememberUserMessageWithoutAssistant(assistantTurnId);
+            if (isAssistantTurnActive(assistantTurnId)) {
+                sendToGroupIfOpen(ServerEvent.system("llm request failed: " + e.getMessage()));
+            }
+            finishAssistantTurn(assistantTurnId);
+        } catch (TextToSpeechException e) {
+            rememberUserMessageWithoutAssistant(assistantTurnId);
+            if (isAssistantTurnActive(assistantTurnId)) {
+                sendToGroupIfOpen(ServerEvent.system("tts request failed: " + e.getMessage()));
+            }
+            finishAssistantTurn(assistantTurnId);
+        } finally {
+            sendToGroupIfOpen(ServerEvent.assistantState("IDLE"));
+        }
     }
 
-    private ToolCallResult handleToolCall(long assistantTurnId, ToolCall toolCall) {
-        AudioDiagnostics.log("llm-tool-call", diagnosticsContext, Json.fields(
-                "assistantTurnId", assistantTurnId,
-                "toolName", toolCall.name(),
-                "callId", toolCall.callId()));
-        if (!"assign_face_name".equals(toolCall.name())) {
-            AudioDiagnostics.log("llm-tool-call-ignored", diagnosticsContext, Json.fields(
-                    "assistantTurnId", assistantTurnId,
-                    "toolName", toolCall.name(),
-                    "reason", "unknown-tool"));
-            return new ToolCallResult(toolCall, Json.object(Json.fields(
-                    "status", "failed",
-                    "error", "unknown tool: " + toolCall.name())));
+    /** 1回の応答で LLM とシステムプロンプトの組み合わせを固定します。 */
+    private record LanguageModelContext(LLM llm, String systemPrompt) {
+        private LanguageModelContext {
+            if (llm == null) {
+                throw new IllegalArgumentException("llm must not be null");
+            }
+            systemPrompt = systemPrompt == null ? "" : systemPrompt.strip();
         }
-        String trackId = JsonFields.stringOrDefault(toolCall.arguments(), "trackId", "").trim();
-        String name = JsonFields.stringOrDefault(toolCall.arguments(), "name", "").trim();
-        if (trackId.isBlank() || "unknown".equals(trackId) || "none".equals(trackId) || name.isBlank()) {
-            AudioDiagnostics.log("llm-tool-call-ignored", diagnosticsContext, Json.fields(
-                    "assistantTurnId", assistantTurnId,
-                    "toolName", toolCall.name(),
-                    "reason", "invalid-argument",
-                    "trackId", trackId,
-                    "name", name));
-            return new ToolCallResult(toolCall, Json.object(Json.fields(
-                    "status", "failed",
-                    "error", "trackId and name are required",
-                    "trackId", trackId,
-                    "name", name)));
-        }
-        try {
-            chatGroup.assignFaceName(trackId, name);
-        } catch (IllegalArgumentException | IllegalStateException e) {
-            AudioDiagnostics.log("llm-tool-call-ignored", diagnosticsContext, Json.fields(
-                    "assistantTurnId", assistantTurnId,
-                    "toolName", toolCall.name(),
-                    "reason", "assign-failed",
-                    "trackId", trackId,
-                    "name", name,
-                    "error", e.getMessage()));
-            return new ToolCallResult(toolCall, Json.object(Json.fields(
-                    "status", "failed",
-                    "error", e.getMessage(),
-                    "trackId", trackId,
-                    "name", name)));
-        }
-        AudioDiagnostics.log("face-name-assigned", diagnosticsContext, Json.fields(
-                "assistantTurnId", assistantTurnId,
-                "trackId", trackId,
-                "name", name));
-        return new ToolCallResult(toolCall, Json.object(Json.fields(
-                "status", "ok",
-                "trackId", trackId,
-                "name", name)));
     }
 
     private long beginAssistantTurn() {
@@ -995,4 +958,96 @@ public class ChatClient {
 
     private record PendingAssistantChunk(ChatMessage userMessage, boolean userMessageAlreadyInHistory, String text) {
     }
+
+    public class PersonTool extends LLM.Tool {
+
+        private final long assistantTurnId;
+
+        public PersonTool(long assistantTurnId) {
+            super(
+                "assign_face_name",
+                "trackIdに人物名を登録します。ユーザーが自分の名前を名乗ったときに呼び出します。"
+            );
+            this.assistantTurnId = assistantTurnId;
+        }
+
+        @Override
+        public FunctionTool.Parameters parameters() {
+            return FunctionTool.Parameters.builder()
+                .putAdditionalProperty("type", JsonValue.from("object"))
+                .putAdditionalProperty("properties", JsonValue.from(Map.of(
+                        "trackId", Map.of(
+                                "type", "string",
+                                "description", "人物映像の追跡ID track-999999"),
+                        "name", Map.of(
+                            "type", "string",
+                            "description", "覚える名前。禁止:不明,unknown"
+                        )
+                )))
+                .putAdditionalProperty("required", JsonValue.from(List.of("trackId", "name")))
+                .putAdditionalProperty("additionalProperties", JsonValue.from(false))
+                .build();
+        }
+
+        @Override
+        public String exec(ResponseFunctionToolCall toolCall, String arguments ) {
+            AudioDiagnostics.log("llm-tool-call", diagnosticsContext, Json.fields(
+                    "assistantTurnId", assistantTurnId,
+                    "toolName", toolCall.name(),
+                    "callId", toolCall.callId()));
+
+            if (!isAssistantTurnActive(assistantTurnId)) {
+                AudioDiagnostics.log("llm-tool-call-ignored", diagnosticsContext, Json.fields(
+                        "assistantTurnId", assistantTurnId,
+                        "toolName", toolCall.name(),
+                        "reason", "assistant-turn-inactive"));
+                return Json.object(Json.fields(
+                        "status", "failed",
+                        "error", "assistant turn is no longer active"));
+            }
+
+            String trackId = JsonFields.stringOrDefault(arguments, "trackId", "").trim();
+            String name = JsonFields.stringOrDefault(arguments, "name", "").trim();
+            if (trackId.isBlank() || name.isBlank() || "unknown".equalsIgnoreCase(name) || "不明".equals(name)) {
+                AudioDiagnostics.log("llm-tool-call-ignored", diagnosticsContext, Json.fields(
+                        "assistantTurnId", assistantTurnId,
+                        "toolName", toolCall.name(),
+                        "reason", "invalid-argument",
+                        "trackId", trackId,
+                        "name", name));
+                return Json.object(Json.fields(
+                        "status", "failed",
+                        "error", "ユーザに名前を聞いてね。",
+                        "trackId", trackId,
+                        "name", name));
+            }
+            try {
+                chatGroup.assignFaceName(trackId, name);
+            } catch (IllegalArgumentException | IllegalStateException e) {
+                AudioDiagnostics.log("llm-tool-call-ignored", diagnosticsContext, Json.fields(
+                    "assistantTurnId", assistantTurnId,
+                    "toolName", toolCall.name(),
+                    "reason", "assign-failed",
+                    "trackId", trackId,
+                    "name", name,
+                    "error", e.getMessage()));
+                return Json.object(Json.fields(
+                        "status", "failed",
+                        "error", e.getMessage(),
+                        "trackId", trackId,
+                        "name", name));
+            }
+            AudioDiagnostics.log("face-name-assigned", diagnosticsContext, Json.fields(
+                    "assistantTurnId", assistantTurnId,
+                    "trackId", trackId,
+                    "name", name));
+            return Json.object(Json.fields(
+                    "status", "ok",
+                    "trackId", trackId,
+                    "name", name,
+                    "message", "覚えました。’"+name+"'さんとの会話を進めてください。"
+            ));
+        }
+    }
+
 }

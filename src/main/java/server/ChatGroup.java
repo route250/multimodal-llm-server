@@ -5,8 +5,8 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Future;
 
-import llm.LanguageModel;
-import llm.OpenAiResponsesLanguageModel;
+import llm.LLM;
+import llm.LlmOpenAI;
 import audio.AudioProcessor;
 
 public class ChatGroup {
@@ -53,12 +53,12 @@ public class ChatGroup {
     }
 
     ChatClient join(String clientId, AudioProcessor audioProcessor) {
-        ChatClient client = new ChatClient(clientId, this, audioProcessor, new OpenAiResponsesLanguageModel());
+        ChatClient client = new ChatClient(clientId, this, audioProcessor, new LlmOpenAI());
         return join(clientId, client);
     }
 
-    ChatClient join(String clientId, AudioProcessor audioProcessor, LanguageModel languageModel) {
-        ChatClient client = new ChatClient(clientId, this, audioProcessor, languageModel);
+    ChatClient join(String clientId, AudioProcessor audioProcessor, LLM llm) {
+        ChatClient client = new ChatClient(clientId, this, audioProcessor, llm);
         return join(clientId, client);
     }
 
@@ -93,9 +93,9 @@ public class ChatGroup {
     }
 
     /** 保存済みの Group 設定を、接続済みクライアントの次回呼び出しへ反映します。 */
-    void applyLanguageModelConfig(OpenAiResponsesLanguageModel.Config config) {
+    void applyLanguageModelSettings(GroupLlmSettings settings) {
         for (ChatClient client : clients.values()) {
-            client.setLanguageModel(new OpenAiResponsesLanguageModel(config));
+            client.setLanguageModel(new LlmOpenAI(settings.toConfig()), settings.systemPrompt());
         }
     }
 }

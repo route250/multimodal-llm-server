@@ -5,6 +5,10 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import audio.stt.Transcription;
 import audio.tts.AudioDelta;
+import java.util.List;
+import java.util.function.Consumer;
+import llm.LLM;
+import llm.LanguageModelException;
 import org.junit.jupiter.api.Test;
 
 class StartupCheckTest {
@@ -13,7 +17,7 @@ class StartupCheckTest {
         StartupCheck check = new StartupCheck(
                 (buffer, start, end, prompt) -> Transcription.empty(),
                 (text, onDelta) -> onDelta.accept(new AudioDelta("AA==", "pcm", 24_000)),
-                text -> "応答",
+                new StubLlm("応答"),
                 samples -> true);
 
         assertDoesNotThrow(check::verify);
@@ -24,7 +28,7 @@ class StartupCheckTest {
         StartupCheck check = new StartupCheck(
                 (buffer, start, end, prompt) -> Transcription.empty(),
                 (text, onDelta) -> { },
-                text -> "応答",
+                new StubLlm("応答"),
                 samples -> true);
 
         assertThrows(IllegalStateException.class, check::verify);
@@ -35,10 +39,10 @@ class StartupCheckTest {
         StartupCheck check = new StartupCheck(
                 (buffer, start, end, prompt) -> Transcription.empty(),
                 (text, onDelta) -> onDelta.accept(new AudioDelta("AA==", "pcm", 24_000)),
-                text -> " ",
+                new StubLlm(" "),
                 samples -> true);
 
-        assertThrows(IllegalStateException.class, check::verify);
+        assertThrows(LanguageModelException.class, check::verify);
     }
 
     @Test
@@ -46,7 +50,7 @@ class StartupCheckTest {
         StartupCheck check = new StartupCheck(
                 (buffer, start, end, prompt) -> { throw new RuntimeException("STT failed"); },
                 (text, onDelta) -> onDelta.accept(new AudioDelta("AA==", "pcm", 24_000)),
-                text -> "応答",
+                new StubLlm("応答"),
                 samples -> true);
 
         assertThrows(RuntimeException.class, check::verify);
@@ -57,9 +61,37 @@ class StartupCheckTest {
         StartupCheck check = new StartupCheck(
                 (buffer, start, end, prompt) -> Transcription.empty(),
                 (text, onDelta) -> onDelta.accept(new AudioDelta("AA==", "pcm", 24_000)),
-                text -> "応答",
+                new StubLlm("応答"),
                 samples -> { throw new RuntimeException("SmartTurn failed"); });
 
         assertThrows(RuntimeException.class, check::verify);
+    }
+
+    /** 外部サービスへ接続せず、LLM の共通検証処理を実行するテスト用実装です。 */
+    private static final class StubLlm extends LLM {
+        private final String response;
+
+        private StubLlm(String response) {
+            super("http://localhost", "", "test-model", false);
+            this.response = response;
+        }
+
+        @Override
+        public List<String> models() {
+            return List.of("test-model");
+        }
+
+        @Override
+        public String model() {
+            return "test-model";
+        }
+
+        @Override
+        public List<Message> call(List<Message> messages, List<Tool> tools, Consumer<String> callback) {
+            if (callback != null) {
+                callback.accept(response);
+            }
+            return List.of(new Message("assistant", response));
+        }
     }
 }

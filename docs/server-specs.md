@@ -338,7 +338,6 @@ LLM 応答と TTS 処理が終了したら `message-done` イベントを配信�
 OPENAI_API_KEY=sk-...
 LLAMACPP_BASE_URL=https://api.openai.com/v1
 LLM_MODEL=gpt-5-nano
-LLM_SYSTEM_PROMPT=あなたは日本語で簡潔に応答するアシスタントです。
 LLM_TIMEOUT_SECONDS=120
 ```
 
@@ -362,6 +361,7 @@ LLM_TIMEOUT_SECONDS=120
 ```
 
 - `baseUrl` は空文字にできません。`apiKey` は空文字を指定できます。
+- `systemPrompt` は Group 設定から各 `ChatClient` へ渡し、LLM 呼び出し時に system メッセージとして先頭へ追加します。LLM クライアント自体は保持しません。
 - Base URL のホスト名が `openai.com` またはそのサブドメインで `apiKey` が空文字の場合は、サーバー環境の `OPENAI_API_KEY` を使用します。環境変数も空の場合は HTTP 400 を返します。
 - `model` は空文字にできず、Java 正規表現としてコンパイルできる必要があります。
 - 保存前に `GET /v1/models` を実行して `model` に一致するモデル ID を 1 件特定し、そのモデルで `POST /v1/responses` を実行して空でない応答を確認します。

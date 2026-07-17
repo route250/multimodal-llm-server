@@ -25,7 +25,7 @@ class OpenAiResponsesLanguageModelLlamaCppTest {
         URI baseUri = URI.create(System.getProperty("llama.cpp.base.url", DEFAULT_BASE_URI.toString()));
         assumeLlamaCppWithLfm25Model(baseUri);
 
-        OpenAiResponsesLanguageModel model = new OpenAiResponsesLanguageModel(new OpenAiResponsesLanguageModel.Config(
+        OpenAiResponsesLanguageModel model = new OpenAiResponsesLanguageModel(new LLM.Config(
                 baseUri,
                 "LFM2\\.5",
                 """

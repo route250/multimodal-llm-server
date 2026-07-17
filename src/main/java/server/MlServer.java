@@ -32,7 +32,8 @@ import facedb.FaceDB;
 import json.Json;
 import json.JsonFields;
 import llm.LanguageModelException;
-import llm.OpenAiResponsesLanguageModel;
+import llm.LlmOpenAI;
+import llm.LLM;
 
 public class MlServer implements AutoCloseable {
     private static final Path STATIC_ROOT = Paths.get("src/main/resources/html").toAbsolutePath().normalize();
@@ -223,11 +224,11 @@ public class MlServer implements AutoCloseable {
         try {
             GroupLlmSettings settings = GroupLlmSettings.fromJson(
                     new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
-            OpenAiResponsesLanguageModel model = new OpenAiResponsesLanguageModel(settings.toConfig());
-            OpenAiResponsesLanguageModel.Verification verification = model.verify();
+            LlmOpenAI model = new LlmOpenAI(settings.toConfig());
+            LLM.Verification verification = model.verify();
             settings.save(LOCAL_ROOT, chatGroup.id());
             groupLlmSettings.put(chatGroup.id(), settings);
-            chatGroup.applyLanguageModelConfig(settings.toConfig());
+            chatGroup.applyLanguageModelSettings(settings);
             sendText(exchange, 200, "application/json; charset=utf-8", Json.object(Json.fields(
                     "status", "saved",
                     "model", verification.model(),
@@ -240,8 +241,8 @@ public class MlServer implements AutoCloseable {
         }
     }
 
-    OpenAiResponsesLanguageModel.Config languageModelConfig(String groupId) {
-        return settings(groupId).toConfig();
+    GroupLlmSettings languageModelSettings(String groupId) {
+        return settings(groupId);
     }
 
     private void handleStaticFile(HttpExchange exchange) throws IOException {

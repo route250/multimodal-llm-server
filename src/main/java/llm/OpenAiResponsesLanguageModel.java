@@ -27,6 +27,18 @@ import java.util.regex.PatternSyntaxException;
  * OpenAI Responses API へ問い合わせる LLM クライアントです。
  */
 public class OpenAiResponsesLanguageModel implements LanguageModel {
+    // /** この旧クライアント専用の接続・プロンプト設定です。 */
+    // public record Config(
+    //         URI baseUri,
+    //         String model,
+    //         String systemPrompt,
+    //         Duration timeout,
+    //         String apiKey) {
+    //     public Config(URI baseUri, String model, String systemPrompt, Duration timeout) {
+    //         this(baseUri, model, systemPrompt, timeout, "");
+    //     }
+    // }
+
     public static final URI DEFAULT_BASE_URI = URI.create("http://127.0.0.1:8767/v1");
     public static final String DEFAULT_MODEL_PATTERN = "LFM2\\.5.*JP";
     public static final URI OPENAI_BASE_URI = URI.create("https://api.openai.com/v1");
@@ -79,25 +91,25 @@ public class OpenAiResponsesLanguageModel implements LanguageModel {
         this(fromEnvironment());
     }
 
-    public OpenAiResponsesLanguageModel(Config config) {
+    public OpenAiResponsesLanguageModel(LLM.Config config) {
         this(HttpClient.newHttpClient(), config);
     }
 
-    OpenAiResponsesLanguageModel(HttpClient httpClient, Config config) {
+    OpenAiResponsesLanguageModel(HttpClient httpClient, LLM.Config config) {
         this.httpClient = httpClient;
         this.responsesEndpoint = endpoint(config.baseUri(), "responses");
         this.modelsEndpoint = endpoint(config.baseUri(), "models");
         this.modelPatternText = requireText(config.model(), "model");
         this.modelPattern = compileModelPattern(modelPatternText);
-        this.systemPrompt = config.systemPrompt();
+        this.systemPrompt = DEFAULT_SYSTEM_PROMPT;// config.systemPrompt();
         this.timeout = config.timeout();
         this.apiKey = config.apiKey() == null ? "" : config.apiKey().strip();
     }
 
-    public static Config fromEnvironment() {
+    public static LLM.Config fromEnvironment() {
         URI baseUrl = URI.create(env("LLAMACPP_BASE_URL", DEFAULT_BASE_URI.toString()));
         String model = env("LLM_MODEL", baseUrl.getHost().contains("openai") ? OPENAI_MODEL_PATTERN : DEFAULT_MODEL_PATTERN);
-        return new Config( baseUrl, model,
+        return new LLM.Config( baseUrl, model,
             env("LLM_SYSTEM_PROMPT", DEFAULT_SYSTEM_PROMPT),
             Duration.ofSeconds(Long.parseLong(env("LLM_TIMEOUT_SECONDS", Long.toString(DEFAULT_TIMEOUT.toSeconds())))),
             "");
@@ -106,13 +118,13 @@ public class OpenAiResponsesLanguageModel implements LanguageModel {
     /**
      * 設定画面の保存前に、モデル解決と実際の応答を確認します。
      */
-    public Verification verify() {
+    public LLM.Verification verify() {
         String model = resolveModel();
         String response = respond("設定確認です。OK とだけ答えてください。");
         if (response.isBlank()) {
             throw new LanguageModelException("LLM response did not contain text");
         }
-        return new Verification(model, response);
+        return new LLM.Verification(model, response);
     }
 
     @Override
@@ -589,16 +601,6 @@ public class OpenAiResponsesLanguageModel implements LanguageModel {
         if (auth_key!=null&&auth_key.length()>0) {
             requestBuilder.header("Authorization", "Bearer " + auth_key);
         }
-    }
-
-    public record Config(URI baseUri, String model, String systemPrompt, Duration timeout, String apiKey) {
-        public Config(URI baseUri, String model, String systemPrompt, Duration timeout) {
-            this(baseUri, model, systemPrompt, timeout, "");
-        }
-    }
-
-    /** 保存前検証で特定したモデルと応答です。 */
-    public record Verification(String model, String response) {
     }
 
     private static final class PartialToolCall {

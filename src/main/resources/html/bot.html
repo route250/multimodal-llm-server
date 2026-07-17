@@ -1036,7 +1036,8 @@
         }
         presence.textContent = payload.known ? `${payload.personName} / ${Number(payload.distance || 0).toFixed(3)}` : "unknown person";
         if (payload.state === "person-entered") {
-            setSubtitle(`${payload.personName || "unknown"}さんがきました`, 1800);
+            const name = (payload.personName || "").trim();
+            setSubtitle(name ? `${name}さんがきました` : "だれか来ました", 1800);
         }
     }
 

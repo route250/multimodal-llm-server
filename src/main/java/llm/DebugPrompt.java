@@ -10,9 +10,7 @@ import com.openai.models.responses.ResponseFunctionToolCall;
 
 import json.Json;
 import json.JsonFields;
-import llm.OpenAiResponsesLanguageModel.Config;
 import llm.tools.WeatherTool;
-import server.ChatClient;
 
 public class DebugPrompt {
 
@@ -49,7 +47,7 @@ public class DebugPrompt {
     public static void test2() {
 
         List<LLM.Tool> tools = List.of( new WeatherTool(), new PersonTool() );
-        Config baseConfig = OpenAiResponsesLanguageModel.fromEnvironment();
+        LLM.Config baseConfig = LlmOpenAI.fromEnvironment();
 
         String inputRole = "system";
         List<List<LLM.Message>> test_case_list = List.of(
@@ -57,7 +55,7 @@ public class DebugPrompt {
                     new LLM.Message(inputRole, "だれか他の人が居ます(trackId:track-00001)。挨拶をしてお名前を聞いてみましょう。名前がわかったらツールをコール"),
                     new LLM.Message("user", "はい、わたしの名前はかおりです。")
                 ),
-                List.of(new LLM.Message(inputRole, "ユーザ名 かおり(trackId:track-00001)と出会いました。まずは挨拶から"))
+                List.of(new LLM.Message(inputRole, "ユーザ かおり(trackId:track-00001)に友人として挨拶しよう"))
         );
         for( List<LLM.Message> test_case : test_case_list ) {
 
@@ -126,57 +124,5 @@ public class DebugPrompt {
             ));
         }
 
-    }
-
-    public static void test1() {
-
-        Config baseConfig = OpenAiResponsesLanguageModel.fromEnvironment();
-        Config conf = new Config(
-                baseConfig.baseUri(),
-                baseConfig.model(), // LFM2.5-1.2B-JP-202606 を想定
-                SYSTEM_PROMPT,
-                baseConfig.timeout(),
-                baseConfig.apiKey()
-        );
-
-        OpenAiResponsesLanguageModel model = new OpenAiResponsesLanguageModel(conf);
-
-        String inputRole = "system";
-        List<List<ChatMessage>> faceInputs = List.of(
-                List.of(
-                    new ChatMessage(inputRole, "人物認識通知\n認識結果: 名前不明\n相手の名前: 不明\ntrackId: faceId-00001"),
-                    new ChatMessage("user", "はい、わたしの名前はかおりです。")
-                ),
-                List.of(new ChatMessage(inputRole, "人物認識通知\n認識結果: 登録済み\n相手の名前: かおり\ntrackId: faceId-00001"))
-        );
-
-        for (List<ChatMessage> inputs : faceInputs) {
-            System.out.println("--------------");
-            List<ChatMessage> messages = new ArrayList<>();
-            for (ChatMessage input : inputs) {
-                messages.add(input);
-                System.out.println("<INPUT>");
-                for (ChatMessage message : messages) {
-                    System.out.println("'" + message.role() + "':" + message.text());
-                }
-                System.out.println("</INPUT>");
-
-                LanguageModelResponse response = model.respond(messages, ChatClient.LLM_TOOLS);
-                System.out.println("<OUTPUT>");
-                System.out.println(response.text());
-                System.out.println("</OUTPUT>");
-                for (ToolCall toolCall : response.toolCalls()) {
-                    System.out.println("<TOOL_CALL>");
-                    System.out.println("id: " + toolCall.id());
-                    System.out.println("callId: " + toolCall.callId());
-                    System.out.println("name: " + toolCall.name());
-                    System.out.println("arguments: " + toolCall.arguments());
-                    System.out.println("</TOOL_CALL>");
-                }
-                if (!response.text().isBlank()) {
-                    messages.add(new ChatMessage("assistant", response.text()));
-                }
-            }
-        }
     }
 }
