@@ -67,7 +67,7 @@ final class StartupCheck {
 
     private void verifyStt() {
         AudioBuffer silence = new AudioBuffer(SAMPLE_RATE, SAMPLE_RATE);
-        silence.append(new short[SAMPLE_RATE], 0);
+        silence.append(new short[SAMPLE_RATE], 0, new float[] {0.0f}, new float[] {0.0f});
         speechToText.transcribe(silence, 0, SAMPLE_RATE, "");
         System.out.println("Startup check passed: STT");
     }

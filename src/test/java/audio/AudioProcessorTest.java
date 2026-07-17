@@ -147,6 +147,34 @@ class AudioProcessorTest {
     }
 
     @Test
+    void crowdNoiseAtSixtyNineDoesNotStartSpeech() {
+        RecordingSpeechToText speechToText = new RecordingSpeechToText("noise");
+        AudioProcessor processor = new AudioProcessor(samples -> true, speechToText, Runnable::run);
+
+        for (int i = 0; i < 300; i++) {
+            assertTrue(acceptFrame(processor, 69).isEmpty());
+        }
+
+        assertEquals(0, speechToText.calls);
+    }
+
+    @Test
+    void crowdNoiseAtSixtyNineEndsDetectedSpeech() {
+        RecordingSpeechToText speechToText = new RecordingSpeechToText("hello");
+        AudioProcessor processor = new AudioProcessor(samples -> true, speechToText, Runnable::run);
+
+        assertTrue(acceptSpeechStart(processor).isEmpty());
+
+        Optional<Transcription> transcript = Optional.empty();
+        for (int i = 0; i < silenceFramesForTurnDetection(); i++) {
+            transcript = acceptFrame(processor, 69);
+        }
+
+        assertTranscriptText("hello", transcript);
+        assertEquals(1, speechToText.calls);
+    }
+
+    @Test
     void emptyFinalRangeStillCallsSpeechToText() {
         RecordingSpeechToText speechToText = new RecordingSpeechToText("empty range");
         AudioProcessor processor = new AudioProcessor(samples -> true, speechToText, Runnable::run);
@@ -315,7 +343,7 @@ class AudioProcessorTest {
 
         assertTrue(acceptSpeechStart(processor).isEmpty());
         for (int i = speechStartFrames(); i < 300; i++) {
-            acceptFrame(processor, 60);
+            acceptFrame(processor, 71);
         }
 
         assertEquals(List.of(0L), speechToText.startSampleIndexes);
@@ -340,7 +368,7 @@ class AudioProcessorTest {
 
         acceptSpeechStart(processor);
         for (int i = speechStartFrames(); i < 600; i++) {
-            acceptFrame(processor, 60);
+            acceptFrame(processor, 71);
         }
         for (int i = 0; i < silenceFramesForTurnDetection(); i++) {
             acceptFrame(processor, 0);
@@ -379,8 +407,8 @@ class AudioProcessorTest {
         Path vadPath = wavPath.resolveSibling(wavPath.getFileName().toString().replace(".wav", ".vad.csv"));
         List<String> vadLines = Files.readAllLines(vadPath);
         assertEquals("startSampleIndex,endSampleIndexExclusive,vadValue", vadLines.getFirst());
-        assertEquals("0,256,70", vadLines.get(1));
-        assertTrue(vadLines.contains("3328,3584,70"));
+        assertEquals("0,256,90", vadLines.get(1));
+        assertTrue(vadLines.contains("3328,3584,90"));
         assertTrue(vadLines.contains("3584,3840,0"));
     }
 
@@ -430,7 +458,7 @@ class AudioProcessorTest {
     private static Optional<Transcription> acceptSpeechStart(AudioProcessor processor, short sample) {
         Optional<Transcription> transcript = Optional.empty();
         for (int i = 0; i < speechStartFrames(); i++) {
-            transcript = acceptFrame(processor, 70, sample);
+            transcript = acceptFrame(processor, 90, sample);
         }
         return transcript;
     }
@@ -472,7 +500,11 @@ class AudioProcessorTest {
     }
 
     private static Optional<Transcription> acceptFrame(AudioProcessor processor, int vadValue) {
-        return processor.acceptPcm16LeWithVad(frameBytes(), new byte[] {(byte) vadValue});
+        return processor.acceptPcm16LeWithVadDetailed(
+                        frameBytes(),
+                        new byte[] {(byte) vadValue},
+                        new byte[] {0})
+                .map(AudioProcessor.TranscriptionResult::transcription);
     }
 
     private static Optional<Transcription> acceptFrame(AudioProcessor processor, int vadValue, short sample) {
@@ -483,7 +515,23 @@ class AudioProcessorTest {
                 buffer.putShort(sample);
             }
         }
-        return processor.acceptPcm16LeWithVad(bytes, new byte[] {(byte) vadValue});
+        return processor.acceptPcm16LeWithVadDetailed(
+                        bytes,
+                        new byte[] {(byte) vadValue},
+                        new byte[] {rmsByte(bytes)})
+                .map(AudioProcessor.TranscriptionResult::transcription);
+    }
+
+    private static byte rmsByte(byte[] bytes) {
+        ByteBuffer buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN);
+        double squareSum = 0.0;
+        int sampleCount = bytes.length / Short.BYTES;
+        for (int i = 0; i < sampleCount; i++) {
+            double sample = buffer.getShort() / 32768.0;
+            squareSum += sample * sample;
+        }
+        int value = (int) Math.round(Math.sqrt(squareSum / Math.max(1, sampleCount)) * 100.0);
+        return (byte) Math.max(0, Math.min(100, value));
     }
 
     private static int silenceFramesForTurnDetection() {

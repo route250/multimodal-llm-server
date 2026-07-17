@@ -177,7 +177,7 @@ export class ChatAudio {
             this.audioContext = null;
         }
         try {
-            this.flushSamples(true);
+            this.flushSamples();
         } catch (error) {
             this.onMicStatus(`audio send error: ${error.message}`);
         }
@@ -364,18 +364,17 @@ export class ChatAudio {
         }
     }
 
-    flushSamples(includeRemainder = false) {
+    flushSamples() {
         if (this.pendingSampleCount === 0) {
             return;
         }
         const alignedSampleCount = this.pendingSampleCount - (this.pendingSampleCount % this.tenVadHopSamples);
-        const sendSampleCount = includeRemainder ? this.pendingSampleCount : alignedSampleCount;
-        if (sendSampleCount === 0) {
+        if (alignedSampleCount === 0) {
             return;
         }
-        const pcmSamples = this.takePendingPcmSamples(sendSampleCount);
-        const vadBytes = this.processTenVad(pcmSamples);
-        const body = this.createPcmVadBody(pcmSamples, vadBytes);
+        const pcmSamples = this.takePendingPcmSamples(alignedSampleCount);
+        const audioMetrics = this.processTenVad(pcmSamples);
+        const body = this.createPcmVadBody(pcmSamples, audioMetrics.vadBytes, audioMetrics.rmsBytes);
         const startSample = this.pendingStartSampleIndex;
         const endSample = startSample + pcmSamples.length;
         this.postAudio(body, startSample, endSample);
@@ -412,7 +411,9 @@ export class ChatAudio {
     processTenVad(pcmSamples) {
         const frameCount = Math.floor(pcmSamples.length / this.tenVadHopSamples);
         const vadBytes = new Uint8Array(frameCount);
+        const rmsBytes = new Uint8Array(frameCount);
         let latestProbability = 0;
+        let latestRms = 0;
         for (let frameIndex = 0; frameIndex < frameCount; frameIndex++) {
             const frameOffset = frameIndex * this.tenVadHopSamples;
             this.tenVadModule.HEAP16.set(pcmSamples.subarray(frameOffset, frameOffset + this.tenVadHopSamples), this.tenVadAudioPtr / 2);
@@ -431,16 +432,17 @@ export class ChatAudio {
             const value = Math.max(0, Math.min(100, Math.round(probability * 100)));
             const playbackFlag = (this.currentPlayback || this.pausedPlayback) ? 0x80 : 0;
             vadBytes[frameIndex] = (value & 0x7f) | playbackFlag;
+            latestRms = this.pcmRms(pcmSamples, frameOffset, frameOffset + this.tenVadHopSamples);
+            rmsBytes[frameIndex] = Math.max(0, Math.min(100, Math.round(latestRms * 100)));
         }
         if (frameCount > 0) {
-            const latestFrameOffset = (frameCount - 1) * this.tenVadHopSamples;
             this.onAudioMetrics({
                 vadProbability: latestProbability,
-                rms: this.pcmRms(pcmSamples, latestFrameOffset, latestFrameOffset + this.tenVadHopSamples)
+                rms: latestRms
             });
         }
         this.analyzeLocalTenVad(vadBytes);
-        return vadBytes;
+        return { vadBytes, rmsBytes };
     }
 
     // PCM16 の振幅を -1.0〜1.0 に正規化したうえで二乗平均平方根を求める。
@@ -453,27 +455,30 @@ export class ChatAudio {
         return Math.sqrt(squareSum / Math.max(1, end - start));
     }
 
-    createPcmVadBody(pcmSamples, vadBytes) {
-        const body = new ArrayBuffer(this.pcmVadHeaderBytes + pcmSamples.byteLength + vadBytes.byteLength);
+    createPcmVadBody(pcmSamples, vadBytes, rmsBytes) {
+        const body = new ArrayBuffer(this.pcmVadHeaderBytes + pcmSamples.byteLength + vadBytes.byteLength + rmsBytes.byteLength);
         const view = new DataView(body);
         const bytes = new Uint8Array(body);
         bytes[0] = 0x4d;
         bytes[1] = 0x56;
         bytes[2] = 0x41;
         bytes[3] = 0x44;
-        view.setUint16(4, 1, true);
+        view.setUint16(4, 2, true);
         view.setUint16(6, 0, true);
         view.setUint32(8, this.targetSampleRate, true);
         view.setUint16(12, 1, true);
         view.setUint16(14, 1, true);
         view.setUint32(16, pcmSamples.length, true);
         view.setUint32(20, this.tenVadHopSamples, true);
-        view.setUint32(24, vadBytes.length, true);
+        view.setUint32(24, 0, true);
         view.setUint32(28, 0, true);
         for (let i = 0; i < pcmSamples.length; i++) {
             view.setInt16(this.pcmVadHeaderBytes + i * 2, pcmSamples[i], true);
         }
-        bytes.set(vadBytes, this.pcmVadHeaderBytes + pcmSamples.byteLength);
+        const vadOffset = this.pcmVadHeaderBytes + pcmSamples.byteLength;
+        const rmsOffset = vadOffset + vadBytes.byteLength;
+        bytes.set(vadBytes, vadOffset);
+        bytes.set(rmsBytes, rmsOffset);
         return body;
     }
 

@@ -17,18 +17,20 @@ class ChatRequestTest {
         pcm[0] = 1;
         pcm[1] = 2;
         byte[] vad = new byte[] {0, (byte) (0x80 | 50)};
+        byte[] rms = new byte[] {13, 25};
 
-        ChatRequest request = ChatRequest.from(PCM_VAD, pcmVadBody(pcm, vad, 256, 1, 0));
+        ChatRequest request = ChatRequest.from(PCM_VAD, pcmVadBody(pcm, vad, rms, 256, 2, 0));
 
         assertEquals("audio", request.type());
         assertEquals("audio/pcm-vad", request.contentType());
         assertArrayEquals(pcm, request.body());
         assertArrayEquals(vad, request.vadBytes());
+        assertArrayEquals(rms, request.rmsBytes());
     }
 
     @Test
     void rejectsInvalidPcmVadMagic() {
-        byte[] body = pcmVadBody(new byte[1024], new byte[] {0, 1}, 256, 1, 0);
+        byte[] body = pcmVadBody(new byte[1024], new byte[] {0, 1}, new byte[] {0, 0}, 256, 2, 0);
         body[0] = 'X';
 
         assertThrows(HttpRequestException.class, () -> ChatRequest.from(PCM_VAD, body));
@@ -36,14 +38,14 @@ class ChatRequestTest {
 
     @Test
     void rejectsInvalidPcmVadVersion() {
-        byte[] body = pcmVadBody(new byte[1024], new byte[] {0, 1}, 256, 2, 0);
+        byte[] body = pcmVadBody(new byte[1024], new byte[] {0, 1}, new byte[] {0, 0}, 256, 1, 0);
 
         assertThrows(HttpRequestException.class, () -> ChatRequest.from(PCM_VAD, body));
     }
 
     @Test
     void rejectsPcmVadBodyLengthMismatch() {
-        byte[] body = pcmVadBody(new byte[1024], new byte[] {0, 1}, 256, 1, 0);
+        byte[] body = pcmVadBody(new byte[1024], new byte[] {0, 1}, new byte[] {0, 0}, 256, 2, 0);
         byte[] truncated = new byte[body.length - 1];
         System.arraycopy(body, 0, truncated, 0, truncated.length);
 
@@ -52,14 +54,27 @@ class ChatRequestTest {
 
     @Test
     void rejectsPcmVadValueOver100InLower7Bits() {
-        byte[] body = pcmVadBody(new byte[1024], new byte[] {101, 1}, 256, 1, 0);
+        byte[] body = pcmVadBody(new byte[1024], new byte[] {101, 1}, new byte[] {0, 0}, 256, 2, 0);
 
         assertThrows(HttpRequestException.class, () -> ChatRequest.from(PCM_VAD, body));
     }
 
-    private static byte[] pcmVadBody(byte[] pcm, byte[] vadBytes, int vadFrameSamples, int version, int flags) {
+    @Test
+    void rejectsPcmVadRmsValueOver100() {
+        byte[] body = pcmVadBody(new byte[1024], new byte[] {0, 1}, new byte[] {0, 101}, 256, 2, 0);
+
+        assertThrows(HttpRequestException.class, () -> ChatRequest.from(PCM_VAD, body));
+    }
+
+    private static byte[] pcmVadBody(
+            byte[] pcm,
+            byte[] vadBytes,
+            byte[] rmsBytes,
+            int vadFrameSamples,
+            int version,
+            int flags) {
         ByteBuffer buffer = ByteBuffer
-                .allocate(32 + pcm.length + vadBytes.length)
+                .allocate(32 + pcm.length + vadBytes.length + rmsBytes.length)
                 .order(ByteOrder.LITTLE_ENDIAN);
         buffer.put((byte) 'M');
         buffer.put((byte) 'V');
@@ -72,10 +87,11 @@ class ChatRequestTest {
         buffer.putShort((short) 1);
         buffer.putInt(pcm.length / 2);
         buffer.putInt(vadFrameSamples);
-        buffer.putInt(vadBytes.length);
+        buffer.putInt(0);
         buffer.putInt(0);
         buffer.put(pcm);
         buffer.put(vadBytes);
+        buffer.put(rmsBytes);
         return buffer.array();
     }
 }

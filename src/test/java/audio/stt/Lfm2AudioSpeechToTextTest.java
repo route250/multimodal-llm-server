@@ -32,8 +32,8 @@ class Lfm2AudioSpeechToTextTest {
                     "lfm2-audio",
                     "Perform ASR in japanese.",
                     Duration.ofSeconds(5)));
-            AudioBuffer audio = new AudioBuffer(16_000, 16_000);
-            audio.append(new short[] {1, 2}, 0);
+            AudioBuffer audio = new AudioBuffer(16_000, 1);
+            audio.append(new short[] {1, 2}, 0, new float[] {0.0f, 0.0f}, new float[] {0.0f, 0.0f});
 
             Transcription transcription = speechToText.transcribe(audio, 0, 2, "");
 

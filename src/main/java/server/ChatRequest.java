@@ -8,9 +8,9 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 public record ChatRequest(String type, String responseText, String contentType, Map<String, String> contentTypeParameters,
-                          byte[] body, byte[] vadBytes) {
+                          byte[] body, byte[] vadBytes, byte[] rmsBytes) {
     private static final int PCM_VAD_HEADER_BYTES = 32;
-    private static final int PCM_VAD_VERSION = 1;
+    private static final int PCM_VAD_VERSION = 2;
     private static final int PCM_VAD_FORMAT_PCM16LE = 1;
     private static final int PCM_VAD_SAMPLE_RATE = 16_000;
     private static final int PCM_VAD_CHANNELS = 1;
@@ -20,6 +20,7 @@ public record ChatRequest(String type, String responseText, String contentType, 
         contentTypeParameters = Map.copyOf(contentTypeParameters);
         body = body.clone();
         vadBytes = vadBytes.clone();
+        rmsBytes = rmsBytes.clone();
     }
 
     public static ChatRequest from(String contentType, byte[] body) {
@@ -33,6 +34,7 @@ public record ChatRequest(String type, String responseText, String contentType, 
                     normalizedType,
                     parsedContentType.parameters(),
                     body,
+                    new byte[0],
                     new byte[0]);
         }
         if ("audio/pcm-vad".equals(normalizedType)) {
@@ -43,14 +45,15 @@ public record ChatRequest(String type, String responseText, String contentType, 
                     normalizedType,
                     parsedContentType.parameters(),
                     payload.pcm(),
-                    payload.vadBytes());
+                    payload.vadBytes(),
+                    payload.rmsBytes());
         }
         if (normalizedType.startsWith("audio/")) {
             return new ChatRequest("audio", "received audio chunk: " + body.length + " bytes (" + normalizedType + ")",
-                    normalizedType, parsedContentType.parameters(), body, new byte[0]);
+                    normalizedType, parsedContentType.parameters(), body, new byte[0], new byte[0]);
         }
         return new ChatRequest("binary", "received binary chunk: " + body.length + " bytes (" + normalizedType + ")",
-                normalizedType, parsedContentType.parameters(), body, new byte[0]);
+                normalizedType, parsedContentType.parameters(), body, new byte[0], new byte[0]);
     }
 
     public ServerEvent toEvent() {
@@ -69,6 +72,11 @@ public record ChatRequest(String type, String responseText, String contentType, 
     @Override
     public byte[] vadBytes() {
         return vadBytes.clone();
+    }
+
+    @Override
+    public byte[] rmsBytes() {
+        return rmsBytes.clone();
     }
 
     public boolean isPcm16LeAudio() {
@@ -92,11 +100,11 @@ public record ChatRequest(String type, String responseText, String contentType, 
     }
 
     /**
-     * ブラウザで計算した VAD 値を同梱した音声リクエストを検証し、PCM 部分と VAD 部分へ分割する。
+     * ブラウザで計算した VAD 値と RMS 値を同梱した音声リクエストを検証し、PCM、VAD、RMS へ分割する。
      *
      * @param contentType Content-Type の解析結果
-     * @param body 32 byte header、PCM16LE、VAD byte array の順に並ぶリクエスト本文
-     * @return PCM と VAD byte array
+     * @param body 32 byte header、PCM16LE、VAD byte array、RMS byte array の順に並ぶリクエスト本文
+     * @return PCM、VAD byte array、RMS byte array
      */
     private static PcmVadPayload parsePcmVad(ParsedContentType contentType, byte[] body) {
         requireContentParameter(contentType, "rate", "16000");
@@ -113,7 +121,7 @@ public record ChatRequest(String type, String responseText, String contentType, 
         }
         int version = Short.toUnsignedInt(header.getShort());
         if (version != PCM_VAD_VERSION) {
-            throw new HttpRequestException(400, "audio/pcm-vad version must be 1");
+            throw new HttpRequestException(400, "audio/pcm-vad version must be 2");
         }
         int flags = Short.toUnsignedInt(header.getShort());
         if (flags != 0) {
@@ -124,8 +132,8 @@ public record ChatRequest(String type, String responseText, String contentType, 
         int pcmFormat = Short.toUnsignedInt(header.getShort());
         long pcmSampleCount = Integer.toUnsignedLong(header.getInt());
         long vadFrameSamples = Integer.toUnsignedLong(header.getInt());
-        long vadByteCount = Integer.toUnsignedLong(header.getInt());
-        long reserved = Integer.toUnsignedLong(header.getInt());
+        long reserved1 = Integer.toUnsignedLong(header.getInt());
+        long reserved2 = Integer.toUnsignedLong(header.getInt());
 
         if (sampleRate != PCM_VAD_SAMPLE_RATE) {
             throw new HttpRequestException(400, "audio/pcm-vad sampleRate must be 16000");
@@ -139,33 +147,45 @@ public record ChatRequest(String type, String responseText, String contentType, 
         if (vadFrameSamples != PCM_VAD_FRAME_SAMPLES) {
             throw new HttpRequestException(400, "audio/pcm-vad vadFrameSamples must be 256");
         }
-        if (reserved != 0) {
-            throw new HttpRequestException(400, "audio/pcm-vad reserved must be 0");
+        if (reserved1 != 0 || reserved2 != 0) {
+            throw new HttpRequestException(400, "audio/pcm-vad reserved fields must be 0");
         }
         if (pcmSampleCount > (Integer.MAX_VALUE / Short.BYTES)) {
             throw new HttpRequestException(400, "audio/pcm-vad pcmSampleCount is too large");
         }
-        long maxVadByteCount = pcmSampleCount / PCM_VAD_FRAME_SAMPLES;
-        if (vadByteCount > maxVadByteCount) {
-            throw new HttpRequestException(400, "audio/pcm-vad vadByteCount exceeds PCM frame count");
+        if (pcmSampleCount % PCM_VAD_FRAME_SAMPLES != 0) {
+            throw new HttpRequestException(400, "audio/pcm-vad pcmSampleCount must be divisible by 256");
         }
-        long expectedLength = PCM_VAD_HEADER_BYTES + pcmSampleCount * Short.BYTES + vadByteCount;
+        long metricByteCount = pcmSampleCount / PCM_VAD_FRAME_SAMPLES;
+        long expectedLength = PCM_VAD_HEADER_BYTES
+                + pcmSampleCount * Short.BYTES
+                + metricByteCount
+                + metricByteCount;
         if (expectedLength != body.length) {
             throw new HttpRequestException(400, "audio/pcm-vad body length does not match header");
         }
 
         int pcmByteCount = Math.toIntExact(pcmSampleCount * Short.BYTES);
         int vadOffset = PCM_VAD_HEADER_BYTES + pcmByteCount;
-        byte[] vadBytes = Arrays.copyOfRange(body, vadOffset, body.length);
+        int rmsOffset = Math.toIntExact(vadOffset + metricByteCount);
+        byte[] vadBytes = Arrays.copyOfRange(body, vadOffset, rmsOffset);
         for (byte vadByte : vadBytes) {
             int value = Byte.toUnsignedInt(vadByte);
             if ((value & 0x7f) > 100) {
                 throw new HttpRequestException(400, "audio/pcm-vad VAD byte must use 0..100 in lower 7 bits");
             }
         }
+        byte[] rmsBytes = Arrays.copyOfRange(body, rmsOffset, body.length);
+        for (byte rmsByte : rmsBytes) {
+            int value = Byte.toUnsignedInt(rmsByte);
+            if (value > 100) {
+                throw new HttpRequestException(400, "audio/pcm-vad RMS byte must use 0..100");
+            }
+        }
         return new PcmVadPayload(
                 Arrays.copyOfRange(body, PCM_VAD_HEADER_BYTES, vadOffset),
-                vadBytes);
+                vadBytes,
+                rmsBytes);
     }
 
     /**
@@ -211,6 +231,6 @@ public record ChatRequest(String type, String responseText, String contentType, 
     private record ParsedContentType(String mediaType, Map<String, String> parameters) {
     }
 
-    private record PcmVadPayload(byte[] pcm, byte[] vadBytes) {
+    private record PcmVadPayload(byte[] pcm, byte[] vadBytes, byte[] rmsBytes) {
     }
 }

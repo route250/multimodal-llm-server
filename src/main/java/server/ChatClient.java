@@ -212,10 +212,11 @@ public class ChatClient {
         }
         byte[] body = request.body().clone();
         byte[] vadBytes = request.vadBytes().clone();
+        byte[] rmsBytes = request.rmsBytes().clone();
         synchronized (audioTaskLock) {
             audioTaskTail = audioTaskTail.handle((ignored, error) -> null)
                     .thenRunAsync(
-                            () -> processAudio(body, vadBytes, clientStartSampleIndex, clientEndSampleIndexExclusive),
+                            () -> processAudio(body, vadBytes, rmsBytes, clientStartSampleIndex, clientEndSampleIndexExclusive),
                             this::execute);
         }
     }
@@ -223,6 +224,7 @@ public class ChatClient {
     private void processAudio(
             byte[] body,
             byte[] vadBytes,
+            byte[] rmsBytes,
             long clientStartSampleIndex,
             long clientEndSampleIndexExclusive) {
         if (isClosed()) {
@@ -233,8 +235,9 @@ public class ChatClient {
                     "startSampleIndex", clientStartSampleIndex == Long.MIN_VALUE ? null : clientStartSampleIndex,
                     "endSampleIndexExclusive", clientEndSampleIndexExclusive == Long.MIN_VALUE ? null : clientEndSampleIndexExclusive,
                     "pcmBytes", body.length,
-                    "vadBytes", vadBytes.length));
-            Optional<TranscriptionResult> result = audioProcessor.acceptPcm16LeWithVadDetailed(body, vadBytes);
+                    "vadBytes", vadBytes.length,
+                    "rmsBytes", rmsBytes.length));
+            Optional<TranscriptionResult> result = audioProcessor.acceptPcm16LeWithVadDetailed(body, vadBytes, rmsBytes);
             result.ifPresent(this::handleTranscriptionResult);
         } catch (IllegalArgumentException e) {
             sendAudioProcessingFailure(e);

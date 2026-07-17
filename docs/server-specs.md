@@ -223,7 +223,7 @@ Supported request content handling:
 text/*            Treated as text.
 application/json  Treated as text.
 audio/pcm         Rejected for audio processing because browser VAD bytes are required.
-audio/pcm-vad     Treated as a PCM16LE 16kHz mono audio chunk with browser VAD bytes.
+audio/pcm-vad     Treated as a PCM16LE 16kHz mono audio chunk with browser VAD bytes and browser RMS bytes.
 other             Treated as binary.
 ```
 
@@ -246,29 +246,32 @@ X-Client-Mic-End-Sample: 3200
 ブラウザクライアントは 16 kHz へ変換したマイクPCMの累積サンプル番号を上記ヘッダに入れます。
 サーバはこのサンプル範囲と AI 音声再生区間を照合し、該当PCMを VAD/STT へ渡す前に 0 で埋めます。
 
-`audio/pcm-vad` の body は、32 byte header、PCM16LE、VAD byte array の順です。
-header は little-endian で、`magic=MVAD`、`version=1`、`flags=0`、`sampleRate=16000`、`channels=1`、
-`pcmFormat=1`、`pcmSampleCount`、`vadFrameSamples=256`、`vadByteCount`、`reserved=0` を保持します。
+`audio/pcm-vad` の body は、32 byte header、PCM16LE、VAD byte array、RMS byte array の順です。
+header は little-endian で、`magic=MVAD`、`version=2`、`flags=0`、`sampleRate=16000`、`channels=1`、
+`pcmFormat=1`、`pcmSampleCount`、`vadFrameSamples=256`、`reserved1=0`、`reserved2=0` を保持します。
 VAD byte は下位 7 bit に `0..100` の整数値を保持し、最上位 bit `0x80` はブラウザ側で AI 音声の
 `currentPlayback` または `pausedPlayback` が存在する間に `1` にします。
-サーバは VAD byte の下位 7 bit を発話判定に使い、サーバ側では VAD 確率を再計算しません。
+RMS byte は VAD byte と同じ 256 サンプル単位で計算した `0..100` の整数値です。
+サーバは VAD byte の下位 7 bit と RMS byte を発話判定に使い、サーバ側では VAD 確率を再計算しません。
 
-Each `ChatClient` keeps a 6 second receive buffer and a 30 second STT buffer.
+Each `ChatClient` keeps a 30 second receive buffer and a 5 minute STT buffer.
 Audio requests return `202 Accepted` after the chunk is queued.
-PCM decoding and VAD run asynchronously in request order for each `ChatClient`.
-STT runs on a separate asynchronous task after a speech turn is confirmed, so later audio chunks can continue PCM decoding and VAD while transcription is still running.
+PCM decoding and VAD/RMS frame processing run asynchronously in request order for each `ChatClient`.
+STT runs on a separate asynchronous task after a speech turn is confirmed, so later audio chunks can continue PCM decoding and VAD/RMS frame processing while transcription is still running.
 STT tasks are queued in speech-confirmation order for each `AudioProcessor`.
 Async audio processing failures are sent to connected clients as SSE `system` events.
-The receive buffer stores PCM samples and browser VAD values in 256 sample units.
-Browser VAD values are applied once per 256 samples, which is 16 ms at 16 kHz.
+The receive buffer stores PCM samples, browser VAD values, and browser RMS values in 256 sample units.
+Browser VAD and RMS values are applied once per 256 samples, which is 16 ms at 16 kHz.
 
-Speech spike detection starts when the VAD value is at least `0.65`.
-Speech starts when the VAD value then stays above `0.35` for at least 3,200 samples, which is 200 ms at 16 kHz.
+Speech spike detection starts when the VAD value is at least `0.70` and the RMS value is at least `0.06`.
+Speech starts when both the VAD value stays greater than `0.35` and the RMS value stays greater than `0.03`
+for at least 3,200 samples, which is 200 ms at 16 kHz.
 When speech starts, the target range includes the previous 0.6 seconds of audio.
-When VAD becomes at most `0.35`, the processor enters trailing silence.
+When the VAD value becomes at most `0.35` or the RMS value becomes at most `0.03`, the processor enters trailing silence.
 After trailing silence reaches 9,600 samples, which is 600 ms at 16 kHz, SmartTurn is evaluated every
-9,600 samples. If SmartTurn returns incomplete, trailing silence continues. If VAD becomes greater than
-`0.35` before SmartTurn returns complete, the same speech returns to detected state and no FINAL STT is queued.
+9,600 samples. If SmartTurn returns incomplete, trailing silence continues. If the VAD value becomes greater than
+`0.35` and the RMS value becomes greater than `0.03` before SmartTurn returns complete, the same speech returns
+to detected state and no FINAL STT is queued.
 If SmartTurn still returns incomplete after trailing silence reaches 19,200 samples, which is 1,200 ms,
 the server queues a `FINAL` STT task anyway.
 発話継続中は 76,800 サンプル、つまり 4.8 秒ごとに `PARTIAL` STT を実行します。

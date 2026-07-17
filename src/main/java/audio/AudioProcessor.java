@@ -49,10 +49,11 @@ public class AudioProcessor {
     /** SmartTurn が未完了でも発話終了を確定する最大無音区間。19,200 サンプルは 16 kHz で 1,200 ms。 */
     public static final int MAX_TURN_DETECTION_SILENCE_SAMPLES = 19_200;
     /** 非発話状態から発話状態へ切り替える VAD 確率の下限値。 */
-    public static final float START_THRESHOLD = 0.7f;
+    public static final float START_VAD_THRESHOLD = 0.7f;
+    public static final float START_RMS_THRESHOLD = 0.06f;
     /** 発話状態を継続する VAD 確率の下限値。 */
-    public static final float END_THRESHOLD = 0.35f;
-
+    public static final float END_VAD_THRESHOLD = 0.35f;
+    public static final float END_RMS_THRESHOLD = 0.03f;
     /** 受信直後の PCM と VAD 値を保持するバッファ。 */
     private final AudioBuffer receiveBuffer = new AudioBuffer(SAMPLE_RATE * 30, VAD_FRAME_SAMPLES);
     /** STT に渡す発話区間の PCM を保持する長時間用バッファ。5 分までの発話を保持する。 */
@@ -207,31 +208,39 @@ public class AudioProcessor {
     }
 
     /**
-     * PCM 16-bit little-endian とブラウザ VAD のバイト列を受け取り、発話終了時に文字起こし結果を返す。
+     * PCM 16-bit little-endian、ブラウザ VAD、ブラウザ RMS を受け取り、発話終了時に文字起こし結果と種別を返す。
      *
      * @param bytes PCM 16-bit little-endian 形式の音声バイト列
      * @param vadBytes 下位 7 bit に 0..100 の VAD 値、最上位 bit に再生フラグを持つバイト列
+     * @param rmsBytes 0..100 の RMS 値を VAD と同じ 256 サンプル単位で持つバイト列
      * @return 発話区間が確定した場合は文字起こし結果。未確定の場合は Optional.empty()
      */
-    public synchronized Optional<Transcription> acceptPcm16LeWithVad(byte[] bytes, byte[] vadBytes) {
-        return acceptPcm16LeWithVadDetailed(bytes, vadBytes).map(TranscriptionResult::transcription);
-    }
-
-    /**
-     * PCM 16-bit little-endian とブラウザ VAD のバイト列を受け取り、発話終了時に文字起こし結果と種別を返す。
-     *
-     * @param bytes PCM 16-bit little-endian 形式の音声バイト列
-     * @param vadBytes 下位 7 bit に 0..100 の VAD 値、最上位 bit に再生フラグを持つバイト列
-     * @return 発話区間が確定した場合は文字起こし結果。未確定の場合は Optional.empty()
-     */
-    public synchronized Optional<TranscriptionResult> acceptPcm16LeWithVadDetailed(byte[] bytes, byte[] vadBytes) {
+    public synchronized Optional<TranscriptionResult> acceptPcm16LeWithVadDetailed(
+            byte[] bytes,
+            byte[] vadBytes,
+            byte[] rmsBytes) {
         short[] samples = Pcm16Le.decode(bytes);
-        long chunkStartSampleIndex = nextSampleIndex;
-        receiveBuffer.append(samples, chunkStartSampleIndex);
+        if (rmsBytes.length != vadBytes.length) {
+            throw new IllegalArgumentException("RMS byte count must equal VAD byte count");
+        }
+        float[] vadValues = new float[vadBytes.length];
+        float[] rmsValues = new float[rmsBytes.length];
         for (int i = 0; i < vadBytes.length; i++) {
             int vadValue = Byte.toUnsignedInt(vadBytes[i]) & 0x7f;
-            receiveBuffer.putVadValue(chunkStartSampleIndex + (long) i * VAD_FRAME_SAMPLES, vadValue / 100.0f);
+            int rmsValue = Byte.toUnsignedInt(rmsBytes[i]);
+            if (rmsValue > 100) {
+                throw new IllegalArgumentException("RMS byte must use 0..100");
+            }
+            vadValues[i] = vadValue / 100.0f;
+            rmsValues[i] = rmsValue / 100.0f;
         }
+        long chunkStartSampleIndex = nextSampleIndex;
+        receiveBuffer.append(samples, vadValues, rmsValues, 0, samples.length, chunkStartSampleIndex);
+        AudioDiagnostics.log("browser-audio-metrics-received", diagnosticsContext, Json.fields(
+                "startSampleIndex", chunkStartSampleIndex,
+                "frameCount", vadBytes.length,
+                "firstRms", rmsBytes.length == 0 ? null : Byte.toUnsignedInt(rmsBytes[0]),
+                "lastRms", rmsBytes.length == 0 ? null : Byte.toUnsignedInt(rmsBytes[rmsBytes.length - 1])));
         nextSampleIndex += samples.length;
         return processAvailableWindows();
     }
@@ -272,11 +281,11 @@ public class AudioProcessor {
             }
 
             float probability = receiveBuffer.vadValue(nextVadStartSampleIndex);
+            float rms = receiveBuffer.rmsValue(nextVadStartSampleIndex);
             if (Float.isNaN(probability)) {
                 break;
             }
-            receiveBuffer.putVadValue(nextVadStartSampleIndex, probability);
-            updateSpeechState(nextVadStartSampleIndex, probability);
+            updateSpeechState(nextVadStartSampleIndex, probability, rms );
             nextVadStartSampleIndex += VAD_FRAME_SAMPLES;
         }
         if (pendingTranscriptionFailure != null) {
@@ -296,46 +305,47 @@ public class AudioProcessor {
      * 1 フレーム分の VAD 結果を発話状態へ反映する。
      *
      * @param frameStartSampleIndex VAD を実行したフレームの先頭サンプル番号
-     * @param probability VAD が返した発話確率
+     * @param vad VAD が返した発話確率
+     * @param rms 音量
      * @return 発話終了を検出した場合は文字起こし結果。検出していない場合は Optional.empty()
      */
-    private void updateSpeechState(long frameStartSampleIndex, float probability) {
+    private void updateSpeechState(long frameStartSampleIndex, float vad, float rms ) {
         long frameEndSampleIndex = frameStartSampleIndex + VAD_FRAME_SAMPLES;
         switch (speechState) {
             case UNDETECTED -> {
                 // 未検出状態で START_THRESHOLD 以上になったフレームを発話開始として扱う。
-                if (probability >= START_THRESHOLD) {
-                    setState(frameStartSampleIndex, SpeechState.SPIKE, probability);
+                if (vad >= START_VAD_THRESHOLD && rms >= START_RMS_THRESHOLD ) {
+                    setState(frameStartSampleIndex, SpeechState.SPIKE, vad);
                     spikeStartSampleIndex = frameStartSampleIndex;
                 }
                 return;
             }
             case SPIKE -> {
-                if (probability > END_THRESHOLD) {
+                if (vad > END_VAD_THRESHOLD && rms > END_RMS_THRESHOLD ) {
                     if (frameStartSampleIndex - spikeStartSampleIndex >= SPIKE_SAMPLES) {
-                        setState(frameStartSampleIndex, SpeechState.DETECTED, probability);
+                        setState(frameStartSampleIndex, SpeechState.DETECTED, vad);
                         startSpeech(spikeStartSampleIndex, frameEndSampleIndex);
                     }
                 } else {
-                    setState(frameStartSampleIndex, SpeechState.UNDETECTED, probability);
+                    setState(frameStartSampleIndex, SpeechState.UNDETECTED, vad);
                 }
                 return;
             }
             case DETECTED -> {
                 // 発話検出状態で END_THRESHOLD を超えている間は発話継続として扱う。
-                if (probability > END_THRESHOLD) {
+                if (vad > END_VAD_THRESHOLD && rms > END_RMS_THRESHOLD ) {
                     lastSpeechSampleIndex = frameEndSampleIndex;
                     appendCurrentSpeechToSttBuffer(frameEndSampleIndex);
                     maybeTranscribePartialSpeech(frameEndSampleIndex);
                     return;
                 }
-                setState(frameStartSampleIndex, SpeechState.TRAILING_SILENCE, probability);
+                setState(frameStartSampleIndex, SpeechState.TRAILING_SILENCE, vad);
                 return;
             }
             case TRAILING_SILENCE -> {
                 // 後続無音状態で END_THRESHOLD を超えた場合は同じ発話区間として発話検出状態へ戻す。
-                if (probability > END_THRESHOLD) {
-                    setState(frameStartSampleIndex, SpeechState.DETECTED, probability);
+                if (vad > END_VAD_THRESHOLD && rms > END_RMS_THRESHOLD ) {
+                    setState(frameStartSampleIndex, SpeechState.DETECTED, vad);
                     lastSpeechSampleIndex = frameEndSampleIndex;
                     appendCurrentSpeechToSttBuffer(frameEndSampleIndex);
                     maybeTranscribePartialSpeech(frameEndSampleIndex);
@@ -358,13 +368,13 @@ public class AudioProcessor {
                 if (!sttBuffer.contains(speechStartSampleIndex, speechEndSampleIndex)) {
                     return;
                 }
-                setState(frameStartSampleIndex, SpeechState.TURN_DETECTING, probability);
+                setState(frameStartSampleIndex, SpeechState.TURN_DETECTING, vad);
                 boolean forceFinal = frameEndSampleIndex - lastSpeechSampleIndex >= MAX_TURN_DETECTION_SILENCE_SAMPLES;
                 if (!detectTurn(speechEndSampleIndex) && !forceFinal) {
-                    setState(frameStartSampleIndex, SpeechState.TRAILING_SILENCE, probability);
+                    setState(frameStartSampleIndex, SpeechState.TRAILING_SILENCE, vad);
                     return;
                 }
-                setState(frameStartSampleIndex, SpeechState.TRANSCRIBING, probability);
+                setState(frameStartSampleIndex, SpeechState.TRANSCRIBING, vad);
                 transcribeCompletedSpeech(speechEndSampleIndex);
                 return;
             }
@@ -373,8 +383,8 @@ public class AudioProcessor {
             }
             case TRANSCRIBING -> {
                 // START_THRESHOLD 以上になったら新しい発話区間として発話検出状態へ戻す。
-                if (probability >= START_THRESHOLD) {
-                    setState(frameStartSampleIndex, SpeechState.DETECTED, probability);
+                if (vad >= START_VAD_THRESHOLD && rms > END_RMS_THRESHOLD) {
+                    setState(frameStartSampleIndex, SpeechState.DETECTED, vad);
                     startSpeech(frameStartSampleIndex, frameEndSampleIndex);
                 }
                 return;

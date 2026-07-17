@@ -106,7 +106,7 @@ group-3
 
 - 認証は未実装です。
 - LLM 連携は実装済みです。
-- 音声チャンクは PCM16LE とブラウザ VAD byte を受信し、VAD/STT/LLM/TTS の非同期処理に渡します。
+- 音声チャンクは PCM16LE、ブラウザ VAD byte、ブラウザ RMS byte を受信し、VAD/RMS による発話状態判定と STT/LLM/TTS の非同期処理に渡します。
 - チャット履歴は `ChatClient` ごとに直近 20 件の user/assistant メッセージをメモリ上で保持します。
 - ユーザー発話は LLM 呼び出し前には履歴へ確定しません。再生確認済み assistant chunk が届いた時点で、対応するユーザー発話と assistant 応答を履歴へ確定します。
 - LLM 応答失敗、TTS 失敗、クライアント未再生、再生報告欠落では、assistant 応答を履歴へ追加せず、ユーザー発話だけを履歴へ残します。
