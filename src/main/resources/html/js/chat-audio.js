@@ -13,6 +13,7 @@ export class ChatAudio {
         this.onAssistantSubtitleDone = options.onAssistantSubtitleDone || (() => {});
         this.onMicStatus = options.onMicStatus || (() => {});
         this.onMicRecording = options.onMicRecording || (() => {});
+        this.onAudioMetrics = options.onAudioMetrics || (() => {});
         this.targetSampleRate = 16000;
         this.tenVadHopSamples = 256;
         this.tenVadThreshold = 0.5;
@@ -183,6 +184,7 @@ export class ChatAudio {
         this.destroyTenVad();
         this.resampler = null;
         this.onMicRecording(false);
+        this.onAudioMetrics({ vadProbability: 0, rms: 0 });
         this.updateSpeechState("UNDETECTED");
         this.onMicStatus("microphone stopped");
     }
@@ -410,6 +412,7 @@ export class ChatAudio {
     processTenVad(pcmSamples) {
         const frameCount = Math.floor(pcmSamples.length / this.tenVadHopSamples);
         const vadBytes = new Uint8Array(frameCount);
+        let latestProbability = 0;
         for (let frameIndex = 0; frameIndex < frameCount; frameIndex++) {
             const frameOffset = frameIndex * this.tenVadHopSamples;
             this.tenVadModule.HEAP16.set(pcmSamples.subarray(frameOffset, frameOffset + this.tenVadHopSamples), this.tenVadAudioPtr / 2);
@@ -424,12 +427,30 @@ export class ChatAudio {
                 throw new Error(`TEN VAD process failed: ${result}`);
             }
             const probability = this.tenVadModule.getValue(this.tenVadProbabilityPtr, "float");
+            latestProbability = probability;
             const value = Math.max(0, Math.min(100, Math.round(probability * 100)));
             const playbackFlag = (this.currentPlayback || this.pausedPlayback) ? 0x80 : 0;
             vadBytes[frameIndex] = (value & 0x7f) | playbackFlag;
         }
+        if (frameCount > 0) {
+            const latestFrameOffset = (frameCount - 1) * this.tenVadHopSamples;
+            this.onAudioMetrics({
+                vadProbability: latestProbability,
+                rms: this.pcmRms(pcmSamples, latestFrameOffset, latestFrameOffset + this.tenVadHopSamples)
+            });
+        }
         this.analyzeLocalTenVad(vadBytes);
         return vadBytes;
+    }
+
+    // PCM16 の振幅を -1.0〜1.0 に正規化したうえで二乗平均平方根を求める。
+    pcmRms(pcmSamples, start, end) {
+        let squareSum = 0;
+        for (let index = start; index < end; index++) {
+            const sample = pcmSamples[index] / 32768;
+            squareSum += sample * sample;
+        }
+        return Math.sqrt(squareSum / Math.max(1, end - start));
     }
 
     createPcmVadBody(pcmSamples, vadBytes) {

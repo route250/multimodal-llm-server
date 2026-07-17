@@ -426,8 +426,6 @@ public class MlServer implements AutoCloseable {
         exchange.sendResponseHeaders(200, 0);
 
         try (OutputStream responseBody = exchange.getResponseBody()) {
-            writeEvent(responseBody, ServerEvent.system("connected: " + chatGroup.id() + "/" + sessionId));
-            responseBody.flush();
             while (!Thread.currentThread().isInterrupted()) {
                 ServerEvent event = client.events().poll(15, TimeUnit.SECONDS);
                 if (event == null) {

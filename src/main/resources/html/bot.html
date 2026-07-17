@@ -300,8 +300,10 @@
         .subtitle {
             align-items: end;
             display: grid;
+            font-size: clamp(18px, 2.6vw, 28px);
+            height: calc(2.9em + 40px);
             justify-items: center;
-            min-height: 82px;
+            line-height: 1.45;
             padding-bottom: 18px;
         }
 
@@ -311,8 +313,6 @@
             border-radius: 8px;
             color: #91c99a;
             display: -webkit-box;
-            font-size: clamp(18px, 2.6vw, 28px);
-            line-height: 1.45;
             max-width: min(920px, 94vw);
             min-height: 0;
             overflow: hidden;
@@ -327,10 +327,31 @@
             padding: 0;
         }
 
-        .speech-state {
+        .speech-state,
+        .audio-metrics {
             background: #07110b;
             border-color: #25472d;
             color: #91c99a;
+        }
+
+        .audio-metrics {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-variant-numeric: tabular-nums;
+            gap: 4px;
+            padding: 0 10px;
+            width: auto;
+        }
+
+        .audio-metrics .vad-value {
+            display: inline-block;
+            text-align: right;
+            width: 3ch;
+        }
+
+        .audio-metrics .rms-value {
+            display: inline-block;
+            text-align: right;
+            width: 3ch;
         }
 
         @media (max-width: 720px) {
@@ -365,6 +386,10 @@
                 <option value="group-2">group-2</option>
                 <option value="group-3">group-3</option>
             </select>
+            <span id="audio-metrics" class="speech-state audio-metrics" title="VAD確率と正規化RMS">
+                VAD <span id="vad-value" class="vad-value">000</span>
+                RMS <span id="rms-value" class="rms-value">000</span>
+            </span>
             <span id="speech-state" class="speech-state" data-state="UNDETECTED" title="IDLE">
                 <span class="state-dot"></span>
                 <span id="speech-state-text">IDLE</span>
@@ -405,6 +430,8 @@
     const groupInput = document.getElementById("group");
     const openSettings = document.getElementById("open-settings");
     const startBot = document.getElementById("start-bot");
+    const vadValue = document.getElementById("vad-value");
+    const rmsValue = document.getElementById("rms-value");
     const speechState = document.getElementById("speech-state");
     const speechStateText = document.getElementById("speech-state-text");
     const presence = document.getElementById("presence");
@@ -469,33 +496,33 @@
         onAssistantTextRemove: () => {},
         onAssistantSubtitle: () => {},
         onAssistantSubtitleDone: () => clearSubtitleSoon(),
-        onMicStatus: updateDebugText,
-        onMicRecording: () => {}
+        onMicStatus: (message) => {
+            if (message.includes("error")) {
+                updateDebugText(message);
+            }
+        },
+        onMicRecording: () => {},
+        onAudioMetrics: updateAudioMetrics
     });
 
-    connectEvents();
     loadModels();
 
     startBot.addEventListener("click", async () => {
         if (botRunning) {
-            stopBot();
+            await stopBot();
             return;
         }
         await startBotSession();
     });
-    groupInput.addEventListener("change", connectEvents);
     document.addEventListener("pointerdown", () => audio.preparePlayback(), { once: true });
     document.addEventListener("keydown", () => audio.preparePlayback(), { once: true });
 
     function connectEvents() {
-        if (events) {
-            events.close();
-        }
         events = new ChatEvents({
             group: () => groupInput.value,
             sessionId,
             statusFields: () => audio.statusFields(),
-            onSystem: (message) => setSubtitle(message, 2500),
+            onSystem: handleChatSystem,
             onUserMessage: (message) => setSubtitle(message, 0),
             onMessage: (message) => setSubtitle(message, 0),
             onMessageDone: clearSubtitleSoon,
@@ -509,19 +536,39 @@
             },
             onFacePresence: handleFacePresence
         });
-        events.connect();
+        const source = events.connect();
+        return new Promise((resolve, reject) => {
+            source.addEventListener("open", resolve, { once: true });
+            source.addEventListener("error", () => reject(new Error("chat connection failed")), { once: true });
+        });
+    }
+
+    function handleChatSystem(message) {
+        if (message.endsWith(` left ${groupInput.value}`)) {
+            return;
+        }
+        setSubtitle(message, 2500);
+    }
+
+    function disconnectEvents() {
+        events?.close();
+        events = null;
     }
 
     async function startBotSession() {
         startBot.disabled = true;
+        groupInput.disabled = true;
         try {
             botRunning = true;
             await audio.preparePlayback();
+            await connectEvents();
             await startCamera();
             startBot.textContent = "停止";
         } catch (error) {
             botRunning = false;
-            updateDebugText(`camera error: ${error.message}`);
+            disconnectEvents();
+            groupInput.disabled = false;
+            updateDebugText(`start error: ${error.message}`);
             stopCamera();
             resetFaceState();
         } finally {
@@ -529,14 +576,18 @@
         }
     }
 
-    function stopBot() {
+    async function stopBot() {
         startBot.disabled = true;
         botRunning = false;
+        const leaveRequests = [];
         for (const track of faceTracks.values()) {
             if (track.entered) {
-                sendPersonLeft(track);
+                leaveRequests.push(sendPersonLeft(track));
             }
         }
+        await Promise.all(leaveRequests);
+        disconnectEvents();
+        groupInput.disabled = false;
         markAllPeopleLeft();
         resetFaceState();
         stopCamera();
@@ -985,15 +1036,15 @@
     }
 
     function sendPersonLeft(track) {
-        fetch(`/face/event?group=${encodeURIComponent(groupInput.value)}&sessionId=${encodeURIComponent(sessionId)}`, {
+        const request = fetch(`/face/event?group=${encodeURIComponent(groupInput.value)}&sessionId=${encodeURIComponent(sessionId)}`, {
             method: "POST",
             headers: {"Content-Type": "application/json; charset=utf-8"},
             body: JSON.stringify({ eventType: "person-left", eventId: `${Date.now()}-${++eventSequence}`, clientTimestamp: new Date().toISOString(), trackId: track.trackId }),
         }).catch(() => {});
-        if ([...faceTracks.values()].some((item) => item.entered)) {
-            return;
+        if (![...faceTracks.values()].some((item) => item.entered)) {
+            markAllPeopleLeft();
         }
-        markAllPeopleLeft();
+        return request;
     }
 
     function markAllPeopleLeft() {
@@ -1064,6 +1115,15 @@
         speechStateText.textContent = status.displayText;
         speechState.title = status.displayState;
         mouth.classList.toggle("speaking", status.displayState === "TTS");
+    }
+
+    function updateAudioMetrics(metrics) {
+        const vadProbability = Number.isFinite(metrics.vadProbability) ? metrics.vadProbability : 0;
+        const normalizedRms = Number.isFinite(metrics.rms) ? metrics.rms : 0;
+        const vad = Math.max(0, Math.min(100, Math.round(vadProbability * 100)));
+        const rms = Math.max(0, Math.min(100, Math.round(normalizedRms * 100)));
+        vadValue.textContent = String(vad).padStart(3, "0");
+        rmsValue.textContent = String(rms).padStart(3, "0");
     }
 
     function appendSubtitle(text) {

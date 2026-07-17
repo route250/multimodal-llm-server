@@ -67,7 +67,7 @@ public class ChatGroup {
         if (previous != null && previous != client) {
             previous.close();
         }
-        publish(ServerEvent.system(clientId + " joined " + id));
+        publish(ServerEvent.system(id + " joined"));
         return client;
     }
 

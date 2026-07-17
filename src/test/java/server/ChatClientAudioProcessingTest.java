@@ -895,7 +895,7 @@ class ChatClientAudioProcessingTest {
     }
 
     private static void drainJoinEvents(ChatClient client) {
-        client.events().removeIf(event -> event.message().contains(" joined "));
+        client.events().removeIf(event -> event.message().endsWith(" joined"));
     }
 
     private static boolean containsMessage(ChatClient client, String message) {
