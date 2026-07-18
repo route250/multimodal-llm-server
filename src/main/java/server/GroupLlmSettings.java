@@ -15,8 +15,13 @@ import llm.LlmOpenAI;
 final class GroupLlmSettings {
     private static final String FILE_NAME = "llm.json";
     static final String DEFAULT_BASE_URL = LlmOpenAI.DEFAULT_BASE_URI.toString();
-    static final String DEFAULT_MODEL = LlmOpenAI.DEFAULT_MODEL_PATTERN;
-    static final String DEFAULT_SYSTEM_PROMPT = ChatClient.DEFAULT_SYSTEM_PROMPT;
+    static final String DEFAULT_LFM25_MODEL =LlmOpenAI.DEFAULT_MODEL_PATTERN;
+    static final String DEFAULT_LFM25_PROMPT = ChatClient.DEFAULT_SYSTEM_PROMPT;
+    static final String DEFAULT_GEMMA4_MODEL = "gemma[-_]?4[-]?e2b";
+    static final String DEFAULT_GEMMA4_PROMPT = ChatClient.DEFAULT_SYSTEM_PROMPT.replace("りり","ジェマ");
+    static final String DEFAULT_OPENAI_BASE_URL = LlmOpenAI.OPENAI_BASE_URI.toString();
+    static final String DEFAULT_OPENAI_MODEL = LlmOpenAI.OPENAI_MODEL_PATTERN;
+    static final String DEFAULT_OPENAI_PROMPT = ChatClient.DEFAULT_SYSTEM_PROMPT.replace("りり","チャッピー");
     private final String baseUrl;
     private final String model;
     private final String apiKey;
@@ -32,11 +37,17 @@ final class GroupLlmSettings {
     static GroupLlmSettings defaults(String groupId) {
         if ("group-2".equals(groupId)) {
             return new GroupLlmSettings(
-                LlmOpenAI.OPENAI_BASE_URI.toString(),
-                LlmOpenAI.OPENAI_MODEL_PATTERN,
-                "", DEFAULT_SYSTEM_PROMPT);
+                DEFAULT_BASE_URL,
+                DEFAULT_GEMMA4_MODEL,
+                "", DEFAULT_GEMMA4_PROMPT);
         }
-        return new GroupLlmSettings(DEFAULT_BASE_URL, DEFAULT_MODEL, "", DEFAULT_SYSTEM_PROMPT);
+        if ("group-3".equals(groupId)) {
+            return new GroupLlmSettings(
+                DEFAULT_OPENAI_BASE_URL,
+                DEFAULT_OPENAI_MODEL,
+                "", DEFAULT_OPENAI_PROMPT);
+        }
+        return new GroupLlmSettings(DEFAULT_BASE_URL, DEFAULT_LFM25_MODEL, "", DEFAULT_LFM25_PROMPT);
     }
 
     static GroupLlmSettings load(Path localRoot, String groupId) throws IOException {
@@ -45,19 +56,21 @@ final class GroupLlmSettings {
             return defaults(groupId);
         }
         String json = Files.readString(file, StandardCharsets.UTF_8);
+        GroupLlmSettings defaults = defaults(groupId);
         return new GroupLlmSettings(
-                defaultIfBlank(JsonFields.stringOrDefault(json, "baseUrl", ""), DEFAULT_BASE_URL),
-                JsonFields.string(json, "model"),
-                JsonFields.stringOrDefault(json, "apiKey", ""),
-                JsonFields.stringOrDefault(json, "systemPrompt", ""));
+                defaultIfBlank(JsonFields.stringOrDefault(json, "baseUrl", ""), defaults.baseUrl),
+                defaultIfBlank(JsonFields.stringOrDefault(json, "model", ""), defaults.model),
+                defaultIfBlank(JsonFields.stringOrDefault(json, "apiKey", ""), defaults.apiKey),
+                defaultIfBlank(JsonFields.stringOrDefault(json, "systemPrompt", ""), defaults.systemPrompt));
     }
 
-    static GroupLlmSettings fromJson(String json) {
+    static GroupLlmSettings fromJson(String json, String groupId) {
+        GroupLlmSettings defaults = defaults(groupId);
         return new GroupLlmSettings(
-                JsonFields.stringOrDefault(json, "baseUrl", ""),
-                JsonFields.string(json, "model"),
-                JsonFields.stringOrDefault(json, "apiKey", ""),
-                JsonFields.stringOrDefault(json, "systemPrompt", ""));
+                defaultIfBlank(JsonFields.stringOrDefault(json, "baseUrl", ""), defaults.baseUrl),
+                defaultIfBlank(JsonFields.stringOrDefault(json, "model", ""), defaults.model),
+                defaultIfBlank(JsonFields.stringOrDefault(json, "apiKey", ""), defaults.apiKey),
+                defaultIfBlank(JsonFields.stringOrDefault(json, "systemPrompt", ""), defaults.systemPrompt));
     }
 
     String systemPrompt() {
@@ -68,7 +81,7 @@ final class GroupLlmSettings {
         Path target = file(localRoot, groupId);
         Files.createDirectories(target.getParent());
         Path temporary = target.resolveSibling(FILE_NAME + ".tmp");
-        Files.writeString(temporary, toJson() + "\n", StandardCharsets.UTF_8);
+        Files.writeString(temporary, toStorageJson(defaults(groupId)) + "\n", StandardCharsets.UTF_8);
         try {
             Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
         } catch (java.nio.file.AtomicMoveNotSupportedException e) {
@@ -101,6 +114,15 @@ final class GroupLlmSettings {
                 "apiKey", apiKey,
                 "systemPrompt", systemPrompt,
                 "defaults", Json.raw(defaults.toJson())));
+    }
+
+    /** 既定値と同じ項目は空欄にして、変更された項目だけを保存します。 */
+    String toStorageJson(GroupLlmSettings defaults) {
+        return Json.object(Json.fields(
+                "baseUrl", same(baseUrl, defaults.baseUrl) ? "" : baseUrl,
+                "model", same(model, defaults.model) ? "" : model,
+                "apiKey", same(apiKey, defaults.apiKey) ? "" : apiKey,
+                "systemPrompt", same(systemPrompt, defaults.systemPrompt) ? "" : systemPrompt));
     }
 
     private static Path file(Path localRoot, String groupId) {
@@ -139,5 +161,9 @@ final class GroupLlmSettings {
     private static String defaultIfBlank(String value, String defaultValue) {
         String result = text(value);
         return result.isEmpty() ? defaultValue : result;
+    }
+
+    private static boolean same(String left, String right) {
+        return text(left).equals(text(right));
     }
 }

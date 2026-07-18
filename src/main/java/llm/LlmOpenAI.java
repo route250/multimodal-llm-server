@@ -68,7 +68,8 @@ public class LlmOpenAI extends LLM {
 
         public String model() {
             if( this.selected_model==null ) {
-                Pattern p = Pattern.compile(this.model);
+                // モデル ID は提供元により大文字小文字が異なるため、正規表現は区別せず照合します。
+                Pattern p = Pattern.compile(this.model, Pattern.CASE_INSENSITIVE);
                 for( String modelName : this.models() ) {
                     Matcher m = p.matcher(modelName);
                     if( m.find() ) {

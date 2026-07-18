@@ -224,7 +224,7 @@ public class MlServer implements AutoCloseable {
         }
         try {
             GroupLlmSettings settings = GroupLlmSettings.fromJson(
-                    new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+                    new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8), chatGroup.id());
             LlmOpenAI model = new LlmOpenAI(settings.toConfig());
             LLM.Verification verification = model.verify();
             settings.save(LOCAL_ROOT, chatGroup.id());
@@ -239,6 +239,12 @@ public class MlServer implements AutoCloseable {
         } catch (IOException e) {
             sendText(exchange, 500, "application/json; charset=utf-8",
                     errorJson("failed to save LLM settings: " + e.getMessage()));
+        } catch (RuntimeException e) {
+            // 外部 LLM クライアントの例外でも HTTP 応答を返し、ブラウザ側の「Load failed」を防ぎます。
+            String message = e.getMessage();
+            sendText(exchange, 400, "application/json; charset=utf-8",
+                    errorJson("LLM settings verification failed: "
+                            + (message == null || message.isBlank() ? e.getClass().getSimpleName() : message)));
         }
     }
 

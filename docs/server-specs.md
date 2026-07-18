@@ -363,14 +363,15 @@ LLM_TIMEOUT_SECONDS=120
 }
 ```
 
-- `baseUrl` は空文字にできません。`apiKey` は空文字を指定できます。
+- 設定ファイルまたは POST の各項目が空文字の場合は、その Group の既定値を使用します。保存時は既定値と同じ項目を空文字で保存し、変更された項目だけを保存します。
+- `baseUrl` は検証時に空文字にできません。`apiKey` は空文字を指定できます。
 - `systemPrompt` は Group 設定から各 `ChatClient` へ渡し、LLM 呼び出し時に system メッセージとして先頭へ追加します。LLM クライアント自体は保持しません。
 - Base URL のホスト名が `openai.com` またはそのサブドメインで `apiKey` が空文字の場合は、サーバー環境の `OPENAI_API_KEY` を使用します。環境変数も空の場合は HTTP 400 を返します。
-- `model` は空文字にできず、Java 正規表現としてコンパイルできる必要があります。
+- `model` は検証時に空文字にできず、Java 正規表現としてコンパイルできる必要があります。
 - 保存前に `GET /v1/models` を実行して `model` に一致するモデル ID を 1 件特定し、そのモデルで `POST /v1/responses` を実行して空でない応答を確認します。
 - 検証失敗時は HTTP 400 を返し、設定ファイルと接続中クライアントの設定は変更しません。
 - 検証成功時だけ `.local/group-1/llm.json` の形式で保存し、同じ Group に接続中のクライアントは次の assistant turn から新設定を使用します。
-- 設定画面のリセット値は Group ごとに異なります。`group-1` と `group-3` は `baseUrl=http://localhost:8767/v1`、`model=LFM2\\.5`、空の `apiKey`、既定メインプロンプトです。`group-2` は `baseUrl=https://api.openai.com/v1`、`model=gpt-4.1-nano`、空の `apiKey`、既定メインプロンプトです。
+- 設定画面のリセット値は Group ごとに異なります。`group-1` は `baseUrl=http://localhost:8767/v1`、`model=LFM2\\.5`、group-2 は `baseUrl=http://localhost:8767/v1`、`model=gemma[-_]?4[-]?e2b`、group-3 は `baseUrl=https://api.openai.com/v1`、`model=gpt-4.1-nano` です。いずれも空の `apiKey` と既定メインプロンプトを使用します。
 
 LFM2.5 Audio の STT/TTS は、デフォルトで `llama-liquid-audio-server` の OpenAI Chat Completions 互換エンドポイントを使います。
 
