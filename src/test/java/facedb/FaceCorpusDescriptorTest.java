@@ -40,6 +40,8 @@ class FaceCorpusDescriptorTest {
         for (FaceVector vector : vectors) {
             imagesPerPerson.merge(vector.personId(), 1, Integer::sum);
             assertEquals(128, vector.descriptor().length, vector.imageId());
+            assertTrue(Files.isRegularFile(imagePath(vector)), vector.imageId());
+            assertTrue(Files.size(imagePath(vector)) > 0, vector.imageId());
             for (double value : vector.descriptor()) {
                 assertTrue(Double.isFinite(value), vector.imageId());
             }
@@ -61,7 +63,7 @@ class FaceCorpusDescriptorTest {
                 continue;
             }
             String trackId = trackByPerson.computeIfAbsent(vector.personId(), ignored -> createTrack(db));
-            db.register(trackId, vector.descriptor(), jpegBase64());
+            db.register(trackId, vector.descriptor(), jpegBase64(imagePath(vector)));
         }
         for (Map.Entry<String, String> entry : trackByPerson.entrySet()) {
             db.assign(entry.getValue(), entry.getKey());
@@ -100,6 +102,7 @@ class FaceCorpusDescriptorTest {
             vectors.add(new FaceVector(
                     matcher.group(1),
                     matcher.group(2),
+                    matcher.group(3),
                     matcher.group(4),
                     descriptor(matcher.group(6))));
         }
@@ -115,11 +118,23 @@ class FaceCorpusDescriptorTest {
         return descriptor;
     }
 
-    private static String jpegBase64() {
-        byte[] jpeg = new byte[] {(byte) 0xff, (byte) 0xd8, (byte) 0xff, (byte) 0xd9};
-        return Base64.getEncoder().encodeToString(jpeg);
+    private static Path imagePath(FaceVector vector) {
+        return DESCRIPTORS_PATH.getParent().resolve(vector.filePath()).normalize();
     }
 
-    private record FaceVector(String imageId, String personId, String split, double[] descriptor) {
+    private static String jpegBase64(Path imagePath) {
+        try {
+            return Base64.getEncoder().encodeToString(Files.readAllBytes(imagePath));
+        } catch (Exception ex) {
+            throw new IllegalStateException("テスト画像を読み込めません: " + imagePath, ex);
+        }
+    }
+
+    private record FaceVector(
+            String imageId,
+            String personId,
+            String filePath,
+            String split,
+            double[] descriptor) {
     }
 }
