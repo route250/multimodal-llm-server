@@ -637,7 +637,7 @@ export class ChatAudio {
     startPlayback(payload, offsetSeconds) {
         if (!payload.rendered && payload.text) {
             payload.rendered = {
-                bubble: this.onAssistantText(payload.text),
+                bubble: this.onAssistantText(payload.text, payload),
                 text: payload.text
             };
             this.onAssistantSubtitle(payload.text, payload);
@@ -875,6 +875,49 @@ export class ChatAudio {
             this.reportPlayback("cancel", assistantTurnId, { chunkId: 0, audioDurationSeconds: 0 }, 0, false);
         }
         this.pumpPlayback();
+    }
+
+    cancelAllPlayback(reason = "local-stop") {
+        const assistantTurnIds = new Set();
+        if (this.activeAssistantTurnId > 0) {
+            assistantTurnIds.add(this.activeAssistantTurnId);
+        }
+        for (const payload of this.queuedAudioDeltas) {
+            const assistantTurnId = payload.assistantTurnId || 0;
+            if (assistantTurnId > 0) {
+                assistantTurnIds.add(assistantTurnId);
+            }
+        }
+        if (this.currentPlayback) {
+            const assistantTurnId = this.currentPlayback.payload.assistantTurnId || 0;
+            if (assistantTurnId > 0) {
+                assistantTurnIds.add(assistantTurnId);
+            }
+        }
+        if (this.pausedPlayback) {
+            const assistantTurnId = this.pausedPlayback.payload.assistantTurnId || 0;
+            if (assistantTurnId > 0) {
+                assistantTurnIds.add(assistantTurnId);
+            }
+        }
+        if (assistantTurnIds.size === 0) {
+            this.queuedAudioDeltas = [];
+            this.localVadPlaybackPaused = false;
+            this.serverSttPlaybackPaused = false;
+            this.updateAssistantState("IDLE");
+            this.updateSpeechState("UNDETECTED");
+            this.clientLog("cancel-all-playback-empty", { detail: reason });
+            return;
+        }
+        for (const assistantTurnId of assistantTurnIds) {
+            this.cancelPlayback(assistantTurnId);
+        }
+        this.updateAssistantState("IDLE");
+        this.updateSpeechState("UNDETECTED");
+        this.clientLog("cancel-all-playback-done", {
+            assistantTurnId: this.activeAssistantTurnId,
+            detail: `${reason};turns=${assistantTurnIds.size}`
+        });
     }
 
     shouldRecognizePlayback(payload, playedSeconds, completed) {

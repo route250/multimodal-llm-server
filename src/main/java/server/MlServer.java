@@ -96,6 +96,7 @@ public class MlServer implements AutoCloseable {
 
     private void registerContexts(HttpServer server, boolean redirectExternal) {
         createContext(server, "/chat/request", this::handleChatRequest, redirectExternal);
+        createContext(server, "/chat/stop", this::handleChatStop, redirectExternal);
         createContext(server, "/chat/playback", this::handleChatPlayback, redirectExternal);
         createContext(server, "/chat/client-log", this::handleChatClientLog, redirectExternal);
         createContext(server, "/chat/connect", this::handleChatConnect, redirectExternal);
@@ -331,6 +332,26 @@ public class MlServer implements AutoCloseable {
                 "type", request.type(),
                 "bytes", body.length)) + "\n";
         sendText(exchange, 202, "application/json; charset=utf-8", json);
+    }
+
+    private void handleChatStop(HttpExchange exchange) throws IOException {
+        if (!"POST".equals(exchange.getRequestMethod())) {
+            exchange.getResponseHeaders().set("Allow", "POST");
+            exchange.sendResponseHeaders(405, -1);
+            return;
+        }
+
+        String sessionId = sessionId(exchange);
+        ChatGroup chatGroup = chatGroup(exchange);
+        if (chatGroup == null) {
+            sendText(exchange, 404, "application/json; charset=utf-8", "{\"error\":\"chat group not found\"}\n");
+            return;
+        }
+        ChatClient client = chatGroup.client(sessionId);
+        if (client != null) {
+            chatGroup.leave(client, "chat-stop");
+        }
+        sendText(exchange, 202, "application/json; charset=utf-8", "{\"status\":\"stopped\"}\n");
     }
 
     private void handleChatPlayback(HttpExchange exchange) throws IOException {

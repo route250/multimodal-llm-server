@@ -12,7 +12,7 @@
 
         body {
             background: #000000;
-            color: #6fa878;
+            color: #999999;
             font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
             margin: 0;
             transition: background-color 400ms linear;
@@ -53,10 +53,10 @@
 
         select,
         .bot-button {
-            background: #07110b;
-            border: 1px solid #25472d;
+            background: #111111;
+            border: 1px solid #999999;
             border-radius: 8px;
-            color: #91c99a;
+            color: #999999;
             height: 36px;
             padding: 0 12px;
         }
@@ -72,19 +72,19 @@
         }
 
         .presence {
-            border: 1px solid #25472d;
+            border: 1px solid #999999;
             border-radius: 999px;
-            color: #91c99a;
+            color: #999999;
             font-size: 13px;
             font-weight: 700;
             padding: 8px 10px;
         }
 
         .settings-button {
-            background: #07110b;
-            border: 1px solid #25472d;
+            background: #111111;
+            border: 1px solid #999999;
             border-radius: 8px;
-            color: #91c99a;
+            color: #999999;
             height: 36px;
             padding: 0;
             width: 36px;
@@ -256,8 +256,8 @@
         }
 
         .camera-debug {
-            background: #030806;
-            border: 1px solid #25472d;
+            background: #080808;
+            border: 1px solid #999999;
             border-radius: 8px;
             bottom: 18px;
             display: grid;
@@ -290,7 +290,7 @@
         }
 
         .debug-text {
-            color: #91c99a;
+            color: #999999;
             font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
             font-size: 11px;
             overflow-wrap: anywhere;
@@ -309,17 +309,19 @@
 
         .subtitle-text {
             background: rgba(0, 0, 0, 0.58);
-            border: 1px solid #25472d;
+            border: 1px solid #999999;
             border-radius: 8px;
-            color: #91c99a;
-            display: -webkit-box;
+            color: #999999;
+            display: block;
+            height: calc(2.9em + 22px);
             max-width: min(920px, 94vw);
             min-height: 0;
             overflow: hidden;
             padding: 10px 14px;
             text-align: center;
-            -webkit-box-orient: vertical;
-            -webkit-line-clamp: 2;
+            overflow-wrap: anywhere;
+            white-space: pre-wrap;
+            width: min(920px, 94vw);
         }
 
         .subtitle-text:empty {
@@ -329,9 +331,9 @@
 
         .speech-state,
         .audio-metrics {
-            background: #07110b;
-            border-color: #25472d;
-            color: #91c99a;
+            background: #111111;
+            border-color: #999999;
+            color: #999999;
         }
 
         .audio-metrics {
@@ -489,13 +491,13 @@
         clientLog: (event, fields) => events?.clientLog(event, fields),
         onSystem: (message) => setSubtitle(message, 2500),
         onSpeechStateDisplay: updateStatusDisplay,
-        onAssistantText: (text) => {
-            appendSubtitle(text);
+        onAssistantText: (text, payload) => {
+            appendAssistantSubtitle(text, payload.assistantTurnId || 0);
             return { textContent: subtitle.textContent, parentElement: subtitle.parentElement };
         },
         onAssistantTextRemove: () => {},
         onAssistantSubtitle: () => {},
-        onAssistantSubtitleDone: () => clearSubtitleSoon(),
+        onAssistantSubtitleDone: () => {},
         onMicStatus: (message) => {
             if (message.includes("error")) {
                 updateDebugText(message);
@@ -523,10 +525,10 @@
             sessionId,
             statusFields: () => audio.statusFields(),
             onSystem: handleChatSystem,
-            onUserMessage: (message) => setSubtitle(message, 0),
-            onMessage: (message) => setSubtitle(message, 0),
-            onMessageDone: clearSubtitleSoon,
-            onTranscriptPartial: (payload) => setSubtitle(payload.text || "", 0),
+            onUserMessage: (message) => setUserSubtitle(message),
+            onMessage: (message) => setAssistantSubtitle(message),
+            onMessageDone: () => {},
+            onTranscriptPartial: (payload) => setTranscriptSubtitle(payload.speechSequenceId || 0, payload.text || ""),
             onAssistantAudioChunk: (payload) => audio.queueAudioDelta(payload),
             onAudioControl: (payload) => audio.handleAudioControl(payload),
             onSpeechState: (payload) => audio.updateSpeechState(payload.currentState || "UNDETECTED"),
@@ -579,6 +581,8 @@
     async function stopBot() {
         startBot.disabled = true;
         botRunning = false;
+        audio.cancelAllPlayback("bot-stop");
+        clearSubtitle();
         const leaveRequests = [];
         for (const track of faceTracks.values()) {
             if (track.entered) {
@@ -586,6 +590,7 @@
             }
         }
         await Promise.all(leaveRequests);
+        await stopChatSession();
         disconnectEvents();
         groupInput.disabled = false;
         markAllPeopleLeft();
@@ -596,6 +601,16 @@
         }
         startBot.textContent = "開始";
         startBot.disabled = false;
+    }
+
+    async function stopChatSession() {
+        try {
+            await fetch(`/chat/stop?group=${encodeURIComponent(groupInput.value)}&sessionId=${encodeURIComponent(sessionId)}`, {
+                method: "POST"
+            });
+        } catch (error) {
+            events?.clientLog("chat-stop-error", { error: error.message });
+        }
     }
 
     async function loadModels() {
@@ -917,7 +932,7 @@
                     trackId: track.trackId,
                     label: track.trackId,
                     box: resized.box,
-                    strokeStyle: track.entered ? "#315f39" : "#666666",
+                    strokeStyle: track.entered ? "#999999" : "#666666",
                     lineWidth: descriptorUpdatedThisFrame ? 3 : 1,
                     lineDash: track.descriptor ? [] : [6, 4],
                 };
@@ -1126,26 +1141,111 @@
         rmsValue.textContent = String(rms).padStart(3, "0");
     }
 
-    function appendSubtitle(text) {
-        clearTimeout(subtitleClearTimer);
-        subtitle.textContent += text;
+    const subtitleEntries = [];
+    let subtitleEntrySequence = 0;
+    let activeTranscriptKey = "";
+    let activeAssistantKey = "";
+
+    function appendAssistantSubtitle(text, assistantTurnId) {
+        const key = assistantTurnId ? `assistant:${assistantTurnId}` : `assistant:${++subtitleEntrySequence}`;
+        writeSubtitleLine({
+            key,
+            role: "assistant",
+            text,
+            append: true,
+        });
+    }
+
+    function setAssistantSubtitle(text) {
+        activeAssistantKey = `assistant:${++subtitleEntrySequence}`;
+        writeSubtitleLine({
+            key: activeAssistantKey,
+            role: "assistant",
+            text,
+        });
+    }
+
+    function setTranscriptSubtitle(speechSequenceId, text) {
+        if (!speechSequenceId || !text.trim()) {
+            return;
+        }
+        activeTranscriptKey = `user:${speechSequenceId}`;
+        writeSubtitleLine({
+            key: activeTranscriptKey,
+            role: "user",
+            text,
+        });
+    }
+
+    function setUserSubtitle(text) {
+        writeSubtitleLine({
+            key: activeTranscriptKey || `user:${++subtitleEntrySequence}`,
+            role: "user",
+            text,
+        });
+        activeTranscriptKey = "";
     }
 
     function setSubtitle(text, clearMs) {
-        clearTimeout(subtitleClearTimer);
-        subtitle.textContent = text;
-        if (clearMs > 0) {
-            subtitleClearTimer = setTimeout(() => {
-                subtitle.textContent = "";
-            }, clearMs);
+        writeSubtitleLine({
+            key: `system:${++subtitleEntrySequence}`,
+            role: "system",
+            text,
+            clearMs,
+        });
+    }
+
+    function writeSubtitleLine({ key, role, text, append = false, clearMs = 0 }) {
+        window.clearTimeout(subtitleClearTimer);
+        const normalizedText = text || "";
+        if (!normalizedText.trim()) {
+            return;
+        }
+        let entry = subtitleEntries.find((item) => item.key === key);
+        if (!entry) {
+            entry = { key, role, text: "", timer: 0 };
+            subtitleEntries.push(entry);
+        }
+        entry.role = role;
+        entry.text = append ? entry.text + normalizedText : normalizedText;
+        window.clearTimeout(entry.timer);
+        entry.timer = 0;
+        trimSubtitleEntries();
+        renderSubtitle();
+    }
+
+    function finishConversationSubtitle() {
+        window.clearTimeout(subtitleClearTimer);
+        subtitleClearTimer = 0;
+        activeAssistantKey = "";
+        activeTranscriptKey = "";
+        renderSubtitle();
+    }
+
+    function clearSubtitle() {
+        window.clearTimeout(subtitleClearTimer);
+        subtitleClearTimer = 0;
+        for (const entry of subtitleEntries) {
+            window.clearTimeout(entry.timer);
+        }
+        subtitleEntries.length = 0;
+        activeAssistantKey = "";
+        activeTranscriptKey = "";
+        renderSubtitle();
+    }
+
+    function trimSubtitleEntries() {
+        while (subtitleEntries.length > 40) {
+            const [entry] = subtitleEntries.splice(0, 1);
+            window.clearTimeout(entry.timer);
         }
     }
 
-    function clearSubtitleSoon() {
-        clearTimeout(subtitleClearTimer);
-        subtitleClearTimer = setTimeout(() => {
-            subtitle.textContent = "";
-        }, 900);
+    function renderSubtitle() {
+        subtitle.textContent = subtitleEntries.map((entry) => entry.text).join("\n");
+        requestAnimationFrame(() => {
+            subtitle.scrollTop = subtitle.scrollHeight;
+        });
     }
 
     async function blinkTwice(animationSequence) {

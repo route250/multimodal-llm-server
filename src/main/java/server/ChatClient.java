@@ -238,6 +238,9 @@ public class ChatClient {
                     "vadBytes", vadBytes.length,
                     "rmsBytes", rmsBytes.length));
             Optional<TranscriptionResult> result = audioProcessor.acceptPcm16LeWithVadDetailed(body, vadBytes, rmsBytes);
+            if (isClosed()) {
+                return;
+            }
             result.ifPresent(this::handleTranscriptionResult);
         } catch (IllegalArgumentException e) {
             sendAudioProcessingFailure(e);
@@ -895,16 +898,46 @@ public class ChatClient {
     }
 
     public void close() {
-        Future<?> taskToCancel;
+        close("client-close");
+    }
+
+    void close(String reason) {
         synchronized (lifecycleLock) {
+            if (closed) {
+                return;
+            }
             closed = true;
         }
+        cancelActiveWorkNow(reason);
+    }
+
+    /**
+     * 停止操作で、STT、LLM、TTS、再生待ちの応答をまとめてキャンセルする。
+     */
+    public void cancelActiveWork(String reason) {
+        synchronized (lifecycleLock) {
+            if (closed) {
+                return;
+            }
+        }
+        cancelActiveWorkNow(reason);
+    }
+
+    private void cancelActiveWorkNow(String reason) {
+        Future<?> taskToCancel;
+        long canceledTurnId;
         synchronized (playbackControlLock) {
+            canceledTurnId = currentAssistantTurnId;
+            if (canceledTurnId > 0) {
+                canceledAssistantTurnIds.add(canceledTurnId);
+            }
             taskToCancel = activeAssistantTask;
             activeAssistantTask = null;
             assistantTurnActive = false;
             sttWaitActive = false;
+            activePlaybackStartSampleIndex = Long.MIN_VALUE;
         }
+        audioProcessor.cancelTranscriptions();
         synchronized (partialTranscriptLock) {
             partialTranscripts.clear();
         }
@@ -917,6 +950,9 @@ public class ChatClient {
         if (taskToCancel != null) {
             taskToCancel.cancel(true);
         }
+        AudioDiagnostics.log("client-work-cancel", diagnosticsContext, Json.fields(
+                "reason", reason,
+                "assistantTurnId", canceledTurnId > 0 ? canceledTurnId : null));
     }
 
     private boolean isClosed() {

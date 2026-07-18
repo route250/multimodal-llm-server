@@ -76,7 +76,11 @@ public class ChatGroup {
     }
 
     public void leave(ChatClient client) {
-        client.close();
+        leave(client, "client-close");
+    }
+
+    void leave(ChatClient client, String reason) {
+        client.close(reason);
         if (clients.remove(client.id(), client)) {
             publish(ServerEvent.system(client.id() + " left " + id));
         }

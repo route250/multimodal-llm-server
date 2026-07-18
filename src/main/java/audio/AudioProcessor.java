@@ -268,6 +268,21 @@ public class AudioProcessor {
     }
 
     /**
+     * 停止操作で、投入済みまたは実行中の STT 結果を現在の会話へ反映しない状態に戻す。
+     */
+    public synchronized void cancelTranscriptions() {
+        speechSequenceId++;
+        transcribeResults.clear();
+        pendingTranscriptionFailure = null;
+        setState(nextSampleIndex, SpeechState.UNDETECTED);
+        transcriptionStartFloorSampleIndex = nextSampleIndex;
+        nextPartialTranscriptionStartSampleIndex = nextSampleIndex;
+        nextPartialTranscriptionEndSampleIndex = Long.MAX_VALUE;
+        transcriptionPrompt = "";
+        previousTranscription = null;
+    }
+
+    /**
      * 受信済み PCM から VAD 実行可能なフレームを順に処理する。
      *
      * @return この処理中に発話区間が確定した場合は最後の文字起こし結果。未確定の場合は Optional.empty()
