@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>顔特徴ベクトル生成</title>
+    <style>
+        body {
+            max-width: 960px;
+            margin: 32px auto;
+            padding: 0 20px;
+            color: #202124;
+            font-family: system-ui, sans-serif;
+        }
+
+        progress {
+            width: 100%;
+        }
+
+        #log {
+            min-height: 240px;
+            padding: 16px;
+            overflow: auto;
+            background: #f4f5f7;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+<h1>顔特徴ベクトル生成</h1>
+<p id="status">初期化中</p>
+<progress id="progress" value="0" max="100"></progress>
+<p><button id="download" type="button" disabled>descriptors.jsonを保存</button></p>
+<pre id="log"></pre>
+<script id="descriptor-output" type="application/json"></script>
+
+<script type="module">
+    import * as faceapi from "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/dist/face-api.esm.js";
+
+    const faceApiVersion = "1.7.15";
+    const modelUrl = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model/";
+    const status = document.getElementById("status");
+    const progress = document.getElementById("progress");
+    const log = document.getElementById("log");
+    const download = document.getElementById("download");
+    const descriptorOutput = document.getElementById("descriptor-output");
+
+    download.addEventListener("click", () => {
+        const blob = new Blob([`${descriptorOutput.textContent}\n`], { type: "application/json" });
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = "descriptors.json";
+        link.click();
+        URL.revokeObjectURL(link.href);
+    });
+
+    function appendLog(message) {
+        log.textContent += `${message}\n`;
+        log.scrollTop = log.scrollHeight;
+    }
+
+    function loadImage(path) {
+        return new Promise((resolve, reject) => {
+            const image = new Image();
+            image.onload = () => resolve(image);
+            image.onerror = () => reject(new Error(`画像を読み込めません: ${path}`));
+            image.src = path;
+        });
+    }
+
+    async function readImageRows() {
+        const response = await fetch("./face_images.csv");
+        if (!response.ok) {
+            throw new Error(`face_images.csvの取得に失敗しました: HTTP ${response.status}`);
+        }
+        const lines = (await response.text()).trim().split(/\r?\n/);
+        const headers = lines.shift().split(",");
+        return lines.map((line) => {
+            const values = line.split(",");
+            return Object.fromEntries(headers.map((header, index) => [header, values[index]]));
+        });
+    }
+
+    async function descriptorFor(path) {
+        const image = await loadImage(path);
+        return {
+            descriptor: Array.from(await faceapi.computeFaceDescriptor(image)),
+        };
+    }
+
+    async function generate() {
+        status.textContent = "モデル読込中";
+        await faceapi.tf.setBackend("webgl");
+        await faceapi.tf.ready();
+        await faceapi.nets.faceRecognitionNet.loadFromUri(modelUrl);
+
+        const rows = await readImageRows();
+        const generated = [];
+        const failures = [];
+        progress.max = rows.length;
+        status.textContent = "特徴ベクトル生成中";
+
+        for (const [index, row] of rows.entries()) {
+            const result = await descriptorFor(row.file_path);
+            generated.push({
+                imageId: row.image_id,
+                personId: row.person_id,
+                filePath: row.file_path,
+                split: row.split,
+                sourceImageId: row.source_image_id,
+                ...result,
+            });
+            appendLog(`${index + 1}/${rows.length} 成功 ${row.file_path}`);
+            progress.value = index + 1;
+        }
+
+        window.descriptorDataset = {
+            schemaVersion: 1,
+            generator: {
+                library: "@vladmandic/face-api",
+                version: faceApiVersion,
+                backend: faceapi.tf.getBackend(),
+                descriptor: "FaceRecognitionNet",
+                inputMode: "whole-image-face-crop",
+            },
+            source: {
+                dataset: "AT&T/ORL Database of Faces",
+                metadata: "face_images.csv",
+            },
+            images: generated,
+            failures,
+        };
+        descriptorOutput.textContent = JSON.stringify(window.descriptorDataset, null, 2);
+        download.disabled = false;
+        status.textContent = `完了: 成功 ${generated.length}枚 / 失敗 ${failures.length}枚`;
+        document.title = `完了 ${generated.length}/${rows.length}`;
+    }
+
+    window.descriptorGenerationDone = generate().catch((error) => {
+        window.descriptorGenerationError = error.stack || error.message;
+        status.textContent = `エラー: ${error.message}`;
+        appendLog(window.descriptorGenerationError);
+        throw error;
+    });
+</script>
+</body>
+</html>
