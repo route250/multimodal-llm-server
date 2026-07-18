@@ -28,6 +28,7 @@
 </head>
 <body>
 <h1>顔特徴ベクトル生成</h1>
+<p><code>gt_db.zip</code>をこのHTMLと同じディレクトリへ展開してから実行してください。</p>
 <p id="status">初期化中</p>
 <progress id="progress" value="0" max="100"></progress>
 <p><button id="download" type="button" disabled>descriptors.jsonを保存</button></p>
@@ -39,11 +40,29 @@
 
     const faceApiVersion = "1.7.15";
     const modelUrl = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model/";
+    const options = new faceapi.TinyFaceDetectorOptions({
+        inputSize: 416,
+        scoreThreshold: 0.5,
+    });
     const status = document.getElementById("status");
     const progress = document.getElementById("progress");
     const log = document.getElementById("log");
     const download = document.getElementById("download");
     const descriptorOutput = document.getElementById("descriptor-output");
+    const cropCanvas = document.createElement("canvas");
+    const cropContext = cropCanvas.getContext("2d");
+    const datasetSelection = [
+        { personId: "person_001", subjectId: "s01", images: ["01", "03", "04", "06", "07", "09", "10", "12", "13", "15"] },
+        { personId: "person_002", subjectId: "s03", images: ["01", "03", "04", "06", "07", "09", "10", "12", "13", "15"] },
+        { personId: "person_003", subjectId: "s08", images: ["01", "03", "04", "06", "07", "09", "10", "12", "13", "15"] },
+        { personId: "person_004", subjectId: "s09", images: ["01", "02", "05", "06", "08", "09", "11", "12", "14", "15"] },
+        { personId: "person_005", subjectId: "s05", images: ["01", "02", "03", "06", "07", "09", "10", "13", "14", "15"] },
+        { personId: "person_006", subjectId: "s15", images: ["02", "04", "05", "08", "09", "10", "11", "13", "14", "15"] },
+        { personId: "person_007", subjectId: "s18", images: ["01", "02", "03", "06", "07", "08", "09", "11", "12", "14"] },
+        { personId: "person_008", subjectId: "s02", images: ["01", "03", "04", "05", "06", "09", "10", "12", "14", "15"] },
+        { personId: "person_009", subjectId: "s06", images: ["02", "03", "04", "06", "07", "09", "10", "13", "14", "15"] },
+        { personId: "person_010", subjectId: "s11", images: ["01", "02", "03", "04", "05", "09", "10", "11", "14", "15"] },
+    ];
 
     download.addEventListener("click", () => {
         const blob = new Blob([`${descriptorOutput.textContent}\n`], { type: "application/json" });
@@ -68,23 +87,59 @@
         });
     }
 
-    async function readImageRows() {
-        const response = await fetch("./face_images.csv");
-        if (!response.ok) {
-            throw new Error(`face_images.csvの取得に失敗しました: HTTP ${response.status}`);
-        }
-        const lines = (await response.text()).trim().split(/\r?\n/);
-        const headers = lines.shift().split(",");
-        return lines.map((line) => {
-            const values = line.split(",");
-            return Object.fromEntries(headers.map((header, index) => [header, values[index]]));
-        });
+    function imageRows() {
+        let imageSequence = 0;
+        return datasetSelection.flatMap((person) => person.images.map((sourceImageId, index) => {
+            imageSequence += 1;
+            const sourcePath = `${person.subjectId}/${sourceImageId}.jpg`;
+            const dummyFileName = `image_${String(index + 1).padStart(2, "0")}.jpg`;
+            return {
+                image_id: `face_${String(imageSequence).padStart(4, "0")}`,
+                person_id: person.personId,
+                input_path: `gt_db/${sourcePath}`,
+                file_path: `images/${person.personId}/${dummyFileName}`,
+                split: index < 7 ? "train" : "test",
+                source_image_id: sourcePath,
+            };
+        }));
+    }
+
+    function largestDetection(detections) {
+        return detections.reduce((largest, detection) => {
+            const area = detection.box.width * detection.box.height;
+            const largestArea = largest ? largest.box.width * largest.box.height : -1;
+            return area > largestArea ? detection : largest;
+        }, null);
     }
 
     async function descriptorFor(path) {
         const image = await loadImage(path);
+        const detection = largestDetection(await faceapi.detectAllFaces(image, options));
+        if (!detection) {
+            return null;
+        }
+
+        const box = detection.box;
+        const margin = box.width * 0.3;
+        const sx = Math.max(0, box.x - margin);
+        const sy = Math.max(0, box.y - margin);
+        const sw = Math.min(image.naturalWidth - sx, box.width + margin * 2);
+        const sh = Math.min(image.naturalHeight - sy, box.height + margin * 2);
+        cropCanvas.width = Math.max(1, Math.round(sw));
+        cropCanvas.height = Math.max(1, Math.round(sh));
+        cropContext.drawImage(image, sx, sy, sw, sh, 0, 0, cropCanvas.width, cropCanvas.height);
+
+        const descriptorDetection = await faceapi
+            .detectSingleFace(cropCanvas, options)
+            .withFaceLandmarks()
+            .withFaceDescriptor();
+        if (!descriptorDetection) {
+            return null;
+        }
         return {
-            descriptor: Array.from(await faceapi.computeFaceDescriptor(image)),
+            initialDetectionScore: detection.score,
+            descriptorDetectionScore: descriptorDetection.detection.score,
+            descriptor: Array.from(descriptorDetection.descriptor),
         };
     }
 
@@ -92,26 +147,44 @@
         status.textContent = "モデル読込中";
         await faceapi.tf.setBackend("webgl");
         await faceapi.tf.ready();
-        await faceapi.nets.faceRecognitionNet.loadFromUri(modelUrl);
+        await Promise.all([
+            faceapi.nets.tinyFaceDetector.loadFromUri(modelUrl),
+            faceapi.nets.faceLandmark68Net.loadFromUri(modelUrl),
+            faceapi.nets.faceRecognitionNet.loadFromUri(modelUrl),
+        ]);
 
-        const rows = await readImageRows();
+        const rows = imageRows();
         const generated = [];
         const failures = [];
         progress.max = rows.length;
         status.textContent = "特徴ベクトル生成中";
 
         for (const [index, row] of rows.entries()) {
-            const result = await descriptorFor(row.file_path);
-            generated.push({
-                imageId: row.image_id,
-                personId: row.person_id,
-                filePath: row.file_path,
-                split: row.split,
-                sourceImageId: row.source_image_id,
-                ...result,
-            });
-            appendLog(`${index + 1}/${rows.length} 成功 ${row.file_path}`);
-            progress.value = index + 1;
+            try {
+                const result = await descriptorFor(row.input_path);
+                if (!result) {
+                    throw new Error("顔を検出できません");
+                }
+                generated.push({
+                    imageId: row.image_id,
+                    personId: row.person_id,
+                    filePath: row.file_path,
+                    split: row.split,
+                    sourceImageId: row.source_image_id,
+                    ...result,
+                });
+                appendLog(`${index + 1}/${rows.length} 成功 ${row.input_path}`);
+            } catch (error) {
+                failures.push({
+                    imageId: row.image_id,
+                    personId: row.person_id,
+                    inputPath: row.input_path,
+                    message: error.message,
+                });
+                appendLog(`${index + 1}/${rows.length} 失敗 ${row.input_path}: ${error.message}`);
+            } finally {
+                progress.value = index + 1;
+            }
         }
 
         window.descriptorDataset = {
@@ -120,12 +193,17 @@
                 library: "@vladmandic/face-api",
                 version: faceApiVersion,
                 backend: faceapi.tf.getBackend(),
+                detector: "TinyFaceDetector",
+                detectorInputSize: 416,
+                detectorScoreThreshold: 0.5,
+                cropMarginRatio: 0.3,
+                landmarks: "FaceLandmark68Net",
                 descriptor: "FaceRecognitionNet",
-                inputMode: "whole-image-face-crop",
             },
             source: {
-                dataset: "AT&T/ORL Database of Faces",
-                metadata: "face_images.csv",
+                dataset: "Georgia Tech Face Database",
+                download: "https://www.anefian.com/research/gt_db.zip",
+                selectedSubjects: datasetSelection.map((person) => person.subjectId),
             },
             images: generated,
             failures,

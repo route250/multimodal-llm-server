@@ -1,139 +1,123 @@
-# 顔認証デバッグ用データ / Face Recognition Debug Dataset
+# Georgia Tech Face Database テストデータ
 
-## 日本語
+このディレクトリには、顔照合テストで使用する生成済み特徴ベクトルと、その再生成用HTMLを保存しています。
+元画像はリポジトリに含めません。
 
-### データ内容
+## 保存しているファイル
 
-このディレクトリには、AT&T/ORL Database of Faces から抽出した顔認証デバッグ用データを格納しています。
+- `README.md`: 出典、対象画像、再生成手順
+- `generate-descriptors.html`: ブラウザで顔検出と128次元特徴ベクトル生成を行うHTML
+- `descriptors.json`: 10人×10枚、合計100枚から生成済みの特徴ベクトル
+- `images/`: `descriptors.json`の`filePath`に対応する320×120ピクセルのダミーJPEG画像
 
-- 人物数: 10人
-- 画像数: 1人10枚、合計100枚
-- 画像形式: JPEG、8-bitグレースケール
-- 画像サイズ: 92×112ピクセル
-- 登録・学習用: 各人7枚、合計70枚（`split=train`）
-- 照合テスト用: 各人3枚、合計30枚（`split=test`）
+## 元データの取得と展開
 
-人物は、固定乱数シード `20260718` を使って原本の40人から選択しました。
-選択した原本の人物IDは `s4, s5, s11, s17, s21, s23, s24, s25, s30, s39` です。
-このリポジトリでは、人物IDを `person_001`〜`person_010` に置き換えています。
+リポジトリのルートから次のコマンドを実行します。
 
-### ファイル構成
+```bash
+cd src/test/test-data/faces
+curl -L --fail https://www.anefian.com/research/gt_db.zip -o gt_db.zip
+shasum -a 256 gt_db.zip
+unzip gt_db.zip
+```
 
-- `images/person_NNN/`: 人物IDごとの顔画像
-- `persons.csv`: 人物マスター用データ
-- `face_images.csv`: 顔画像マスター用データ、分割区分、原本ID、SHA-256
-- `descriptors.json`: 100枚分の事前計算済み128次元特徴ベクトル
-- `generate-descriptors.html`: 特徴ベクトル再生成ページ
-- `SOURCE_README.txt`: 原本アーカイブに含まれる説明
+確認済みアーカイブの情報は次のとおりです。
 
-### 特徴ベクトル
+```text
+ファイルサイズ: 133192489 bytes
+SHA-256: 2c4e379ef7c3cc5580eb409673a1e6eb75c5e5a7efd9bf3beb1de8059e835cbf
+```
 
-`descriptors.json` は `@vladmandic/face-api` バージョン `1.7.15` の
-`FaceRecognitionNet` で生成しています。画像はすでに顔領域へ切り出されているため、
-顔検出とランドマーク検出は実行せず、92×112ピクセルの画像全体を顔画像として入力しています。
+展開後は、HTMLと同じディレクトリに`gt_db/s01/01.jpg`などが存在する構成になります。
 
-再生成する場合は、リポジトリのルートディレクトリで次のHTTPサーバを起動します。
+## descriptors.jsonの生成
+
+別のターミナルでリポジトリのルートへ移動し、ローカルHTTPサーバを起動します。
 
 ```bash
 python3 -m http.server 18080 --bind 127.0.0.1
 ```
 
-ブラウザで次のURLを開き、処理完了後に `descriptors.jsonを保存` を押します。
+次のURLを、WebGLを利用できるブラウザで開きます。
 
 ```text
 http://127.0.0.1:18080/src/test/test-data/faces/generate-descriptors.html
 ```
 
-生成処理はモデル取得にCDNを使用するため、インターネット接続が必要です。
+HTMLはページ読み込み後に自動で処理を開始します。
+画面に`完了: 成功 100枚 / 失敗 0枚`と表示されたことを確認し、`descriptors.jsonを保存`を押します。
+ダウンロードされたファイルで、次のファイルを置き換えます。
 
-### 出典
+```text
+src/test/test-data/faces/descriptors.json
+```
 
-データセット:
+`descriptors.json`の`filePath`は、元の顔画像ではなく`images/person_NNN/image_NN.jpg`形式のダミー画像を参照します。
+特徴ベクトルは`sourceImageId`に記録されたGeorgia Tech Face Databaseの画像から計算されています。
+`images/`のダミー画像を特徴ベクトル生成の入力には使用しません。
+各ダミー画像はImageMagickで生成した白背景・黒文字のJPEGで、中央に`personId`とファイル名を表示します。
 
-> AT&T Laboratories Cambridge, The Database of Faces  
-> 旧名称: The ORL Database of Faces  
-> https://www.cl.cam.ac.uk/research/dtg/attarchive/facedatabase.html
-
-参考文献:
-
-> F. Samaria and A. Harter, “Parameterisation of a Stochastic Model for Human Face Identification,”  
-> 2nd IEEE Workshop on Applications of Computer Vision, Sarasota, Florida, December 1994.
-
-原本READMEの指定に従い、この画像を使用する場合は Olivetti Research Laboratory または
-AT&T Laboratories Cambridge のクレジットを記載してください。
-
-### 利用上の注意
-
-このデータには実在人物の生体情報が含まれます。ローカルのデバッグおよびテスト用途に限定し、
-アプリケーションの公開データ、ログ、画面キャプチャ、外部ストレージへ複製しないでください。
-原本ページには一般的なオープンソースライセンスの記載がないため、商用利用、再配布、
-学習済みモデルの公開を行う場合は、権利者へ利用条件を確認してください。
-
-## English
-
-### Dataset contents
-
-This directory contains face-recognition debug data extracted from the AT&T/ORL Database of Faces.
-
-- Subjects: 10
-- Images: 10 per subject, 100 total
-- Format: JPEG, 8-bit grayscale
-- Dimensions: 92×112 pixels
-- Enrollment/training split: 7 per subject, 70 total (`split=train`)
-- Matching test split: 3 per subject, 30 total (`split=test`)
-
-The subjects were selected from the 40 original subjects using the fixed random seed `20260718`.
-The selected source subject IDs are `s4, s5, s11, s17, s21, s23, s24, s25, s30, s39`.
-They are mapped to `person_001` through `person_010` in this repository.
-
-### Files
-
-- `images/person_NNN/`: Face images grouped by person ID
-- `persons.csv`: Person master records
-- `face_images.csv`: Face-image records, split labels, source IDs, and SHA-256 values
-- `descriptors.json`: Precomputed 128-dimensional descriptors for all 100 images
-- `generate-descriptors.html`: Descriptor regeneration page
-- `SOURCE_README.txt`: README included in the original archive
-
-### Face descriptors
-
-`descriptors.json` was generated with `FaceRecognitionNet` from
-`@vladmandic/face-api` version `1.7.15`. Since every source image is already cropped to a face,
-the generator skips face and landmark detection and treats the complete 92×112 image as its face input.
-
-To regenerate the file, start an HTTP server from the repository root:
+生成後は、ダウンロードした元画像とZIPを削除できます。
 
 ```bash
-python3 -m http.server 18080 --bind 127.0.0.1
+rm -rf src/test/test-data/faces/gt_db
+rm src/test/test-data/faces/gt_db.zip
 ```
 
-Open the following URL and select `descriptors.jsonを保存` after processing completes:
+## 対象画像
 
-```text
-http://127.0.0.1:18080/src/test/test-data/faces/generate-descriptors.html
-```
+Georgia Tech Face Databaseの50人から、次の10人を固定で選択しています。
+各人について10枚を使い、先頭7枚を登録用、末尾3枚を照合テスト用としています。
 
-The generator requires an internet connection because it loads the model from a CDN.
+| テストID | 元データID | 使用画像 |
+|---|---|---|
+| `person_001` | `s01` | 01, 03, 04, 06, 07, 09, 10, 12, 13, 15 |
+| `person_002` | `s03` | 01, 03, 04, 06, 07, 09, 10, 12, 13, 15 |
+| `person_003` | `s08` | 01, 03, 04, 06, 07, 09, 10, 12, 13, 15 |
+| `person_004` | `s09` | 01, 02, 05, 06, 08, 09, 11, 12, 14, 15 |
+| `person_005` | `s05` | 01, 02, 03, 06, 07, 09, 10, 13, 14, 15 |
+| `person_006` | `s15` | 02, 04, 05, 08, 09, 10, 11, 13, 14, 15 |
+| `person_007` | `s18` | 01, 02, 03, 06, 07, 08, 09, 11, 12, 14 |
+| `person_008` | `s02` | 01, 03, 04, 05, 06, 09, 10, 12, 14, 15 |
+| `person_009` | `s06` | 02, 03, 04, 06, 07, 09, 10, 13, 14, 15 |
+| `person_010` | `s11` | 01, 02, 03, 04, 05, 09, 10, 11, 14, 15 |
 
-### Source
+この選択は`generate-descriptors.html`内に固定で定義されているため、CSVファイルは不要です。
 
-Dataset:
+## 特徴ベクトル生成方式
 
-> AT&T Laboratories Cambridge, The Database of Faces  
-> Formerly: The ORL Database of Faces  
-> https://www.cl.cam.ac.uk/research/dtg/attarchive/facedatabase.html
+`generate-descriptors.html`は`bot.html`と同じ方式で処理します。
 
-Reference:
+- `@vladmandic/face-api` 1.7.15
+- WebGL backend
+- TinyFaceDetector: `inputSize=416`、`scoreThreshold=0.5`
+- 最初の検出結果から面積が最大の顔を選択
+- 顔の横幅の30%を上下左右の余白として切り出し
+- 切り出した画像でもう一度顔検出
+- FaceLandmark68NetとFaceRecognitionNetを使用
+- 出力は128次元のdescriptor
 
-> F. Samaria and A. Harter, “Parameterisation of a Stochastic Model for Human Face Identification,”  
-> 2nd IEEE Workshop on Applications of Computer Vision, Sarasota, Florida, December 1994.
+生成結果はブラウザ、GPU、WebGL実装、ライブラリの取得時点によって小数値が変化する可能性があります。
+照合テストでは、同一ファイルから一括生成したdescriptor同士を比較してください。
 
-As requested by the original README, credit Olivetti Research Laboratory or
-AT&T Laboratories Cambridge when using these images.
+## 出典・利用上の注意（日本語）
 
-### Usage notice
+出典はGeorgia Institute of Technologyで収集されたGeorgia Tech Face Databaseです。
+公式ページでは、50人について1人あたり15枚、合計750枚のカラー画像が提供されています。
+データセットは研究者向けに提供されており、標準的なオープンソースライセンスは明記されていません。
+再配布、公開、商用利用を行う場合は、公式の説明と配布条件を確認してください。
 
-This dataset contains biometric data of real people. Limit its use to local debugging and testing.
-Do not copy it into public application data, logs, screenshots, or external storage.
-The source page does not state a standard open-source license. Confirm usage terms with the rights holder
-before commercial use, redistribution, or publication of a trained model.
+- 公式ページ: https://www.anefian.com/research/face_reco.htm
+- 公式ZIP: https://www.anefian.com/research/gt_db.zip
+- 公式README: https://www.anefian.com/research/GTDB_README.txt
+
+## Source and usage notice (English)
+
+The source is the Georgia Tech Face Database collected at the Georgia Institute of Technology.
+The official page describes 750 color images of 50 people, with 15 images per person.
+The dataset is provided for researchers, and no standard open-source license is stated.
+Review the official description and distribution terms before redistribution, publication, or commercial use.
+
+- Official page: https://www.anefian.com/research/face_reco.htm
+- Official ZIP: https://www.anefian.com/research/gt_db.zip
+- Official README: https://www.anefian.com/research/GTDB_README.txt
