@@ -11,18 +11,20 @@ mkdir -p "$CKPT"
 
 # モデルリポジトリ
 HF_URL=https://huggingface.co
-REPO0=LiquidAI/LFM2.5-1.2B-JP-202606-GGUF
-REPO1=LiquidAI/LFM2.5-Audio-1.5B-JP-GGUF
+REPO01=LiquidAI/LFM2.5-1.2B-JP-202606-GGUF
+REPO02=unsloth/gemma-4-E2B-it-GGUF
+REPO10=LiquidAI/LFM2.5-Audio-1.5B-JP-GGUF
 
 # モデルファイル
 QT=${1:-Q4_0}
-M0="$REPO0,LFM2.5-1.2B-JP-202606-${QT}.gguf"
-M1="$REPO1,LFM2.5-Audio-1.5B-JP-${QT}.gguf"
-M2="$REPO1,mmproj-LFM2.5-Audio-1.5B-JP-${QT}.gguf"
-M3="$REPO1,vocoder-LFM2.5-Audio-1.5B-JP-${QT}.gguf"
-M4="$REPO1,tokenizer-LFM2.5-Audio-1.5B-JP-${QT}.gguf"
+M01="$REPO01,LFM2.5-1.2B-JP-202606-${QT}.gguf"
+M02="$REPO02,gemma-4-E2B-it-${QT}.gguf"
+M11="$REPO10,LFM2.5-Audio-1.5B-JP-${QT}.gguf"
+M12="$REPO10,mmproj-LFM2.5-Audio-1.5B-JP-${QT}.gguf"
+M13="$REPO10,vocoder-LFM2.5-Audio-1.5B-JP-${QT}.gguf"
+M14="$REPO10,tokenizer-LFM2.5-Audio-1.5B-JP-${QT}.gguf"
 
-GGF_LIST="$M0 $M1 $M2 $M3 $M4"
+GGF_LIST="$M01 $M02 $M11 $M12 $M13 $M14"
 
 # statオプション
 if stat -c %s /dev/zero >/dev/null 2>&1; then
@@ -44,7 +46,7 @@ for gguf in $GGF_LIST; do
     if [ ! -f "$target" ] || [ "$(stat $STAT_OPT "$target")" -le $((10 * 1024 * 1024)) ]; then
         echo "download $gguf..."
         url="https://huggingface.co/$repo/resolve/main/$gguf"
-        curl -sS  -L $url'?download=true' -o "$CKPT/$gguf"
+        curl -sS  -L "$url?download=true" -o "$CKPT/$gguf"
     fi
 done
 
