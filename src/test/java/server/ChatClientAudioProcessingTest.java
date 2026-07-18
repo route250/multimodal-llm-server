@@ -109,6 +109,20 @@ class ChatClientAudioProcessingTest {
     }
 
     @Test
+    void botResetsAssistantTurnTrackingBeforeConnectingANewSession() throws Exception {
+        String botHtml = Files.readString(Path.of("src/main/resources/html/bot.html"));
+        String audioJs = Files.readString(Path.of("src/main/resources/html/js/chat-audio.js"));
+
+        assertTrue(audioJs.contains("resetAssistantTurnTracking()"));
+        assertTrue(audioJs.contains("this.activeAssistantTurnId = 0"));
+        assertTrue(audioJs.contains("this.canceledAssistantTurnIds.clear()"));
+        int resetIndex = botHtml.indexOf("audio.resetAssistantTurnTracking()");
+        int connectIndex = botHtml.indexOf("await connectEvents()", resetIndex);
+        assertTrue(resetIndex >= 0);
+        assertTrue(connectIndex > resetIndex);
+    }
+
+    @Test
     void audioPcmWithoutBrowserVadIsRejected() throws Exception {
         try (MlServer server = new MlServer(0)) {
             ChatGroup group = new ChatGroup("group-test", server);

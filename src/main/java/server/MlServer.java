@@ -39,6 +39,7 @@ public class MlServer implements AutoCloseable {
     private static final Path STATIC_ROOT = Paths.get("src/main/resources/html").toAbsolutePath().normalize();
     private static final String DEFAULT_GROUP_ID = "group-1";
     private static final Path LOCAL_ROOT = Paths.get(".local").toAbsolutePath().normalize();
+    private static final int SSE_RETRY_MILLIS = 3000;
 
     private final HttpsServer httpsServer;
     private final HttpServer httpServer;
@@ -453,6 +454,9 @@ public class MlServer implements AutoCloseable {
         exchange.sendResponseHeaders(200, 0);
 
         try (OutputStream responseBody = exchange.getResponseBody()) {
+            // EventSourceの実装依存値を使わず、切断後は3秒待ってから再接続する。
+            responseBody.write(("retry: " + SSE_RETRY_MILLIS + "\n\n").getBytes(StandardCharsets.UTF_8));
+            responseBody.flush();
             while (!Thread.currentThread().isInterrupted()) {
                 ServerEvent event = client.events().poll(15, TimeUnit.SECONDS);
                 if (event == null) {

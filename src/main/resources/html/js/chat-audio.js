@@ -42,6 +42,10 @@ export class ChatAudio {
         this.clientMicSampleIndex = 0;
         this.loudVadFrameCount = 0;
         this.quietVadFrameCount = 0;
+        this.audioPostInitialRetryDelayMs = 1000;
+        this.audioPostMaxRetryDelayMs = 10000;
+        this.audioPostRetryDelayMs = 0;
+        this.audioPostBlockedUntilMs = 0;
         this.postQueue = Promise.resolve();
         this.playbackContext = null;
         this.queuedAudioDeltas = [];
@@ -65,8 +69,21 @@ export class ChatAudio {
             localVadPlaybackPaused: this.localVadPlaybackPaused,
             serverSttPlaybackPaused: this.serverSttPlaybackPaused,
             playbackReady: Boolean(this.isPlaybackReady()),
-            audioContextState: this.playbackContext ? this.playbackContext.state : "none"
+            audioContextState: this.playbackContext ? this.playbackContext.state : "none",
+            audioPostRetryDelayMs: this.audioPostRetryDelayMs
         };
+    }
+
+    /**
+     * 新しいチャット接続で assistantTurnId を 1 から受け入れられるように、
+     * 切断済みの前セッションに属するターン追跡状態を初期化する。
+     */
+    resetAssistantTurnTracking() {
+        this.activeAssistantTurnId = 0;
+        this.canceledAssistantTurnIds.clear();
+        this.localVadPlaybackPaused = false;
+        this.serverSttPlaybackPaused = false;
+        this.clientLog("assistant-turn-tracking-reset");
     }
 
     isMicrophoneActive() {
@@ -499,24 +516,46 @@ export class ChatAudio {
 
     postAudio(body, startSample, endSample) {
         this.postQueue = this.postQueue
-            .then(() => fetch(`/chat/request?group=${encodeURIComponent(this.group())}&sessionId=${encodeURIComponent(this.sessionId)}`, {
-                method: "POST",
-                headers: {
-                    "Content-Type": this.pcmVadContentType,
-                    "X-Client-Mic-Start-Sample": String(startSample),
-                    "X-Client-Mic-End-Sample": String(endSample)
-                },
-                body
-            }))
-            .then((response) => {
-                if (!response.ok) {
-                    return response.text().then((text) => {
-                        throw new Error(text || `HTTP ${response.status}`);
-                    });
+            .then(async () => {
+                const now = Date.now();
+                if (now < this.audioPostBlockedUntilMs) {
+                    // 再接続待機中の古い音声は送らず、待機終了後に生成された音声から送信を再開する。
+                    return;
                 }
+                const response = await fetch(`/chat/request?group=${encodeURIComponent(this.group())}&sessionId=${encodeURIComponent(this.sessionId)}`, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": this.pcmVadContentType,
+                        "X-Client-Mic-Start-Sample": String(startSample),
+                        "X-Client-Mic-End-Sample": String(endSample)
+                    },
+                    body
+                });
+                if (!response.ok) {
+                    const text = await response.text();
+                    throw new Error(text || `HTTP ${response.status}`);
+                }
+                if (this.audioPostRetryDelayMs > 0) {
+                    this.clientLog("audio-send-recovered", {
+                        detail: `previousRetryDelayMs=${this.audioPostRetryDelayMs}`
+                    });
+                    if (this.micStream && this.audioContext) {
+                        this.onMicStatus(this.microphoneStatus());
+                    }
+                }
+                this.audioPostRetryDelayMs = 0;
+                this.audioPostBlockedUntilMs = 0;
             })
             .catch((error) => {
-                this.onMicStatus(`audio send error: ${error.message}`);
+                this.audioPostRetryDelayMs = this.audioPostRetryDelayMs === 0
+                    ? this.audioPostInitialRetryDelayMs
+                    : Math.min(this.audioPostMaxRetryDelayMs, this.audioPostRetryDelayMs * 2);
+                this.audioPostBlockedUntilMs = Date.now() + this.audioPostRetryDelayMs;
+                this.clientLog("audio-send-retry-scheduled", {
+                    detail: `retryDelayMs=${this.audioPostRetryDelayMs}`,
+                    error: error.message
+                });
+                this.onMicStatus(`audio send error: ${error.message}; retry in ${this.audioPostRetryDelayMs}ms`);
             });
     }
 

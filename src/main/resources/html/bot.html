@@ -562,6 +562,8 @@
         groupInput.disabled = true;
         try {
             botRunning = true;
+            // ChatClient の再作成で assistantTurnId は 1 に戻るため、前接続のターンIDを破棄する。
+            audio.resetAssistantTurnTracking();
             await audio.preparePlayback();
             await connectEvents();
             await startCamera();
@@ -688,8 +690,15 @@
         }
         const delay = Math.max(0, faceLoadProfiles[faceLoadLevel].periodMs - (performance.now() - lastFaceProcessAt));
         faceTimer = window.setTimeout(async () => {
-            await processCameraFrame();
-            scheduleFaceProcess();
+            try {
+                await processCameraFrame();
+            } catch (error) {
+                // 一時的な通信失敗や顔認識処理の例外が発生しても、次のフレーム処理を継続する。
+                console.error("face process error", error);
+                updateDebugText(`face process error: ${error.message || error}`);
+            } finally {
+                scheduleFaceProcess();
+            }
         }, delay);
     }
 
@@ -879,8 +888,9 @@
         if (!track.entered) {
             track.entered = true;
             track.lastEventAt = now;
-            await sendFaceEvent("person-entered", track, detection, widthRatio, areaRatio);
+            // サーバ送信の成否とは無関係に、検出済み人物に対するローカル会話を開始する。
             activatePersonPresence();
+            await sendFaceEvent("person-entered", track, detection, widthRatio, areaRatio);
         } else if (now - track.lastEventAt >= 8000) {
             track.lastEventAt = now;
             await sendFaceEvent("person-updated", track, detection, widthRatio, areaRatio);

@@ -161,7 +161,6 @@ public class FaceDB {
         this.tracks.clear();
         Path personsPath = this.store.resolve( "persons.json" );
         try{
-
             if (Files.isRegularFile(personsPath)) {
                 loadPersons(Files.readString(personsPath, StandardCharsets.UTF_8));
             }
