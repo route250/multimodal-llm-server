@@ -199,10 +199,23 @@ export class ChatAudio {
         this.updateStatusDisplay();
     }
 
+    // 音声処理が IDLE のときだけ、実際の音声再生状態を表示する。
+    playbackDisplayState() {
+        if (this.pausedPlayback || (this.currentPlayback && this.isPlaybackPaused())) {
+            return "PLAYBACK_PAUSED";
+        }
+        return this.currentPlayback ? "PLAYING" : null;
+    }
+
     updateStatusDisplay() {
         const activeStates = new Set(["DETECTED", "TRAILING_SILENCE", "TURN_DETECTING", "TRANSCRIBING"]);
         const speechActive = activeStates.has(this.speechDetectionState);
-        const displayState = speechActive ? this.speechDetectionState : this.assistantPipelineState;
+        const playbackState = this.playbackDisplayState();
+        const displayState = speechActive
+            ? this.speechDetectionState
+            : this.assistantPipelineState !== "IDLE"
+                ? this.assistantPipelineState
+                : playbackState || "IDLE";
         const labels = {
             DETECTED: "REC",
             TRAILING_SILENCE: "WAIT",
@@ -210,12 +223,14 @@ export class ChatAudio {
             TRANSCRIBING: "STT",
             LLM: "LLM",
             TTS: "TTS",
+            PLAYING: "PLY",
+            PLAYBACK_PAUSED: "PAU",
             IDLE: "IDLE"
         };
         this.onSpeechStateDisplay({
             displayState,
             displayText: labels[displayState] || "IDLE",
-            active: speechActive || this.assistantPipelineState !== "IDLE"
+            active: speechActive || this.assistantPipelineState !== "IDLE" || Boolean(playbackState)
         });
     }
 
@@ -669,6 +684,7 @@ export class ChatAudio {
             durationSeconds: buffer.duration,
             stopRequested: false
         };
+        this.updateStatusDisplay();
         this.clientLog("playback-start", {
             assistantTurnId: payload.assistantTurnId || 0,
             chunkId: payload.chunkId || 0,
@@ -681,6 +697,7 @@ export class ChatAudio {
                 return;
             }
             this.currentPlayback = null;
+            this.updateStatusDisplay();
             if (!playback.stopRequested) {
                 const playedSeconds = playback.durationSeconds;
                 const recognized = !playback.payload.recognized
@@ -741,6 +758,7 @@ export class ChatAudio {
         }
         const wasPaused = this.isPlaybackPaused();
         this.localVadPlaybackPaused = true;
+        this.updateStatusDisplay();
         this.clientLog("local-vad-pause-set", { assistantTurnId, detail: `wasPaused=${wasPaused}` });
         this.pauseCurrentPlayback(assistantTurnId, wasPaused);
     }
@@ -755,6 +773,7 @@ export class ChatAudio {
         }
         const wasPaused = this.isPlaybackPaused();
         this.serverSttPlaybackPaused = true;
+        this.updateStatusDisplay();
         this.clientLog("server-stt-pause-set", { assistantTurnId, detail: `wasPaused=${wasPaused}` });
         this.pauseCurrentPlayback(assistantTurnId, wasPaused);
     }
@@ -780,6 +799,7 @@ export class ChatAudio {
             payload: playback.payload,
             offsetSeconds: playback.offsetSeconds
         };
+        this.updateStatusDisplay();
         playback.source.stop();
         this.clientLog("pause-current-playback-stopped-source", {
             assistantTurnId,
@@ -798,6 +818,7 @@ export class ChatAudio {
             return;
         }
         this.localVadPlaybackPaused = false;
+        this.updateStatusDisplay();
         this.clientLog("local-vad-resume-set", { assistantTurnId });
         this.resumePlaybackIfUnpaused(assistantTurnId);
     }
@@ -811,6 +832,7 @@ export class ChatAudio {
             return;
         }
         this.serverSttPlaybackPaused = false;
+        this.updateStatusDisplay();
         this.clientLog("server-stt-resume-set", { assistantTurnId });
         this.resumePlaybackIfUnpaused(assistantTurnId);
     }
@@ -823,6 +845,7 @@ export class ChatAudio {
         if (this.pausedPlayback) {
             const playback = this.pausedPlayback;
             this.pausedPlayback = null;
+            this.updateStatusDisplay();
             try {
                 this.clientLog("resume-paused-playback", {
                     assistantTurnId,
@@ -851,6 +874,7 @@ export class ChatAudio {
         if (this.pausedPlayback && (this.pausedPlayback.payload.assistantTurnId || 0) === assistantTurnId) {
             this.rollbackUnrecognizedChunk(this.pausedPlayback.payload);
             this.pausedPlayback = null;
+            this.updateStatusDisplay();
             this.clientLog("cancel-playback-cleared-paused-source", { assistantTurnId });
         }
         if (this.currentPlayback && (this.currentPlayback.payload.assistantTurnId || 0) === assistantTurnId) {
@@ -867,6 +891,7 @@ export class ChatAudio {
             playback.stopRequested = true;
             playback.source.stop();
             this.currentPlayback = null;
+            this.updateStatusDisplay();
             this.clientLog("cancel-playback-stopped-current-source", {
                 assistantTurnId,
                 chunkId: playback.payload.chunkId || 0
