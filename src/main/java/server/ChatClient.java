@@ -265,24 +265,24 @@ public class ChatClient {
 
     public FaceEventResult handleFacePresence(FaceDB faceDB,FaceEventRequest request ) throws IOException {
         if ("person-left".equals(request.eventType())) {
-            String trackId;
+            String faceDbTrackId;
             synchronized (faceTrackLock) {
-                trackId = this.trackmap.remove(request.trackId());
+                faceDbTrackId = this.trackmap.remove(request.trackId());
             }
-            faceDB.finish(trackId);
+            faceDB.finish(faceDbTrackId);
             FaceEventResult result = FaceEventResult.left().withTrackId(request.trackId());
-            handleFacePresence(result);
+            handleFacePresence(result, faceDbTrackId);
             return result;
         }
-        String trackId;
+        String faceDbTrackId;
         synchronized (faceTrackLock) {
-            trackId = this.trackmap.get(request.trackId());
-            if( trackId==null) {
-                trackId = faceDB.createTrackId();
-                this.trackmap.put(request.trackId(),trackId);
+            faceDbTrackId = this.trackmap.get(request.trackId());
+            if( faceDbTrackId==null) {
+                faceDbTrackId = faceDB.createTrackId();
+                this.trackmap.put(request.trackId(),faceDbTrackId);
             }
         }
-        FacePossibility registered = faceDB.register(trackId,request.descriptor(), request.imageDataUrl());
+        FacePossibility registered = faceDB.register(faceDbTrackId,request.descriptor(), request.imageDataUrl());
         FacePossibility.PersonPossibility nearest = registered.nearest();
         FaceEventResult result;
         if (nearest == null) {
@@ -306,11 +306,14 @@ public class ChatClient {
                 request.presenceState(),
                 request.trackId());
         }
-        handleFacePresence(result);
+        handleFacePresence(result, faceDbTrackId);
         return result;
     }
 
-    public void handleFacePresence(FaceEventResult result) {
+    /**
+     * ブラウザ向けイベントにはブラウザの trackId を残し、LLM には FaceDB の trackId を通知します。
+     */
+    private void handleFacePresence(FaceEventResult result, String faceDbTrackId) {
         boolean finalPersonLeft;
         synchronized (conversationLock) {
             if ("person-left".equals(result.presenceState())) {
@@ -322,7 +325,7 @@ public class ChatClient {
         }
         ChatMessage faceEventMessage = null;
         if ("person-entered".equals(result.presenceState()) || finalPersonLeft) {
-            String eventText = facePresenceHistoryText(result);
+            String eventText = facePresenceHistoryText(result, faceDbTrackId);
             faceEventMessage = new ChatMessage("system", eventText);
             synchronized (conversationLock) {
                 conversationHistory.add(faceEventMessage);
@@ -341,18 +344,21 @@ public class ChatClient {
     }
 
     public static String facePresenceHistoryText(FaceEventResult result) {
+        return facePresenceHistoryText(result, result.trackId());
+    }
+
+    private static String facePresenceHistoryText(FaceEventResult result, String faceDbTrackId) {
         String faceEventMessage;
         if ("person-left".equals(result.presenceState())) {
             faceEventMessage = "人物認識通知\n認識結果: 不在\n相手の名前: 不在\ntrackId: 不在";
         } else {
-            String trackId = "";
-            trackId = result.trackId() == null || result.trackId().isBlank() ? "" : result.trackId();
+            String trackId = faceDbTrackId == null || faceDbTrackId.isBlank() ? "" : faceDbTrackId;
             if( !result.known() || result.personName() == null || result.personName().isBlank() ) {
                 faceEventMessage = "人物認識通知\n認識結果: 名前不明\n相手の名前: 不明\ntrackId: " + trackId;
                 faceEventMessage = "だれか他の人が居ます(trackId:"+trackId+")。挨拶をしてお名前を聞いてみましょう。名前がわかったらツールをコール";
             } else {
-                faceEventMessage = "人物認識通知\n認識結果: 登録済み\n相手の名前: "+result.personName()+"\ntrackId: "+result.trackId();
-                faceEventMessage = "\"ユーザ名 "+result.personName()+"(trackId:"+result.trackId()+")と出会いました。友人として挨拶から\"";
+                faceEventMessage = "人物認識通知\n認識結果: 登録済み\n相手の名前: "+result.personName()+"\ntrackId: "+trackId;
+                faceEventMessage = "\"ユーザ名 "+result.personName()+"(trackId:"+trackId+")と出会いました。友人として挨拶から\"";
             }
         }
         return faceEventMessage;
@@ -1004,7 +1010,7 @@ public class ChatClient {
                 .putAdditionalProperty("properties", JsonValue.from(Map.of(
                         "trackId", Map.of(
                                 "type", "string",
-                                "description", "人物映像の追跡ID track-999999"),
+                                "description", "FaceDB が採番した追跡ID。形式: trak-000000"),
                         "name", Map.of(
                             "type", "string",
                             "description", "覚える名前。禁止:不明,unknown"

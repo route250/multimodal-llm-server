@@ -23,7 +23,10 @@ public class FaceDB {
     private static final Pattern FEATURE_RANGE_PATTERN = Pattern.compile(
             "\"featureRange\"\\s*:\\s*\\{\\s*\"center\"\\s*:\\s*\\[([^\\]]*)]\\s*,\\s*\"radius\"\\s*:\\s*([-+0-9.eE]+)\\s*}",
             Pattern.DOTALL);
-    private static final double MATCH_DISTANCE_THRESHOLD = 0.45;
+    /** 登録済み人物を顔認識の候補に含めるdescriptor距離の上限です。 */
+    public static final double DEFAULT_RECOGNITION_DISTANCE_THRESHOLD = 0.45;
+    /** 未割当トラックへ人物名を伝播するdescriptor距離の上限です。 */
+    public static final double DEFAULT_TRACK_LINK_DISTANCE_THRESHOLD = 0.4;
     private final static String TRACK_ID_PREFIX="trak-";
     private final static String SAMPLE_ID_PREFIX="sample-";
     private final static String PERSON_PREFIX="person";
@@ -35,6 +38,8 @@ public class FaceDB {
     private HashMap<String,FaceTrack> tracks = new HashMap<>();
     private final ArrayList<String> persons = new ArrayList<>();
     private final Object assignmentSaveLock = new Object();
+    private volatile double recognitionDistanceThreshold = DEFAULT_RECOGNITION_DISTANCE_THRESHOLD;
+    private volatile double trackLinkDistanceThreshold = DEFAULT_TRACK_LINK_DISTANCE_THRESHOLD;
 
     public FaceDB( Path dbpath ) {
         this.store = dbpath;
@@ -80,6 +85,26 @@ public class FaceDB {
     }
     private static String to_personId( int personIdx ) {
         return PERSON_PREFIX + String.format("%04d",personIdx);
+    }
+
+    /** 顔認識の候補に含めるdescriptor距離の上限を返します。 */
+    public double getRecognitionDistanceThreshold() {
+        return this.recognitionDistanceThreshold;
+    }
+
+    /** 顔認識の候補に含めるdescriptor距離の上限を設定します。 */
+    public void setRecognitionDistanceThreshold(double recognitionDistanceThreshold) {
+        this.recognitionDistanceThreshold = recognitionDistanceThreshold;
+    }
+
+    /** 未割当トラックへ人物名を伝播するdescriptor距離の上限を返します。 */
+    public double getTrackLinkDistanceThreshold() {
+        return this.trackLinkDistanceThreshold;
+    }
+
+    /** 未割当トラックへ人物名を伝播するdescriptor距離の上限を設定します。 */
+    public void setTrackLinkDistanceThreshold(double trackLinkDistanceThreshold) {
+        this.trackLinkDistanceThreshold = trackLinkDistanceThreshold;
     }
 
     public synchronized String createTrackId() throws IOException {
@@ -431,9 +456,9 @@ public class FaceDB {
         /**
          * このトラックと指定トラックのサンプル対に、距離しきい値未満の組み合わせがあるか判定します。
          */
-        private synchronized boolean matches(FaceTrack other, double threshold) {
+        private synchronized boolean matches(FaceTrack other, double maxDescriptorDistance) {
             for (FaceSample sample : this.faceSamples) {
-                if (other.min_distance(sample.descriptor) < threshold) {
+                if (other.min_distance(sample.descriptor) < maxDescriptorDistance) {
                     return true;
                 }
             }
@@ -532,7 +557,7 @@ public class FaceDB {
                 continue;
             }
             double distance = track.min_distance(descriptor);
-            if (distance <= MATCH_DISTANCE_THRESHOLD) {
+            if (distance <= this.recognitionDistanceThreshold) {
                 possibilities.add(new FacePossibility.PersonPossibility(
                         to_personId(personIdx),
                         name,
@@ -559,12 +584,12 @@ public class FaceDB {
      * 人物名を割り当てる
      */
     public void assign( String trackId, String name ) {
-        assign( trackId, name, 0.2 );
+        assign( trackId, name, this.trackLinkDistanceThreshold );
     }
     /**
      * 人物名を割り当てる
      */
-    public void assign( String trackId, String name, double threshold ) {
+    public void assign( String trackId, String name, double maxTrackLinkDistance ) {
         String normalizedName = normalizeName(name);
         if (trackId == null || trackId.isBlank() || normalizedName.isEmpty()) {
             throw new IllegalArgumentException("trackId and name are required");
@@ -578,7 +603,7 @@ public class FaceDB {
                     throw new IllegalArgumentException("trackId is not found: " + trackId);
                 }
                 int personIdx = personId(normalizedName);
-                assignedTracks = assignMatchingTracks(track, personIdx, threshold);
+                assignedTracks = assignMatchingTracks(track, personIdx, maxTrackLinkDistance);
                 savedPersons = personsJson();
             }
             try {
@@ -595,7 +620,10 @@ public class FaceDB {
     /**
      * 指定トラックと一致する未割り当てトラックを幅優先探索で同じ人物へ割り当てます。
      */
-    private ArrayList<FaceTrack> assignMatchingTracks(FaceTrack track, int personIdx, double threshold) {
+    private ArrayList<FaceTrack> assignMatchingTracks(
+            FaceTrack track,
+            int personIdx,
+            double maxTrackLinkDistance) {
         ArrayList<FaceTrack> assignedTracks = new ArrayList<>();
         ArrayList<FaceTrack> searchQueue = new ArrayList<>();
         track.setPersonIdx(personIdx);
@@ -612,7 +640,7 @@ public class FaceDB {
                 if (candidate.getPersonIdx() >= 0 || !sourceRange.isMatch(candidate.getRange())) {
                     continue;
                 }
-                if (!candidate.matches(source,threshold)) {
+                if (!candidate.matches(source, maxTrackLinkDistance)) {
                     continue;
                 }
                 candidate.setPersonIdx(personIdx);

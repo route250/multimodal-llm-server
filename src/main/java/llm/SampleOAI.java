@@ -2,27 +2,20 @@ package llm;
 
 import com.openai.client.OpenAIClient;
 import com.openai.client.okhttp.OpenAIOkHttpClient;
-import com.openai.core.JsonValue;
 import com.openai.core.http.StreamResponse;
 import com.openai.models.Reasoning;
 import com.openai.models.ReasoningEffort;
 import com.openai.models.models.Model;
-import com.openai.models.responses.FunctionTool;
 import com.openai.models.responses.Response;
 import com.openai.models.responses.ResponseCreateParams;
-import com.openai.models.responses.ResponseCreateParams.Builder;
 import com.openai.models.responses.ResponseFunctionToolCall;
 import com.openai.models.responses.ResponseInputItem;
 import com.openai.models.responses.ResponseStreamEvent;
 import com.openai.services.blocking.ModelService;
 import com.openai.models.responses.ResponseInputItem.Message.Role;
 import java.util.ArrayList;
-import java.util.Iterator;
 import java.util.List;
-import java.util.Map;
-import java.util.function.Consumer;
 
-import llm.LLM;
 import llm.tools.WeatherTool;;
 
 /** OpenAI 互換 API へリクエストする動作確認用プログラムです。 */

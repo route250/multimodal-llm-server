@@ -117,8 +117,9 @@ class FaceEventTest {
     }
 
     @Test
-    void facePresenceEnteredStartsLlmFromConversationHistory() throws Exception {
-        try (MlServer server = new MlServer(0)) {
+    void facePresenceEnteredStartsLlmFromConversationHistory(@TempDir Path tempDir) throws Exception {
+        FaceDB db = new FaceDB(tempDir);
+        try (MlServer server = new MlServer(0, db)) {
             ChatGroup group = new ChatGroup("group-test", server);
             RecordingLanguageModel languageModel = new RecordingLanguageModel("確認します。");
             ChatClient client = new ChatClient(
@@ -127,19 +128,27 @@ class FaceEventTest {
                     new TranscriptAudioProcessor("unused"),
                     languageModel);
 
-            client.handleFacePresence(FaceEventResult.unknownFace("sample-000000"));
+            client.handleFacePresence(db, new FaceEventRequest(
+                    "person-detected",
+                    "browser-track-1",
+                    descriptor(0.1),
+                    jpegBase64(new byte[] {(byte) 0xff, (byte) 0xd8, 1, (byte) 0xff, (byte) 0xd9})));
             assertTrue(languageModel.awaitCalls(1));
-            client.handleFacePresence(FaceEventResult.left());
+            client.handleFacePresence(db, new FaceEventRequest(
+                    "person-left",
+                    "browser-track-1",
+                    null,
+                    null));
 
             assertEquals(1, languageModel.calls().size());
             assertEquals(List.of(
                     "system:" + ChatClient.DEFAULT_SYSTEM_PROMPT.stripTrailing(),
-                    "system:だれか他の人が居ます(trackId:legacy)。挨拶をしてお名前を聞いてみましょう。名前がわかったらツールをコール"),
+                    "system:だれか他の人が居ます(trackId:trak-000000)。挨拶をしてお名前を聞いてみましょう。名前がわかったらツールをコール"),
                     languageModel.calls().get(0));
             var history = client.conversationHistoryForTest();
             assertEquals(2, history.size());
             assertEquals("system", history.get(0).role());
-            assertEquals("だれか他の人が居ます(trackId:legacy)。挨拶をしてお名前を聞いてみましょう。名前がわかったらツールをコール",
+            assertEquals("だれか他の人が居ます(trackId:trak-000000)。挨拶をしてお名前を聞いてみましょう。名前がわかったらツールをコール",
                     history.get(0).text());
             assertEquals("system", history.get(1).role());
             assertEquals("人物認識通知\n認識結果: 不在\n相手の名前: 不在\ntrackId: 不在", history.get(1).text());
@@ -154,8 +163,37 @@ class FaceEventTest {
     }
 
     @Test
-    void facePresenceUpdateIsPublishedWithoutConversationHistory() throws Exception {
-        try (MlServer server = new MlServer(0)) {
+    void facePresencePassesFaceDbTrackIdToLlm(@TempDir Path tempDir) throws Exception {
+        FaceDB db = new FaceDB(tempDir);
+        try (MlServer server = new MlServer(0, db)) {
+            ChatGroup group = new ChatGroup("group-test", server);
+            RecordingLanguageModel languageModel = new RecordingLanguageModel("確認します。");
+            ChatClient client = new ChatClient(
+                    "client-1",
+                    group,
+                    new TranscriptAudioProcessor("unused"),
+                    languageModel);
+            FaceEventRequest request = new FaceEventRequest(
+                    "person-detected",
+                    "browser-track-42",
+                    descriptor(0.1),
+                    jpegBase64(new byte[] {(byte) 0xff, (byte) 0xd8, 1, (byte) 0xff, (byte) 0xd9}));
+
+            FaceEventResult result = client.handleFacePresence(db, request);
+
+            assertTrue(languageModel.awaitCalls(1));
+            assertEquals("browser-track-42", result.trackId());
+            assertEquals(List.of(
+                    "system:" + ChatClient.DEFAULT_SYSTEM_PROMPT.stripTrailing(),
+                    "system:だれか他の人が居ます(trackId:trak-000000)。挨拶をしてお名前を聞いてみましょう。名前がわかったらツールをコール"),
+                    languageModel.calls().get(0));
+        }
+    }
+
+    @Test
+    void facePresenceUpdateIsPublishedWithoutConversationHistory(@TempDir Path tempDir) throws Exception {
+        FaceDB db = new FaceDB(tempDir);
+        try (MlServer server = new MlServer(0, db)) {
             ChatGroup group = new ChatGroup("group-test", server);
             ChatClient listener = group.join("listener");
             CountingLanguageModel languageModel = new CountingLanguageModel();
@@ -166,7 +204,11 @@ class FaceEventTest {
                     languageModel);
             drainJoinEvents(listener);
 
-            client.handleFacePresence(FaceEventResult.unknown().withPresenceState("person-updated"));
+            client.handleFacePresence(db, new FaceEventRequest(
+                    "person-updated",
+                    "browser-track-1",
+                    descriptor(0.1),
+                    jpegBase64(new byte[] {(byte) 0xff, (byte) 0xd8, 1, (byte) 0xff, (byte) 0xd9})));
 
             assertTrue(client.conversationHistoryForTest().isEmpty());
             ServerEvent event = listener.events().poll(1, java.util.concurrent.TimeUnit.SECONDS);
