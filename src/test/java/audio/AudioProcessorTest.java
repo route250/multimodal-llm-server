@@ -167,7 +167,35 @@ class AudioProcessorTest {
 
         Optional<Transcription> transcript = Optional.empty();
         for (int i = 0; i < silenceFramesForTurnDetection(); i++) {
-            transcript = acceptFrame(processor, 69);
+            transcript = acceptFrame(processor, 69, (short) 0);
+        }
+
+        assertTranscriptText("hello", transcript);
+        assertEquals(1, speechToText.calls);
+    }
+
+    @Test
+    void lowRmsDoesNotStartSpeechEvenWhenVadIsHigh() {
+        RecordingSpeechToText speechToText = new RecordingSpeechToText("ignored");
+        AudioProcessor processor = new AudioProcessor(samples -> true, speechToText, Runnable::run);
+
+        for (int i = 0; i < speechStartFrames() * 2; i++) {
+            assertTrue(acceptFrame(processor, 90, 5).isEmpty());
+        }
+
+        assertEquals(0, speechToText.calls);
+    }
+
+    @Test
+    void lowRmsEndsDetectedSpeechEvenWhenVadIsHigh() {
+        RecordingSpeechToText speechToText = new RecordingSpeechToText("hello");
+        AudioProcessor processor = new AudioProcessor(samples -> true, speechToText, Runnable::run);
+
+        assertTrue(acceptSpeechStart(processor).isEmpty());
+
+        Optional<Transcription> transcript = Optional.empty();
+        for (int i = 0; i < silenceFramesForTurnDetection(); i++) {
+            transcript = acceptFrame(processor, 90, 0);
         }
 
         assertTranscriptText("hello", transcript);
@@ -429,7 +457,7 @@ class AudioProcessorTest {
         AudioProcessor processor = new AudioProcessor(samples -> true, speechToText, Runnable::run);
 
         acceptCompleteSpeech(processor);
-        acceptCompleteSpeech(processor, (short) 1_000);
+        acceptCompleteSpeech(processor, (short) 3_000);
 
         assertEquals(List.of("", "first"), speechToText.prompts);
     }
@@ -444,15 +472,19 @@ class AudioProcessorTest {
 
     private static Optional<Transcription> acceptCompleteSpeech(AudioProcessor processor, short sample) {
         Optional<Transcription> transcript;
-        transcript = acceptSpeechStart(processor, sample);
+        transcript = sample == 0 ? acceptSpeechStart(processor) : acceptSpeechStart(processor, sample);
         for (int i = 0; i < silenceFramesForTurnDetection(); i++) {
-            transcript = acceptFrame(processor, 0, sample);
+            transcript = sample == 0 ? acceptFrame(processor, 0) : acceptFrame(processor, 0, sample);
         }
         return transcript;
     }
 
     private static Optional<Transcription> acceptSpeechStart(AudioProcessor processor) {
-        return acceptSpeechStart(processor, (short) 0);
+        Optional<Transcription> transcript = Optional.empty();
+        for (int i = 0; i < speechStartFrames(); i++) {
+            transcript = acceptFrame(processor, 90);
+        }
+        return transcript;
     }
 
     private static Optional<Transcription> acceptSpeechStart(AudioProcessor processor, short sample) {
@@ -503,7 +535,15 @@ class AudioProcessorTest {
         return processor.acceptPcm16LeWithVadDetailed(
                         frameBytes(),
                         new byte[] {(byte) vadValue},
-                        new byte[] {0})
+                        new byte[] {(byte) (vadValue == 0 ? 0 : 100)})
+                .map(AudioProcessor.TranscriptionResult::transcription);
+    }
+
+    private static Optional<Transcription> acceptFrame(AudioProcessor processor, int vadValue, int rmsValue) {
+        return processor.acceptPcm16LeWithVadDetailed(
+                        frameBytes(),
+                        new byte[] {(byte) vadValue},
+                        new byte[] {(byte) rmsValue})
                 .map(AudioProcessor.TranscriptionResult::transcription);
     }
 

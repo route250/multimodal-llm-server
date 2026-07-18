@@ -49,11 +49,11 @@ public class AudioProcessor {
     /** SmartTurn が未完了でも発話終了を確定する最大無音区間。19,200 サンプルは 16 kHz で 1,200 ms。 */
     public static final int MAX_TURN_DETECTION_SILENCE_SAMPLES = 19_200;
     /** 非発話状態から発話状態へ切り替える VAD 確率の下限値。 */
-    public static final float START_VAD_THRESHOLD = 0.7f;
-    public static final float START_RMS_THRESHOLD = 0.06f;
+    public static final int START_VAD_THRESHOLD = 70;
+    public static final int START_RMS_THRESHOLD = 6;
     /** 発話状態を継続する VAD 確率の下限値。 */
-    public static final float END_VAD_THRESHOLD = 0.35f;
-    public static final float END_RMS_THRESHOLD = 0.03f;
+    public static final int END_VAD_THRESHOLD = 35;
+    public static final int END_RMS_THRESHOLD = 3;
     /** 受信直後の PCM と VAD 値を保持するバッファ。 */
     private final AudioBuffer receiveBuffer = new AudioBuffer(SAMPLE_RATE * 30, VAD_FRAME_SAMPLES);
     /** STT に渡す発話区間の PCM を保持する長時間用バッファ。5 分までの発話を保持する。 */
@@ -126,10 +126,10 @@ public class AudioProcessor {
     }
 
     private void setState(long pos, SpeechState newState) {
-        setState(pos, newState, Float.NaN);
+        setState(pos, newState, -1);
     }
 
-    private void setState(long pos, SpeechState newState, float vadProbability) {
+    private void setState(long pos, SpeechState newState, int vadProbability) {
         if (speechState != newState) {
             SpeechState previousState = speechState;
             speechState = newState;
@@ -137,7 +137,7 @@ public class AudioProcessor {
                     "speechSequenceId", speechSequenceId,
                     "startSampleIndex", pos,
                     "durationMs", sampleIndexToMillis(pos),
-                    "vadProbability", Float.isNaN(vadProbability) ? null : vadProbability,
+                    "vadProbability", vadProbability < 0 ? null : vadProbability / 100.0f,
                     "stateFrom", previousState,
                     "stateTo", newState));
             speechStateListener.accept(new SpeechStateChange(
@@ -223,16 +223,16 @@ public class AudioProcessor {
         if (rmsBytes.length != vadBytes.length) {
             throw new IllegalArgumentException("RMS byte count must equal VAD byte count");
         }
-        float[] vadValues = new float[vadBytes.length];
-        float[] rmsValues = new float[rmsBytes.length];
+        byte[] vadValues = new byte[vadBytes.length];
+        byte[] rmsValues = new byte[rmsBytes.length];
         for (int i = 0; i < vadBytes.length; i++) {
             int vadValue = Byte.toUnsignedInt(vadBytes[i]) & 0x7f;
             int rmsValue = Byte.toUnsignedInt(rmsBytes[i]);
             if (rmsValue > 100) {
                 throw new IllegalArgumentException("RMS byte must use 0..100");
             }
-            vadValues[i] = vadValue / 100.0f;
-            rmsValues[i] = rmsValue / 100.0f;
+            vadValues[i] = (byte) vadValue;
+            rmsValues[i] = (byte) rmsValue;
         }
         long chunkStartSampleIndex = nextSampleIndex;
         receiveBuffer.append(samples, vadValues, rmsValues, 0, samples.length, chunkStartSampleIndex);
@@ -295,9 +295,9 @@ public class AudioProcessor {
                 continue;
             }
 
-            float probability = receiveBuffer.vadValue(nextVadStartSampleIndex);
-            float rms = receiveBuffer.rmsValue(nextVadStartSampleIndex);
-            if (Float.isNaN(probability)) {
+            int probability = receiveBuffer.vadValue(nextVadStartSampleIndex);
+            int rms = receiveBuffer.rmsValue(nextVadStartSampleIndex);
+            if (probability < 0 || rms < 0) {
                 break;
             }
             updateSpeechState(nextVadStartSampleIndex, probability, rms );
@@ -324,7 +324,7 @@ public class AudioProcessor {
      * @param rms 音量
      * @return 発話終了を検出した場合は文字起こし結果。検出していない場合は Optional.empty()
      */
-    private void updateSpeechState(long frameStartSampleIndex, float vad, float rms ) {
+    private void updateSpeechState(long frameStartSampleIndex, int vad, int rms) {
         long frameEndSampleIndex = frameStartSampleIndex + VAD_FRAME_SAMPLES;
         switch (speechState) {
             case UNDETECTED -> {

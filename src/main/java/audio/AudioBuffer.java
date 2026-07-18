@@ -6,9 +6,9 @@ public class AudioBuffer {
     /** PCM サンプルを保持する循環バッファ。要素数はサンプル数単位の容量。 */
     private final short[] pcm;
     /** VAD 値を保持する循環バッファ。1 要素は samplesPerVadValue 個の PCM サンプルに対応する。 */
-    private final float[] vadValues;
+    private final byte[] vadValues;
     /** RMS 値を保持する循環バッファ。1 要素は samplesPerVadValue 個の PCM サンプルに対応する。 */
-    private final float[] rmsValues;
+    private final byte[] rmsValues;
     /** VAD 値 1 個に対応する PCM サンプル数。 */
     private final int samplesPerVadValue;
     /** 現在保持している PCM 範囲の先頭サンプル番号。 */
@@ -35,10 +35,8 @@ public class AudioBuffer {
         }
         this.pcm = new short[capacitySamples];
         this.samplesPerVadValue = samplesPerVadValue;
-        this.vadValues = new float[(capacitySamples + samplesPerVadValue - 1) / samplesPerVadValue];
-        this.rmsValues = new float[vadValues.length];
-        Arrays.fill(vadValues, Float.NaN);
-        Arrays.fill(rmsValues, Float.NaN);
+        this.vadValues = new byte[(capacitySamples + samplesPerVadValue - 1) / samplesPerVadValue];
+        this.rmsValues = new byte[vadValues.length];
     }
 
     /**
@@ -93,10 +91,10 @@ public class AudioBuffer {
      *
      * @param samples 追加する PCM サンプル配列
      * @param sourceStartSampleIndex samples[0] に対応するソース上のサンプル番号
-     * @param vadValues VAD 値配列。1 要素は samplesPerVadValue 個の PCM サンプルに対応する
-     * @param rmsValues RMS 値配列。1 要素は samplesPerVadValue 個の PCM サンプルに対応する
+     * @param vadValues VAD 値配列。0〜100 の整数値を持ち、1 要素は samplesPerVadValue 個の PCM サンプルに対応する
+     * @param rmsValues RMS 値配列。0〜100 の整数値を持ち、1 要素は samplesPerVadValue 個の PCM サンプルに対応する
      */
-    public void append(short[] samples, long sourceStartSampleIndex, float[] vadValues, float[] rmsValues) {
+    public void append(short[] samples, long sourceStartSampleIndex, byte[] vadValues, byte[] rmsValues) {
         append(samples, vadValues, rmsValues, 0, samples.length, sourceStartSampleIndex);
     }
 
@@ -112,18 +110,24 @@ public class AudioBuffer {
      */
     public void append(
             short[] samples,
-            float[] vadValues,
-            float[] rmsValues,
+            byte[] vadValues,
+            byte[] rmsValues,
             int offset,
             int length,
             long sourceStartSampleIndex) {
         if (length <= 0) {
             return;
         }
-        if (offset < 0 || length < 0 || offset + length > samples.length) {
+        if (offset < 0 || length < 0 || length > samples.length - offset) {
             throw new IndexOutOfBoundsException("invalid sample range");
         }
-        validateMetricRange(vadValues, rmsValues, length, sourceStartSampleIndex);
+        if (length != Math.multiplyExact(vadValues.length, samplesPerVadValue)
+                || vadValues.length != rmsValues.length) {
+            throw new IllegalArgumentException("invalid array size");
+        }
+        if (sourceStartSampleIndex % samplesPerVadValue != 0) {
+            throw new IllegalArgumentException("sourceStartSampleIndex must align to metric frame");
+        }
 
         long previousEndSampleIndex = endSampleIndexExclusive;
         long sourceEndSampleIndex = sourceStartSampleIndex + length;
@@ -131,10 +135,6 @@ public class AudioBuffer {
         if (sourceEndSampleIndex <= writeStartSampleIndex) {
             return;
         }
-        if (writeStartSampleIndex % samplesPerVadValue != 0) {
-            throw new IllegalArgumentException("metric write start must align to metric frame");
-        }
-
         if (writeStartSampleIndex > endSampleIndexExclusive) {
             endSampleIndexExclusive = writeStartSampleIndex;
             trimToCapacity();
@@ -142,15 +142,22 @@ public class AudioBuffer {
 
         int writeOffset = offset + Math.toIntExact(writeStartSampleIndex - sourceStartSampleIndex);
         int writeLength = Math.toIntExact(sourceEndSampleIndex - writeStartSampleIndex);
-        for (int i = 0; i < writeLength; i++) {
-            pcm[physicalIndex(writeStartSampleIndex + i)] = samples[writeOffset + i];
-        }
+        copyToCircular(samples, writeOffset, pcm, physicalIndex(writeStartSampleIndex), writeLength);
         endSampleIndexExclusive = sourceEndSampleIndex;
         trimToCapacity();
 
         int metricOffset = Math.toIntExact((writeStartSampleIndex - sourceStartSampleIndex) / samplesPerVadValue);
-        int metricLength = length / samplesPerVadValue - metricOffset;
-        storeVadRmsValues(writeStartSampleIndex, vadValues, rmsValues, metricOffset, metricLength);
+        int metricLength = vadValues.length - metricOffset;
+        long firstVadIndex = writeStartSampleIndex / samplesPerVadValue;
+        copyToCircular(vadValues, metricOffset, this.vadValues,
+                Math.floorMod(firstVadIndex, this.vadValues.length), metricLength);
+        copyToCircular(rmsValues, metricOffset, this.rmsValues,
+                Math.floorMod(firstVadIndex, this.rmsValues.length), metricLength);
+        if (vadEndIndexExclusive == 0 && vadStartIndex == 0) {
+            vadStartIndex = firstVadIndex;
+        }
+        vadEndIndexExclusive = Math.max(vadEndIndexExclusive, firstVadIndex + metricLength);
+        trimVadToPcmRange();
     }
 
     /**
@@ -164,9 +171,6 @@ public class AudioBuffer {
         if (endExclusive <= startInclusive) {
             return;
         }
-        if (!source.contains(startInclusive, endExclusive)) {
-            throw new IllegalArgumentException("source range is no longer available");
-        }
         long writeStart = Math.max(startInclusive, endSampleIndexExclusive);
         if (endExclusive <= writeStart) {
             return;
@@ -175,22 +179,27 @@ public class AudioBuffer {
             endSampleIndexExclusive = writeStart;
             trimToCapacity();
         }
-        for (long sampleIndex = writeStart; sampleIndex < endExclusive; sampleIndex++) {
-            pcm[physicalIndex(sampleIndex)] = source.sampleAt(sampleIndex);
-        }
+        copyCircular(source.pcm, source.physicalIndex(writeStart), pcm, physicalIndex(writeStart),
+                Math.toIntExact(endExclusive - writeStart));
         endSampleIndexExclusive = endExclusive;
         long vadCopyStart = Math.floorDiv(writeStart, samplesPerVadValue) * samplesPerVadValue;
         int metricCount = Math.toIntExact((endExclusive - vadCopyStart + samplesPerVadValue - 1) / samplesPerVadValue);
-        float[] copiedVadValues = new float[metricCount];
-        float[] copiedRmsValues = new float[metricCount];
-        Arrays.fill(copiedVadValues, Float.NaN);
-        Arrays.fill(copiedRmsValues, Float.NaN);
-        for (int i = 0; i < metricCount; i++) {
-            long sampleIndex = vadCopyStart + (long) i * samplesPerVadValue;
-            copiedVadValues[i] = source.vadValue(sampleIndex);
-            copiedRmsValues[i] = source.rmsValue(sampleIndex);
+        byte[] copiedVadValues = new byte[metricCount];
+        byte[] copiedRmsValues = new byte[metricCount];
+        copyAvailableMetrics(source.vadValues, source.vadStartIndex, source.vadEndIndexExclusive,
+                vadCopyStart, copiedVadValues);
+        copyAvailableMetrics(source.rmsValues, source.vadStartIndex, source.vadEndIndexExclusive,
+                vadCopyStart, copiedRmsValues);
+        long firstVadIndex = vadCopyStart / samplesPerVadValue;
+        copyToCircular(copiedVadValues, 0, vadValues,
+                Math.floorMod(firstVadIndex, vadValues.length), metricCount);
+        copyToCircular(copiedRmsValues, 0, rmsValues,
+                Math.floorMod(firstVadIndex, rmsValues.length), metricCount);
+        if (vadEndIndexExclusive == 0 && vadStartIndex == 0) {
+            vadStartIndex = firstVadIndex;
         }
-        storeVadRmsValues(vadCopyStart, copiedVadValues, copiedRmsValues, 0, metricCount);
+        vadEndIndexExclusive = Math.max(vadEndIndexExclusive, firstVadIndex + metricCount);
+        trimVadToPcmRange();
         trimToCapacity();
     }
 
@@ -230,28 +239,28 @@ public class AudioBuffer {
      * 指定サンプル番号に対応する VAD 値を返す。
      *
      * @param sampleIndex 取得する VAD 値に対応する PCM サンプル番号
-     * @return VAD 値。範囲外の場合は Float.NaN
+     * @return VAD 値（0〜100）。範囲外の場合は -1
      */
-    public float vadValue(long sampleIndex) {
+    public int vadValue(long sampleIndex) {
         long vadIndex = sampleIndex / samplesPerVadValue;
         if (vadIndex < vadStartIndex || vadIndex >= vadEndIndexExclusive) {
-            return Float.NaN;
+            return -1;
         }
-        return vadValues[Math.floorMod(vadIndex, vadValues.length)];
+        return Byte.toUnsignedInt(vadValues[Math.floorMod(vadIndex, vadValues.length)]);
     }
 
     /**
      * 指定サンプル番号に対応する RMS 値を返す。
      *
      * @param sampleIndex 取得する RMS 値に対応する PCM サンプル番号
-     * @return RMS 値。範囲外の場合は Float.NaN
+     * @return RMS 値（0〜100）。範囲外の場合は -1
      */
-    public float rmsValue(long sampleIndex) {
+    public int rmsValue(long sampleIndex) {
         long vadIndex = sampleIndex / samplesPerVadValue;
         if (vadIndex < vadStartIndex || vadIndex >= vadEndIndexExclusive) {
-            return Float.NaN;
+            return -1;
         }
-        return rmsValues[Math.floorMod(vadIndex, rmsValues.length)];
+        return Byte.toUnsignedInt(rmsValues[Math.floorMod(vadIndex, rmsValues.length)]);
     }
 
     /**
@@ -262,61 +271,6 @@ public class AudioBuffer {
      */
     private int physicalIndex(long sampleIndex) {
         return Math.floorMod(sampleIndex, pcm.length);
-    }
-
-    /**
-     * VAD/RMS 値が追加対象サンプル範囲と 1 対 1 で対応していることを確認する。
-     */
-    private void validateMetricRange(
-            float[] vadValues,
-            float[] rmsValues,
-            int length,
-            long sourceStartSampleIndex) {
-        if (sourceStartSampleIndex % samplesPerVadValue != 0) {
-            throw new IllegalArgumentException("sourceStartSampleIndex must align to metric frame");
-        }
-        if (length % samplesPerVadValue != 0) {
-            throw new IllegalArgumentException("sample length must align to metric frame");
-        }
-        int metricCount = length / samplesPerVadValue;
-        if (vadValues.length != metricCount || rmsValues.length != metricCount) {
-            throw new IllegalArgumentException("metric count must match sample frames");
-        }
-    }
-
-    /**
-     * 指定サンプル番号から始まるフレーム列に VAD/RMS 値を保存する。
-     */
-    private void storeVadRmsValues(
-            long startSampleIndex,
-            float[] sourceVadValues,
-            float[] sourceRmsValues,
-            int sourceOffset,
-            int length) {
-        if (length <= 0) {
-            return;
-        }
-        if (startSampleIndex % samplesPerVadValue != 0) {
-            throw new IllegalArgumentException("startSampleIndex must align to metric frame");
-        }
-        if (sourceOffset < 0
-                || length < 0
-                || sourceOffset + length > sourceVadValues.length
-                || sourceOffset + length > sourceRmsValues.length) {
-            throw new IndexOutOfBoundsException("invalid metric range");
-        }
-
-        long firstVadIndex = startSampleIndex / samplesPerVadValue;
-        for (int i = 0; i < length; i++) {
-            long vadIndex = firstVadIndex + i;
-            vadValues[Math.floorMod(vadIndex, vadValues.length)] = sourceVadValues[sourceOffset + i];
-            rmsValues[Math.floorMod(vadIndex, rmsValues.length)] = sourceRmsValues[sourceOffset + i];
-        }
-        if (vadEndIndexExclusive == 0 && vadStartIndex == 0) {
-            vadStartIndex = firstVadIndex;
-        }
-        vadEndIndexExclusive = Math.max(vadEndIndexExclusive, firstVadIndex + length);
-        trimVadToPcmRange();
     }
 
     /**
@@ -336,11 +290,86 @@ public class AudioBuffer {
     private void trimVadToPcmRange() {
         long minimumVadIndex = startSampleIndex / samplesPerVadValue;
         if (minimumVadIndex > vadStartIndex) {
-            for (long vadIndex = vadStartIndex; vadIndex < minimumVadIndex && vadIndex < vadEndIndexExclusive; vadIndex++) {
-                vadValues[Math.floorMod(vadIndex, vadValues.length)] = Float.NaN;
-                rmsValues[Math.floorMod(vadIndex, rmsValues.length)] = Float.NaN;
-            }
+            int length = Math.toIntExact(Math.min(minimumVadIndex, vadEndIndexExclusive) - vadStartIndex);
+            fillCircular(vadValues, Math.floorMod(vadStartIndex, vadValues.length), length, (byte) 0);
+            fillCircular(rmsValues, Math.floorMod(vadStartIndex, rmsValues.length), length, (byte) 0);
             vadStartIndex = Math.min(minimumVadIndex, vadEndIndexExclusive);
         }
+    }
+
+    /** 直線配列から循環配列へ指定要素数をコピーする。 */
+    private static void copyToCircular(
+            short[] source, int sourceOffset, short[] target, int targetOffset, int length) {
+        int firstLength = Math.min(length, target.length - targetOffset);
+        System.arraycopy(source, sourceOffset, target, targetOffset, firstLength);
+        if (firstLength < length) {
+            System.arraycopy(source, sourceOffset + firstLength, target, 0, length - firstLength);
+        }
+    }
+
+    /** 直線配列から循環配列へ指定要素数をコピーする。 */
+    private static void copyToCircular(
+            byte[] source, int sourceOffset, byte[] target, int targetOffset, int length) {
+        int targetLength = target.length;
+        int firstLength = Math.min(length, targetLength - targetOffset);
+        System.arraycopy(source, sourceOffset, target, targetOffset, firstLength);
+        if (firstLength < length) {
+            System.arraycopy(source, sourceOffset + firstLength, target, 0, length - firstLength);
+        }
+    }
+
+    /** 循環配列から循環配列へ指定要素数をコピーする。 */
+    private static void copyCircular(
+            short[] source, int sourceOffset, short[] target, int targetOffset, int length) {
+        int sourceLength = source.length;
+        int targetLength = target.length;
+        int copied = 0;
+        while (copied < length) {
+            int sourcePart = Math.min(length - copied, sourceLength - sourceOffset);
+            int targetPart = Math.min(length - copied, targetLength - targetOffset);
+            int partLength = Math.min(sourcePart, targetPart);
+            System.arraycopy(source, sourceOffset, target, targetOffset, partLength);
+            copied += partLength;
+            sourceOffset = (sourceOffset + partLength) % sourceLength;
+            targetOffset = (targetOffset + partLength) % targetLength;
+        }
+    }
+
+    /** 循環配列から循環配列へ指定要素数をコピーする。 */
+    private static void copyCircular(
+            byte[] source, int sourceOffset, byte[] target, int targetOffset, int length) {
+        int sourceLength = source.length;
+        int targetLength = target.length;
+        int copied = 0;
+        while (copied < length) {
+            int sourcePart = Math.min(length - copied, sourceLength - sourceOffset);
+            int targetPart = Math.min(length - copied, targetLength - targetOffset);
+            int partLength = Math.min(sourcePart, targetPart);
+            System.arraycopy(source, sourceOffset, target, targetOffset, partLength);
+            copied += partLength;
+            sourceOffset = (sourceOffset + partLength) % sourceLength;
+            targetOffset = (targetOffset + partLength) % targetLength;
+        }
+    }
+
+    /** 循環配列の指定範囲を同じ値で埋める。 */
+    private static void fillCircular(byte[] target, int targetOffset, int length, byte value) {
+        int firstLength = Math.min(length, target.length - targetOffset);
+        Arrays.fill(target, targetOffset, targetOffset + firstLength, value);
+        if (firstLength < length) {
+            Arrays.fill(target, 0, length - firstLength, value);
+        }
+    }
+
+    /** 有効なメトリクス範囲だけを循環配列から直線配列へコピーする。 */
+    private static void copyAvailableMetrics(
+            byte[] source, long sourceStart, long sourceEnd, long targetStart, byte[] target) {
+        long copyStart = Math.max(sourceStart, targetStart);
+        long copyEnd = Math.min(sourceEnd, targetStart + target.length);
+        if (copyStart >= copyEnd) {
+            return;
+        }
+        copyCircular(source, Math.floorMod(copyStart, source.length), target,
+                Math.toIntExact(copyStart - targetStart), Math.toIntExact(copyEnd - copyStart));
     }
 }

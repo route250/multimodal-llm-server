@@ -38,6 +38,7 @@ import audio.AudioProcessor;
 class ChatClientAudioProcessingTest {
     private static final String PCM16LE = "audio/pcm; rate=16000; channels=1; format=s16le";
     private static final String PCM_VAD = "audio/pcm-vad; rate=16000; channels=1; format=s16le; vad-frame-samples=256";
+    private static final String DEFAULT_SYSTEM_MESSAGE = "system:" + ChatClient.DEFAULT_SYSTEM_PROMPT.stripTrailing();
 
     @Test
     void audioRequestReturnsBeforeAudioProcessorCompletes() throws Exception {
@@ -132,7 +133,8 @@ class ChatClientAudioProcessingTest {
             client.handleAudio(audioRequest(new byte[]{1, 0, 2, 0, 3, 0}), 0, 3);
 
             assertTrue(processor.awaitCalls(1));
-            assertEquals(List.of(1, 0, 2, 0, 3, 0), processor.receivedBytes());
+            assertEquals(List.of(1, 0, 2, 0, 3, 0), processor.receivedBytes().subList(0, 6));
+            assertEquals(AudioProcessor.VAD_FRAME_SAMPLES * Short.BYTES, processor.receivedBytes().size());
         }
     }
 
@@ -182,7 +184,7 @@ class ChatClientAudioProcessingTest {
             assertTrue(log.contains("\"event\":\"audio-chunk-process\""));
             assertTrue(log.contains("\"groupId\":\"group-test\""));
             assertTrue(log.contains("\"sessionId\":\"" + sessionId + "\""));
-            assertTrue(log.contains("\"pcmBytes\":4"));
+            assertTrue(log.contains("\"pcmBytes\":512"));
             assertTrue(log.contains("\"startSampleIndex\":10"));
             assertTrue(log.contains("\"endSampleIndexExclusive\":12"));
         }
@@ -295,6 +297,54 @@ class ChatClientAudioProcessingTest {
             assertTrue(chunk.message().contains("\"audioDeltas\":[{\"data\":\"AAAA\""));
             assertEquals("message-done", done.type());
             assertEquals(List.of("テキスト応答。"), textToSpeech.texts);
+        }
+    }
+
+    @Test
+    void stopCancelsPendingSttResultBeforeItStartsLlm() throws Exception {
+        try (MlServer server = new MlServer(0)) {
+            ChatGroup group = new ChatGroup("group-test", server);
+            BlockingAudioProcessor processor = new BlockingAudioProcessor("停止前の発話");
+            CountingLanguageModel languageModel = new CountingLanguageModel("応答。");
+            ChatClient processorClient = new ChatClient(
+                    "processor",
+                    group,
+                    processor,
+                    languageModel,
+                    new RecordingTextToSpeech());
+
+            processorClient.handle(audioRequest(new byte[AudioProcessor.VAD_FRAME_SAMPLES * Short.BYTES]));
+            assertTrue(processor.started.await(1, TimeUnit.SECONDS));
+
+            processorClient.close("test-stop");
+            processor.release();
+
+            assertTrue(processor.finished.await(1, TimeUnit.SECONDS));
+            assertEquals(0, languageModel.calls);
+        }
+    }
+
+    @Test
+    void stopCancelsRunningTtsBeforeAudioChunkIsPublished() throws Exception {
+        try (MlServer server = new MlServer(0)) {
+            ChatGroup group = new ChatGroup("group-test", server);
+            ChatClient listener = group.join("client-1");
+            BlockingTextToSpeech textToSpeech = new BlockingTextToSpeech();
+            ChatClient processorClient = new ChatClient(
+                    "processor",
+                    group,
+                    new TranscriptAudioProcessor("こんにちは"),
+                    new StreamingLanguageModel("再生されない応答。"),
+                    textToSpeech);
+            drainJoinEvents(listener);
+
+            processorClient.handle(audioRequest(new byte[AudioProcessor.VAD_FRAME_SAMPLES * Short.BYTES]));
+            assertTrue(textToSpeech.started.await(1, TimeUnit.SECONDS));
+
+            processorClient.close("test-stop");
+
+            assertTrue(textToSpeech.interrupted.await(1, TimeUnit.SECONDS));
+            assertNull(pollUntil(listener, event -> "assistant-audio-chunk".equals(event.type())));
         }
     }
 
@@ -485,7 +535,7 @@ class ChatClientAudioProcessingTest {
             assertTrue(partial.message().contains("\"text\":\"今日は\""));
             assertNotNull(pollUntil(listener, event -> "assistant-audio-chunk".equals(event.type())));
             assertEquals(1, languageModel.calls.size());
-            assertEquals(List.of("user:今日は天気です"), languageModel.calls.getFirst());
+            assertEquals(List.of(DEFAULT_SYSTEM_MESSAGE, "user:今日は天気です"), languageModel.calls.getFirst());
         }
     }
 
@@ -510,7 +560,7 @@ class ChatClientAudioProcessingTest {
 
             assertNotNull(pollUntil(listener, event -> "assistant-audio-chunk".equals(event.type())));
             assertEquals(1, languageModel.calls.size());
-            assertEquals(List.of("user:今日は天気です"), languageModel.calls.getFirst());
+            assertEquals(List.of(DEFAULT_SYSTEM_MESSAGE, "user:今日は天気です"), languageModel.calls.getFirst());
         }
     }
 
@@ -535,7 +585,7 @@ class ChatClientAudioProcessingTest {
 
             assertNotNull(pollUntil(listener, event -> "assistant-audio-chunk".equals(event.type())));
             assertEquals(1, languageModel.calls.size());
-            assertEquals(List.of("user:途中です"), languageModel.calls.getFirst());
+            assertEquals(List.of(DEFAULT_SYSTEM_MESSAGE, "user:途中です"), languageModel.calls.getFirst());
         }
     }
 
@@ -662,8 +712,9 @@ class ChatClientAudioProcessingTest {
             assertNotNull(pollUntil(listener, event -> "message-done".equals(event.type())));
 
             assertEquals(2, languageModel.calls.size());
-            assertEquals(List.of("user:私の名前は太郎です"), languageModel.calls.get(0));
+            assertEquals(List.of(DEFAULT_SYSTEM_MESSAGE, "user:私の名前は太郎です"), languageModel.calls.get(0));
             assertEquals(List.of(
+                    DEFAULT_SYSTEM_MESSAGE,
                     "user:私の名前は太郎です",
                     "assistant:太郎です",
                     "user:私の名前は何ですか"), languageModel.calls.get(1));
@@ -691,8 +742,9 @@ class ChatClientAudioProcessingTest {
             assertNotNull(pollUntil(listener, event -> "assistant-audio-chunk".equals(event.type())));
 
             assertEquals(2, languageModel.calls.size());
-            assertEquals(List.of("user:私の名前は太郎です"), languageModel.calls.get(0));
+            assertEquals(List.of(DEFAULT_SYSTEM_MESSAGE, "user:私の名前は太郎です"), languageModel.calls.get(0));
             assertEquals(List.of(
+                    DEFAULT_SYSTEM_MESSAGE,
                     "user:私の名前は太郎です",
                     "user:私の名前は何ですか"), languageModel.calls.get(1));
         }
@@ -723,6 +775,7 @@ class ChatClientAudioProcessingTest {
 
             assertEquals(2, languageModel.calls.size());
             assertEquals(List.of(
+                    DEFAULT_SYSTEM_MESSAGE,
                     "user:私の名前は太郎です",
                     "assistant:太郎です",
                     "user:私の名前は何ですか"), languageModel.calls.get(1));
@@ -891,6 +944,13 @@ class ChatClientAudioProcessingTest {
     }
 
     private static ChatRequest audioRequest(byte[] body, byte[] vadBytes, byte[] rmsBytes) {
+        int frameBytes = AudioProcessor.VAD_FRAME_SAMPLES * Short.BYTES;
+        if (body.length < frameBytes) {
+            // 音声処理フローを検証するテストは、1フレーム未満のダミー入力を正規化して送る。
+            body = Arrays.copyOf(body, frameBytes);
+            vadBytes = Arrays.copyOf(vadBytes, 1);
+            rmsBytes = Arrays.copyOf(rmsBytes, 1);
+        }
         return ChatRequest.from(PCM_VAD, pcmVadBody(body, vadBytes, rmsBytes));
     }
 
@@ -1398,6 +1458,7 @@ class ChatClientAudioProcessingTest {
     private static class BlockingTextToSpeech implements TextToSpeech {
         private final CountDownLatch started = new CountDownLatch(1);
         private final CountDownLatch release = new CountDownLatch(1);
+        private final CountDownLatch interrupted = new CountDownLatch(1);
 
         @Override
         public void synthesizeStreaming(String text, java.util.function.Consumer<AudioDelta> onDelta) {
@@ -1406,6 +1467,7 @@ class ChatClientAudioProcessingTest {
                 release.await(1, TimeUnit.SECONDS);
                 onDelta.accept(new AudioDelta("AAAA", "pcm", 24000));
             } catch (InterruptedException e) {
+                interrupted.countDown();
                 Thread.currentThread().interrupt();
             }
         }

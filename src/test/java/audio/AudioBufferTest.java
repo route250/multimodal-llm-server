@@ -11,11 +11,11 @@ class AudioBufferTest {
         buffer.append(
                 new short[512],
                 0,
-                new float[] {0.0f, 0.0f},
-                new float[] {0.0f, 0.42f});
+                new byte[] {0, 0},
+                new byte[] {0, 42});
 
-        assertEquals(0.0f, buffer.rmsValue(0));
-        assertEquals(0.42f, buffer.rmsValue(256));
+        assertEquals(0, buffer.rmsValue(0));
+        assertEquals(42, buffer.rmsValue(256));
     }
 
     @Test
@@ -27,18 +27,18 @@ class AudioBufferTest {
 
         buffer.append(
                 samples,
-                new float[] {0.25f, 0.75f},
-                new float[] {0.10f, 0.20f},
+                new byte[] {25, 75},
+                new byte[] {10, 20},
                 256,
                 512,
                 0);
 
         assertEquals(123, buffer.sampleAt(0));
         assertEquals(456, buffer.sampleAt(511));
-        assertEquals(0.25f, buffer.vadValue(0));
-        assertEquals(0.75f, buffer.vadValue(256));
-        assertEquals(0.10f, buffer.rmsValue(0));
-        assertEquals(0.20f, buffer.rmsValue(256));
+        assertEquals(25, buffer.vadValue(0));
+        assertEquals(75, buffer.vadValue(256));
+        assertEquals(10, buffer.rmsValue(0));
+        assertEquals(20, buffer.rmsValue(256));
     }
 
     @Test
@@ -47,13 +47,13 @@ class AudioBufferTest {
         source.append(
                 new short[512],
                 0,
-                new float[] {0.75f, 0.0f},
-                new float[] {0.25f, 0.0f});
+                new byte[] {75, 0},
+                new byte[] {25, 0});
 
         AudioBuffer target = new AudioBuffer(1024, 256);
         target.appendRangeFrom(source, 0, 512);
 
-        assertEquals(0.75f, target.vadValue(0));
-        assertEquals(0.25f, target.rmsValue(0));
+        assertEquals(75, target.vadValue(0));
+        assertEquals(25, target.rmsValue(0));
     }
 }

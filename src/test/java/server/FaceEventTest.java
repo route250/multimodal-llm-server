@@ -133,16 +133,24 @@ class FaceEventTest {
 
             assertEquals(1, languageModel.calls().size());
             assertEquals(List.of(
-                    "system:人物認識通知\n認識結果: 名前不明\n相手の名前: 不明\ntrackId: legacy"),
+                    "system:" + ChatClient.DEFAULT_SYSTEM_PROMPT.stripTrailing(),
+                    "system:だれか他の人が居ます(trackId:legacy)。挨拶をしてお名前を聞いてみましょう。名前がわかったらツールをコール"),
                     languageModel.calls().get(0));
             var history = client.conversationHistoryForTest();
             assertEquals(2, history.size());
             assertEquals("system", history.get(0).role());
-            assertEquals("人物認識通知\n認識結果: 名前不明\n相手の名前: 不明\ntrackId: legacy",
+            assertEquals("だれか他の人が居ます(trackId:legacy)。挨拶をしてお名前を聞いてみましょう。名前がわかったらツールをコール",
                     history.get(0).text());
             assertEquals("system", history.get(1).role());
             assertEquals("人物認識通知\n認識結果: 不在\n相手の名前: 不在\ntrackId: 不在", history.get(1).text());
         }
+    }
+
+    @Test
+    void facePresenceHistoryTextUsesUnknownPersonGreeting() {
+        assertEquals(
+                "だれか他の人が居ます(trackId:legacy)。挨拶をしてお名前を聞いてみましょう。名前がわかったらツールをコール",
+                ChatClient.facePresenceHistoryText(FaceEventResult.unknownFace("sample-000000")));
     }
 
     @Test

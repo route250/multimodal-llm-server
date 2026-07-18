@@ -233,13 +233,13 @@ public final class AudioDiagnostics {
         long frameStart = alignToFrameStart(startSampleIndex);
         for (long sampleIndex = frameStart; sampleIndex < endSampleIndexExclusive; sampleIndex += VAD_FRAME_SAMPLES) {
             long frameEnd = Math.min(sampleIndex + VAD_FRAME_SAMPLES, endSampleIndexExclusive);
-            float value = audioBuffer.vadValue(sampleIndex);
+            int value = audioBuffer.vadValue(sampleIndex);
             csv.append(sampleIndex)
                     .append(',')
                     .append(frameEnd)
                     .append(',');
-            if (!Float.isNaN(value)) {
-                csv.append(Math.max(0, Math.min(100, Math.round(value * 100.0f))));
+            if (value >= 0) {
+                csv.append(value);
             }
             csv.append('\n');
         }

@@ -52,17 +52,6 @@ public class ChatClient {
                 あなたのセリフのみ出力して下さい。
                 """;
     private static final int MAX_HISTORY_MESSAGES = 20;
-    // public static final List<ToolDefinition> LLM_TOOLS = List.of(new ToolDefinition(
-    //         "assign_face_name",
-    //         """
-    //         trackIdに人物名を登録します。ユーザーが自分の名前を名乗ったときに呼び出します。
-    //         名前不明の人物認識通知の後で相手が自分の名前を名乗った場合は、assign_face_name ツールを必ず呼び出します。
-    //         ツール引数の trackId には直前の人物認識通知にある trackId を、name には相手が名乗った人名だけを指定します。
-    //         ツールの実行結果を受け取るまでは、名前を登録したとは発話しません。
-    //         """,
-    //         """
-    //                 {"type":"object","properties":{"trackId":{"type":"string"},"name":{"type":"string"}},"required":["trackId","name"],"additionalProperties":false}\
-    //                 """));
 
     private final String id;
     private final ChatGroup chatGroup;
@@ -351,24 +340,22 @@ public class ChatClient {
         }
     }
 
-    private static String facePresenceHistoryText(FaceEventResult result) {
-        String personName = null;
-        String trackId = "";
-        String m;
+    public static String facePresenceHistoryText(FaceEventResult result) {
+        String faceEventMessage;
         if ("person-left".equals(result.presenceState())) {
-            m = "人物認識通知\n認識結果: 不在\n相手の名前: 不在\ntrackId: 不在";
+            faceEventMessage = "人物認識通知\n認識結果: 不在\n相手の名前: 不在\ntrackId: 不在";
         } else {
+            String trackId = "";
             trackId = result.trackId() == null || result.trackId().isBlank() ? "" : result.trackId();
             if( !result.known() || result.personName() == null || result.personName().isBlank() ) {
-                m = "人物認識通知\n認識結果: 名前不明\n相手の名前: 不明\ntrackId: " + trackId;
-                m = "だれか他の人が居ます(trackId:"+trackId+")。挨拶をしてお名前を聞いてみましょう。名前がわかったらツールをコール";
+                faceEventMessage = "人物認識通知\n認識結果: 名前不明\n相手の名前: 不明\ntrackId: " + trackId;
+                faceEventMessage = "だれか他の人が居ます(trackId:"+trackId+")。挨拶をしてお名前を聞いてみましょう。名前がわかったらツールをコール";
             } else {
-                m = "人物認識通知\n認識結果: 登録済み\n相手の名前: "+result.personName()+"\ntrackId: "+result.trackId();
-                m = "\"ユーザ名 "+result.personName()+"(trackId:"+result.trackId()+")と出会いました。友人として挨拶から\"";
+                faceEventMessage = "人物認識通知\n認識結果: 登録済み\n相手の名前: "+result.personName()+"\ntrackId: "+result.trackId();
+                faceEventMessage = "\"ユーザ名 "+result.personName()+"(trackId:"+result.trackId()+")と出会いました。友人として挨拶から\"";
             }
         }
-        System.out.println(m);
-        return m;
+        return faceEventMessage;
     }
 
     private void finishPlaybackTracking(long assistantTurnId, long clientMicSampleIndex) {
