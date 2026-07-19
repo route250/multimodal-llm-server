@@ -26,6 +26,27 @@ import audio.stt.Transcription;
 
 class AudioProcessorTest {
     @Test
+    void appliesThresholdsAsOneValidatedSetting() {
+        AudioProcessor processor = new AudioProcessor(
+                samples -> true,
+                (audio, start, end, prompt) -> Transcription.empty(),
+                Runnable::run);
+        AudioProcessor.Thresholds thresholds = new AudioProcessor.Thresholds(62, 28, 12, 4);
+
+        processor.setThresholds(thresholds);
+
+        assertEquals(thresholds, processor.thresholds());
+    }
+
+    @Test
+    void rejectsThresholdsOutsideRangeOrWithEndAboveStart() {
+        assertThrows(IllegalArgumentException.class, () -> new AudioProcessor.Thresholds(-1, 0, 6, 3));
+        assertThrows(IllegalArgumentException.class, () -> new AudioProcessor.Thresholds(101, 0, 6, 3));
+        assertThrows(IllegalArgumentException.class, () -> new AudioProcessor.Thresholds(40, 41, 6, 3));
+        assertThrows(IllegalArgumentException.class, () -> new AudioProcessor.Thresholds(70, 35, 5, 6));
+    }
+
+    @Test
     void trailingSilenceReturnsToDetectedWhenSpeechResumes() {
         ExecutorService transcriptionExecutor = Executors.newSingleThreadExecutor();
         try {

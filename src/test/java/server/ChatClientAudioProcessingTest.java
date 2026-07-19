@@ -124,6 +124,37 @@ class ChatClientAudioProcessingTest {
     }
 
     @Test
+    void audioThresholdsAreIndependentForEachConnectedBrowser() throws Exception {
+        try (MlServer server = new MlServer(0)) {
+            ChatGroup group = new ChatGroup("group-test", server);
+            ChatClient browserA = new ChatClient("browser-a", group, new RecordingBodyAudioProcessor());
+            ChatClient browserB = new ChatClient("browser-b", group, new RecordingBodyAudioProcessor());
+            AudioProcessor.Thresholds browserAThresholds = new AudioProcessor.Thresholds(61, 24, 11, 4);
+
+            browserA.setAudioThresholds(browserAThresholds);
+
+            assertEquals(browserAThresholds, browserA.audioThresholds());
+            assertEquals(AudioProcessor.Thresholds.defaults(), browserB.audioThresholds());
+        }
+    }
+
+    @Test
+    void botAudioSettingsPanelLoadsAndAppliesSessionSpecificThresholds() throws Exception {
+        String botHtml = Files.readString(Path.of("src/main/resources/html/bot.html"));
+
+        assertTrue(botHtml.contains("/chat/audio-settings?group=${encodeURIComponent(groupInput.value)}&sessionId=${encodeURIComponent(sessionId)}"));
+        assertEquals(4, botHtml.split("type=\"range\" min=\"0\" max=\"100\"", -1).length - 1);
+        assertTrue(botHtml.contains("thresholdInputs[endKey].value = String(start)"));
+        assertFalse(botHtml.contains("thresholdInputs[endKey].max = String(start)"));
+        assertTrue(botHtml.contains("await requestAudioSettings(\"GET\")"));
+        assertTrue(botHtml.contains("await requestAudioSettings(\"POST\", settings)"));
+        assertTrue(botHtml.contains("openedAudioThresholds = thresholdValues(settings)"));
+        assertTrue(botHtml.contains("defaultAudioThresholds = thresholdValues(settings.defaults)"));
+        assertTrue(botHtml.contains("setThresholdValues(openedAudioThresholds)"));
+        assertTrue(botHtml.contains("setThresholdValues(defaultAudioThresholds)"));
+    }
+
+    @Test
     void audioPcmWithoutBrowserVadIsRejected() throws Exception {
         try (MlServer server = new MlServer(0)) {
             ChatGroup group = new ChatGroup("group-test", server);

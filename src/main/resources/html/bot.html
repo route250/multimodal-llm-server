@@ -337,11 +337,109 @@
         }
 
         .audio-metrics {
+            cursor: pointer;
             font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
             font-variant-numeric: tabular-nums;
             gap: 4px;
             padding: 0 10px;
             width: auto;
+        }
+
+        .audio-settings-wrap {
+            position: relative;
+        }
+
+        .audio-settings-panel {
+            background: #111111;
+            border: 1px solid #999999;
+            border-radius: 10px;
+            display: grid;
+            gap: 12px;
+            left: 0;
+            padding: 14px;
+            position: absolute;
+            top: calc(100% + 8px);
+            width: 320px;
+            z-index: 10;
+        }
+
+        .audio-settings-panel[hidden] {
+            display: none;
+        }
+
+        .audio-settings-title {
+            color: #cccccc;
+            font-size: 13px;
+            font-weight: 700;
+            margin: 0;
+        }
+
+        .threshold-control {
+            display: grid;
+            gap: 5px;
+        }
+
+        .threshold-label {
+            align-items: center;
+            display: flex;
+            font-size: 12px;
+            justify-content: space-between;
+        }
+
+        .threshold-value {
+            color: #cccccc;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-variant-numeric: tabular-nums;
+            text-align: right;
+            width: 3ch;
+        }
+
+        .threshold-control input[type="range"] {
+            accent-color: #999999;
+            margin: 0;
+            width: 100%;
+        }
+
+        .audio-settings-actions {
+            align-items: center;
+            display: flex;
+            gap: 8px;
+            justify-content: flex-end;
+        }
+
+        .audio-settings-button {
+            background: #cccccc;
+            border: 1px solid #cccccc;
+            border-radius: 7px;
+            color: #111111;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 700;
+            height: 30px;
+            padding: 0 12px;
+        }
+
+        .audio-settings-button.secondary {
+            background: #111111;
+            color: #cccccc;
+        }
+
+        .audio-settings-button:disabled {
+            cursor: wait;
+            opacity: 0.5;
+        }
+
+        .audio-settings-status {
+            color: #999999;
+            font-size: 11px;
+            line-height: 1.3;
+            min-height: 1.3em;
+            overflow-wrap: anywhere;
+            width: 100%;
+        }
+
+        .audio-settings-status.error {
+            color: #f87171;
         }
 
         .audio-metrics .vad-value {
@@ -388,10 +486,43 @@
                 <option value="group-2">group-2</option>
                 <option value="group-3">group-3</option>
             </select>
-            <span id="audio-metrics" class="speech-state audio-metrics" title="VAD確率と正規化RMS">
-                VAD <span id="vad-value" class="vad-value">000</span>
-                RMS <span id="rms-value" class="rms-value">000</span>
-            </span>
+            <div class="audio-settings-wrap">
+                <button id="audio-metrics" class="speech-state audio-metrics" type="button"
+                        title="VAD/RMSの現在値。クリックして音声区間判定を設定"
+                        aria-expanded="false" aria-controls="audio-settings-panel">
+                    VAD <span id="vad-value" class="vad-value">000</span>
+                    RMS <span id="rms-value" class="rms-value">000</span>
+                </button>
+                <section id="audio-settings-panel" class="audio-settings-panel"
+                         aria-label="音声区間判定設定" hidden>
+                    <h2 class="audio-settings-title">音声区間判定</h2>
+                    <div id="audio-settings-status" class="audio-settings-status" role="status"></div>
+                    <label class="threshold-control">
+                        <span class="threshold-label">VAD START <output id="start-vad-value" class="threshold-value">70</output></span>
+                        <input id="start-vad" type="range" min="0" max="100" step="1" value="70">
+                    </label>
+                    <label class="threshold-control">
+                        <span class="threshold-label">VAD END <output id="end-vad-value" class="threshold-value">35</output></span>
+                        <input id="end-vad" type="range" min="0" max="100" step="1" value="35">
+                    </label>
+                    <label class="threshold-control">
+                        <span class="threshold-label">RMS START <output id="start-rms-value" class="threshold-value">6</output></span>
+                        <input id="start-rms" type="range" min="0" max="100" step="1" value="6">
+                    </label>
+                    <label class="threshold-control">
+                        <span class="threshold-label">RMS END <output id="end-rms-value" class="threshold-value">3</output></span>
+                        <input id="end-rms" type="range" min="0" max="100" step="1" value="3">
+                    </label>
+                    <div class="audio-settings-actions">
+                        <button id="default-audio-settings"
+                                class="audio-settings-button secondary" type="button">Default</button>
+                        <button id="restore-audio-settings"
+                                class="audio-settings-button secondary" type="button">Restore</button>
+                        <button id="apply-audio-settings"
+                                class="audio-settings-button" type="button">Apply</button>
+                    </div>
+                </section>
+            </div>
             <span id="speech-state" class="speech-state" data-state="UNDETECTED" title="IDLE">
                 <span class="state-dot"></span>
                 <span id="speech-state-text">IDLE</span>
@@ -434,6 +565,24 @@
     const startBot = document.getElementById("start-bot");
     const vadValue = document.getElementById("vad-value");
     const rmsValue = document.getElementById("rms-value");
+    const audioMetrics = document.getElementById("audio-metrics");
+    const audioSettingsPanel = document.getElementById("audio-settings-panel");
+    const defaultAudioSettings = document.getElementById("default-audio-settings");
+    const restoreAudioSettings = document.getElementById("restore-audio-settings");
+    const applyAudioSettings = document.getElementById("apply-audio-settings");
+    const audioSettingsStatus = document.getElementById("audio-settings-status");
+    const thresholdInputs = {
+        startVad: document.getElementById("start-vad"),
+        endVad: document.getElementById("end-vad"),
+        startRms: document.getElementById("start-rms"),
+        endRms: document.getElementById("end-rms")
+    };
+    const thresholdOutputs = {
+        startVad: document.getElementById("start-vad-value"),
+        endVad: document.getElementById("end-vad-value"),
+        startRms: document.getElementById("start-rms-value"),
+        endRms: document.getElementById("end-rms-value")
+    };
     const speechState = document.getElementById("speech-state");
     const speechStateText = document.getElementById("speech-state-text");
     const presence = document.getElementById("presence");
@@ -466,6 +615,9 @@
     let faceLoadLevel = 0;
     let overloadCount = 0;
     let previousOverlaySnapshot = null;
+    const initialAudioThresholds = { startVad: 70, endVad: 35, startRms: 6, endRms: 3 };
+    let openedAudioThresholds = { ...initialAudioThresholds };
+    let defaultAudioThresholds = { ...initialAudioThresholds };
     const faceProcessDurations = [];
     const faceTracks = new Map();
     const overlayBoxTolerancePx = 8;
@@ -483,6 +635,34 @@
     }
     openSettings.addEventListener("click", () => {
         location.href = `/settings.html?group=${encodeURIComponent(groupInput.value)}`;
+    });
+    audioMetrics.addEventListener("click", toggleAudioSettings);
+    defaultAudioSettings.addEventListener("click", () => {
+        if (defaultAudioThresholds) {
+            setThresholdValues(defaultAudioThresholds);
+            setAudioSettingsStatus("システムデフォルトを選択しました");
+        }
+    });
+    restoreAudioSettings.addEventListener("click", () => {
+        if (openedAudioThresholds) {
+            setThresholdValues(openedAudioThresholds);
+            setAudioSettingsStatus("開いた時の値へ戻しました");
+        }
+    });
+    applyAudioSettings.addEventListener("click", saveAudioSettings);
+    thresholdInputs.startVad.addEventListener("input", () => constrainThresholdPair("Vad"));
+    thresholdInputs.endVad.addEventListener("input", () => constrainThresholdPairFromEnd("Vad"));
+    thresholdInputs.startRms.addEventListener("input", () => constrainThresholdPair("Rms"));
+    thresholdInputs.endRms.addEventListener("input", () => constrainThresholdPairFromEnd("Rms"));
+    document.addEventListener("pointerdown", (event) => {
+        if (!audioSettingsPanel.hidden && !event.target.closest(".audio-settings-wrap")) {
+            closeAudioSettings();
+        }
+    });
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+            closeAudioSettings();
+        }
     });
 
     const audio = new ChatAudio({
@@ -1149,6 +1329,129 @@
         const rms = Math.max(0, Math.min(100, Math.round(normalizedRms * 100)));
         vadValue.textContent = String(vad).padStart(3, "0");
         rmsValue.textContent = String(rms).padStart(3, "0");
+    }
+
+    async function toggleAudioSettings() {
+        if (!audioSettingsPanel.hidden) {
+            closeAudioSettings();
+            return;
+        }
+        audioSettingsPanel.hidden = false;
+        audioMetrics.setAttribute("aria-expanded", "true");
+        openedAudioThresholds = currentThresholdValues();
+        setAudioSettingsStatus("サーバから取得中");
+        setAudioSettingsButtonsDisabled(true);
+        try {
+            const settings = await requestAudioSettings("GET");
+            openedAudioThresholds = thresholdValues(settings);
+            defaultAudioThresholds = thresholdValues(settings.defaults);
+            setThresholdValues(settings);
+            setAudioSettingsStatus("");
+        } catch (error) {
+            setAudioSettingsStatus(
+                error.status === 404 ? "開始ボタンで接続してから設定してください" : error.message,
+                true);
+        } finally {
+            setAudioSettingsButtonsDisabled(false);
+        }
+    }
+
+    function closeAudioSettings() {
+        audioSettingsPanel.hidden = true;
+        audioMetrics.setAttribute("aria-expanded", "false");
+    }
+
+    function constrainThresholdPair(metric) {
+        const startKey = `start${metric}`;
+        const endKey = `end${metric}`;
+        const start = Number(thresholdInputs[startKey].value);
+        if (Number(thresholdInputs[endKey].value) > start) {
+            thresholdInputs[endKey].value = String(start);
+        }
+        updateThresholdOutput(startKey);
+        updateThresholdOutput(endKey);
+    }
+
+    function constrainThresholdPairFromEnd(metric) {
+        const startKey = `start${metric}`;
+        const endKey = `end${metric}`;
+        const start = Number(thresholdInputs[startKey].value);
+        if (Number(thresholdInputs[endKey].value) > start) {
+            thresholdInputs[endKey].value = String(start);
+        }
+        updateThresholdOutput(startKey);
+        updateThresholdOutput(endKey);
+    }
+
+    function updateThresholdOutput(key) {
+        thresholdOutputs[key].value = thresholdInputs[key].value;
+        thresholdOutputs[key].textContent = thresholdInputs[key].value;
+    }
+
+    function setThresholdValues(settings) {
+        for (const key of Object.keys(thresholdInputs)) {
+            thresholdInputs[key].value = String(settings[key]);
+        }
+        constrainThresholdPair("Vad");
+        constrainThresholdPair("Rms");
+    }
+
+    function thresholdValues(settings) {
+        if (!settings) {
+            return null;
+        }
+        return Object.fromEntries(
+            Object.keys(thresholdInputs).map((key) => [key, Number(settings[key])]));
+    }
+
+    function currentThresholdValues() {
+        return Object.fromEntries(
+            Object.entries(thresholdInputs).map(([key, input]) => [key, Number(input.value)]));
+    }
+
+    async function saveAudioSettings() {
+        setAudioSettingsButtonsDisabled(true);
+        setAudioSettingsStatus("適用中");
+        const settings = currentThresholdValues();
+        try {
+            const applied = await requestAudioSettings("POST", settings);
+            setThresholdValues(applied);
+            setAudioSettingsStatus("適用しました");
+        } catch (error) {
+            setAudioSettingsStatus(
+                error.status === 404 ? "接続が終了しました。開始後に再設定してください" : error.message,
+                true);
+        } finally {
+            setAudioSettingsButtonsDisabled(false);
+        }
+    }
+
+    function setAudioSettingsButtonsDisabled(disabled) {
+        defaultAudioSettings.disabled = disabled;
+        restoreAudioSettings.disabled = disabled;
+        applyAudioSettings.disabled = disabled;
+    }
+
+    async function requestAudioSettings(method, settings) {
+        const response = await fetch(
+            `/chat/audio-settings?group=${encodeURIComponent(groupInput.value)}&sessionId=${encodeURIComponent(sessionId)}`,
+            {
+                method,
+                headers: settings ? { "Content-Type": "application/json; charset=utf-8" } : {},
+                body: settings ? JSON.stringify(settings) : undefined
+            });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            const error = new Error(body.error || `HTTP ${response.status}`);
+            error.status = response.status;
+            throw error;
+        }
+        return body;
+    }
+
+    function setAudioSettingsStatus(message, isError = false) {
+        audioSettingsStatus.textContent = message;
+        audioSettingsStatus.classList.toggle("error", isError);
     }
 
     const subtitleEntries = [];

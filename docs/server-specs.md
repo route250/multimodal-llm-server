@@ -40,6 +40,8 @@ Chat API paths:
 
 - `GET /chat/connect`
 - `POST /chat/request`
+- `GET /chat/audio-settings`
+- `POST /chat/audio-settings`
 
 Static root:
 
@@ -263,11 +265,11 @@ Async audio processing failures are sent to connected clients as SSE `system` ev
 The receive buffer stores PCM samples, browser VAD values, and browser RMS values in 256 sample units.
 Browser VAD and RMS values are applied once per 256 samples, which is 16 ms at 16 kHz.
 
-Speech spike detection starts when the VAD value is at least `0.70` and the RMS value is at least `0.06`.
-Speech starts when both the VAD value stays greater than `0.35` and the RMS value stays greater than `0.03`
+既定値では、VAD が `0.70` 以上かつ RMS が `0.06` 以上になると speech spike detection を開始します。
+既定値では、VAD が `0.35` より大きく、RMS が `0.03` より大きい状態が
 for at least 3,200 samples, which is 200 ms at 16 kHz.
 When speech starts, the target range includes the previous 0.6 seconds of audio.
-When the VAD value becomes at most `0.35` or the RMS value becomes at most `0.03`, the processor enters trailing silence.
+既定値では、VAD が `0.35` 以下または RMS が `0.03` 以下になると trailing silence へ移行します。
 After trailing silence reaches 9,600 samples, which is 600 ms at 16 kHz, SmartTurn is evaluated every
 9,600 samples. If SmartTurn returns incomplete, trailing silence continues. If the VAD value becomes greater than
 `0.35` and the RMS value becomes greater than `0.03` before SmartTurn returns complete, the same speech returns
@@ -348,6 +350,35 @@ LLM_TIMEOUT_SECONDS=120
 サーバは `GET /v1/models` でモデル一覧を取得し、モデル ID に対して `Pattern.matcher(modelId).find()` が真になる最初のモデルを `POST /v1/responses` の `model` に指定します。
 `OPENAI_API_KEY` が設定されている場合は、`GET /v1/models` と `POST /v1/responses` の両方へ `Authorization: Bearer` ヘッダーを付与します。
 テキスト入力と STT 結果は、同じ `ChatClient` の直近 20 件の user/assistant 履歴と一緒に `POST /v1/responses` へ送信します。
+
+### ブラウザごとの音声区間判定設定
+
+`GET /chat/audio-settings` と `POST /chat/audio-settings` は、`group` と `sessionId` で特定した
+接続中 `ChatClient` の `AudioProcessor` だけを対象にします。同じグループ内の別ブラウザには反映しません。
+未接続の `sessionId` は `404 Not Found` を返します。
+
+取得例:
+
+```http
+GET /chat/audio-settings?group=group-1&sessionId=user-a
+```
+
+```json
+{"startVad":70,"endVad":35,"startRms":6,"endRms":3,"defaults":{"startVad":70,"endVad":35,"startRms":6,"endRms":3}}
+```
+
+更新例:
+
+```http
+POST /chat/audio-settings?group=group-1&sessionId=user-a
+Content-Type: application/json
+
+{"startVad":62,"endVad":28,"startRms":12,"endRms":4}
+```
+
+4項目はすべて `0..100` の整数値です。VADとRMSのそれぞれで `START >= END` を必須とし、
+条件に違反するリクエストは `400 Bad Request` を返します。更新した4値は1組として、
+対象 `AudioProcessor` の次のVADフレームから反映します。
 
 ### Group ごとの LLM 設定
 

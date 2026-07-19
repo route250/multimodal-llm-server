@@ -28,6 +28,7 @@ import com.sun.net.httpserver.HttpsConfigurator;
 import com.sun.net.httpserver.HttpsServer;
 
 import audio.AudioDiagnostics;
+import audio.AudioProcessor;
 import facedb.FaceDB;
 import json.Json;
 import json.JsonFields;
@@ -102,6 +103,7 @@ public class MlServer implements AutoCloseable {
         createContext(server, "/chat/client-log", this::handleChatClientLog, redirectExternal);
         createContext(server, "/chat/connect", this::handleChatConnect, redirectExternal);
         createContext(server, "/chat/settings", this::handleChatSettings, redirectExternal);
+        createContext(server, "/chat/audio-settings", this::handleChatAudioSettings, redirectExternal);
         createContext(server, "/face/event", this::handleFaceEvent, redirectExternal);
         createContext(server, "/", this::handleStaticFile, redirectExternal);
     }
@@ -251,6 +253,62 @@ public class MlServer implements AutoCloseable {
 
     GroupLlmSettings languageModelSettings(String groupId) {
         return settings(groupId);
+    }
+
+    /** 接続中ブラウザの音声区間判定閾値を取得または更新する。 */
+    private void handleChatAudioSettings(HttpExchange exchange) throws IOException {
+        ChatGroup chatGroup = chatGroup(exchange);
+        if (chatGroup == null) {
+            sendText(exchange, 404, "application/json; charset=utf-8", "{\"error\":\"chat group not found\"}\n");
+            return;
+        }
+        ChatClient client = chatGroup.client(sessionId(exchange));
+        if (client == null) {
+            sendText(exchange, 404, "application/json; charset=utf-8",
+                    "{\"error\":\"chat client not connected\"}\n");
+            return;
+        }
+        if ("GET".equals(exchange.getRequestMethod())) {
+            sendText(exchange, 200, "application/json; charset=utf-8",
+                    audioThresholdsJson(client.audioThresholds()) + "\n");
+            return;
+        }
+        if (!"POST".equals(exchange.getRequestMethod())) {
+            exchange.getResponseHeaders().set("Allow", "GET, POST");
+            exchange.sendResponseHeaders(405, -1);
+            return;
+        }
+
+        String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+        try {
+            AudioProcessor.Thresholds thresholds = new AudioProcessor.Thresholds(
+                    Math.toIntExact(JsonFields.longValue(body, "startVad")),
+                    Math.toIntExact(JsonFields.longValue(body, "endVad")),
+                    Math.toIntExact(JsonFields.longValue(body, "startRms")),
+                    Math.toIntExact(JsonFields.longValue(body, "endRms")));
+            client.setAudioThresholds(thresholds);
+            sendText(exchange, 200, "application/json; charset=utf-8",
+                    audioThresholdsJson(thresholds) + "\n");
+        } catch (IllegalArgumentException | ArithmeticException e) {
+            sendText(exchange, 400, "application/json; charset=utf-8", errorJson(e.getMessage()));
+        }
+    }
+
+    private static String audioThresholdsJson(AudioProcessor.Thresholds thresholds) {
+        return Json.object(Json.fields(
+                "startVad", thresholds.startVad(),
+                "endVad", thresholds.endVad(),
+                "startRms", thresholds.startRms(),
+                "endRms", thresholds.endRms(),
+                "defaults", Json.raw(audioThresholdValuesJson(AudioProcessor.Thresholds.defaults()))));
+    }
+
+    private static String audioThresholdValuesJson(AudioProcessor.Thresholds thresholds) {
+        return Json.object(Json.fields(
+                "startVad", thresholds.startVad(),
+                "endVad", thresholds.endVad(),
+                "startRms", thresholds.startRms(),
+                "endRms", thresholds.endRms()));
     }
 
     private void handleStaticFile(HttpExchange exchange) throws IOException {

@@ -159,6 +159,16 @@ public class ChatClient {
         return id;
     }
 
+    /** 現在このクライアントが使用している音声区間判定閾値を返す。 */
+    AudioProcessor.Thresholds audioThresholds() {
+        return audioProcessor.thresholds();
+    }
+
+    /** 音声区間判定閾値を次の VAD フレームから反映する。 */
+    void setAudioThresholds(AudioProcessor.Thresholds thresholds) {
+        audioProcessor.setThresholds(thresholds);
+    }
+
     /** Group 設定の保存後に、次の LLM 呼び出しから使用するモデルを切り替えます。 */
     void setLanguageModel(LLM llm, PromptTemplates promptTemplates) {
         this.languageModel = new LanguageModelContext(llm, promptTemplates);

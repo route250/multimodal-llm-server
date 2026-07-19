@@ -36,7 +36,7 @@ public class AudioProcessor {
     public static final int TRANSCRIPTION_PROMPT_MAX_CHARS = 500;
     /** 短音声で prompt を抑止する長さ。24,000 サンプルは 16 kHz で 1,500 ms。 */
     public static final int SHORT_AUDIO_PROMPT_SUPPRESSION_SAMPLES = 24_000;
-    /** 短音声で prompt を抑止する RMS 下限。0.01 は -40 dBFS 相当。 */
+    /** 短音声で prompt を抑止する RMS 下限。0.01 は -40 dBFS 相当。 Whisperの幻聴防止用 */
     public static final float LOW_RMS_PROMPT_SUPPRESSION_THRESHOLD = 0.01f;
     /** 1 セグメント一致だけで重複と判断する最小文字数。 */
     public static final int MIN_OVERLAP_TEXT_LENGTH = 8;
@@ -49,11 +49,14 @@ public class AudioProcessor {
     /** SmartTurn が未完了でも発話終了を確定する最大無音区間。19,200 サンプルは 16 kHz で 1,200 ms。 */
     public static final int MAX_TURN_DETECTION_SILENCE_SAMPLES = 19_200;
     /** 非発話状態から発話状態へ切り替える VAD 確率の下限値。 */
-    public static final int START_VAD_THRESHOLD = 70;
-    public static final int START_RMS_THRESHOLD = 6;
+    public static final int DEFAULT_START_VAD_THRESHOLD = 70;
+    public static final int DEFAULT_START_RMS_THRESHOLD = 6;
     /** 発話状態を継続する VAD 確率の下限値。 */
-    public static final int END_VAD_THRESHOLD = 35;
-    public static final int END_RMS_THRESHOLD = 3;
+    public static final int DEFAULT_END_VAD_THRESHOLD = 35;
+    public static final int DEFAULT_END_RMS_THRESHOLD = 3;
+
+    /** 発話区間の判定に使う閾値。画面からの変更を音声処理スレッドへ一括で反映する。 */
+    private volatile Thresholds thresholds = Thresholds.defaults();
     /** 受信直後の PCM と VAD 値を保持するバッファ。 */
     private final AudioBuffer receiveBuffer = new AudioBuffer(SAMPLE_RATE * 30, VAD_FRAME_SAMPLES);
     /** STT に渡す発話区間の PCM を保持する長時間用バッファ。5 分までの発話を保持する。 */
@@ -123,6 +126,24 @@ public class AudioProcessor {
         this.turnDetector = Objects.requireNonNull(turnDetector);
         this.speechToText = Objects.requireNonNull(speechToText);
         this.transcriptionExecutor = Objects.requireNonNull(transcriptionExecutor);
+    }
+
+    /**
+     * 現在の発話区間判定閾値を返す。
+     *
+     * @return VAD/RMS の開始閾値と終了閾値
+     */
+    public Thresholds thresholds() {
+        return thresholds;
+    }
+
+    /**
+     * 発話区間判定閾値を次の VAD フレームから一括で反映する。
+     *
+     * @param thresholds VAD/RMS の開始閾値と終了閾値
+     */
+    public void setThresholds(Thresholds thresholds) {
+        this.thresholds = Objects.requireNonNull(thresholds);
     }
 
     private void setState(long pos, SpeechState newState) {
@@ -325,18 +346,19 @@ public class AudioProcessor {
      * @return 発話終了を検出した場合は文字起こし結果。検出していない場合は Optional.empty()
      */
     private void updateSpeechState(long frameStartSampleIndex, int vad, int rms) {
+        Thresholds currentThresholds = thresholds;
         long frameEndSampleIndex = frameStartSampleIndex + VAD_FRAME_SAMPLES;
         switch (speechState) {
             case UNDETECTED -> {
                 // 未検出状態で START_THRESHOLD 以上になったフレームを発話開始として扱う。
-                if (vad >= START_VAD_THRESHOLD && rms >= START_RMS_THRESHOLD ) {
+                if (vad >= currentThresholds.startVad() && rms >= currentThresholds.startRms()) {
                     setState(frameStartSampleIndex, SpeechState.SPIKE, vad);
                     spikeStartSampleIndex = frameStartSampleIndex;
                 }
                 return;
             }
             case SPIKE -> {
-                if (vad > END_VAD_THRESHOLD && rms > END_RMS_THRESHOLD ) {
+                if (vad > currentThresholds.endVad() && rms > currentThresholds.endRms()) {
                     if (frameStartSampleIndex - spikeStartSampleIndex >= SPIKE_SAMPLES) {
                         setState(frameStartSampleIndex, SpeechState.DETECTED, vad);
                         startSpeech(spikeStartSampleIndex, frameEndSampleIndex);
@@ -348,7 +370,7 @@ public class AudioProcessor {
             }
             case DETECTED -> {
                 // 発話検出状態で END_THRESHOLD を超えている間は発話継続として扱う。
-                if (vad > END_VAD_THRESHOLD && rms > END_RMS_THRESHOLD ) {
+                if (vad > currentThresholds.endVad() && rms > currentThresholds.endRms()) {
                     lastSpeechSampleIndex = frameEndSampleIndex;
                     appendCurrentSpeechToSttBuffer(frameEndSampleIndex);
                     maybeTranscribePartialSpeech(frameEndSampleIndex);
@@ -359,7 +381,7 @@ public class AudioProcessor {
             }
             case TRAILING_SILENCE -> {
                 // 後続無音状態で END_THRESHOLD を超えた場合は同じ発話区間として発話検出状態へ戻す。
-                if (vad > END_VAD_THRESHOLD && rms > END_RMS_THRESHOLD ) {
+                if (vad > currentThresholds.endVad() && rms > currentThresholds.endRms()) {
                     setState(frameStartSampleIndex, SpeechState.DETECTED, vad);
                     lastSpeechSampleIndex = frameEndSampleIndex;
                     appendCurrentSpeechToSttBuffer(frameEndSampleIndex);
@@ -398,7 +420,7 @@ public class AudioProcessor {
             }
             case TRANSCRIBING -> {
                 // START_THRESHOLD 以上になったら新しい発話区間として発話検出状態へ戻す。
-                if (vad >= START_VAD_THRESHOLD && rms > END_RMS_THRESHOLD) {
+                if (vad >= currentThresholds.startVad() && rms > currentThresholds.endRms()) {
                     setState(frameStartSampleIndex, SpeechState.DETECTED, vad);
                     startSpeech(frameStartSampleIndex, frameEndSampleIndex);
                 }
@@ -406,6 +428,39 @@ public class AudioProcessor {
             }
         }
         throw new IllegalStateException("unknown speech state: " + speechState);
+    }
+
+    /**
+     * VAD/RMS の発話開始閾値と発話終了閾値。
+     * 各値はブラウザから届く指標と同じ 0〜100 で、開始閾値は終了閾値以上とする。
+     */
+    public record Thresholds(int startVad, int endVad, int startRms, int endRms) {
+        public Thresholds {
+            requireRange(startVad, "startVad");
+            requireRange(endVad, "endVad");
+            requireRange(startRms, "startRms");
+            requireRange(endRms, "endRms");
+            if (startVad < endVad) {
+                throw new IllegalArgumentException("startVad must be greater than or equal to endVad");
+            }
+            if (startRms < endRms) {
+                throw new IllegalArgumentException("startRms must be greater than or equal to endRms");
+            }
+        }
+
+        public static Thresholds defaults() {
+            return new Thresholds(
+                    DEFAULT_START_VAD_THRESHOLD,
+                    DEFAULT_END_VAD_THRESHOLD,
+                    DEFAULT_START_RMS_THRESHOLD,
+                    DEFAULT_END_RMS_THRESHOLD);
+        }
+
+        private static void requireRange(int value, String name) {
+            if (value < 0 || value > 100) {
+                throw new IllegalArgumentException(name + " must be between 0 and 100");
+            }
+        }
     }
 
     /**
