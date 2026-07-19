@@ -99,7 +99,7 @@ public class ChatGroup {
     /** 保存済みの Group 設定を、接続済みクライアントの次回呼び出しへ反映します。 */
     void applyLanguageModelSettings(GroupLlmSettings settings) {
         for (ChatClient client : clients.values()) {
-            client.setLanguageModel(new LlmOpenAI(settings.toConfig()), settings.systemPrompt());
+            client.setLanguageModel(new LlmOpenAI(settings.toConfig()), settings.promptTemplates());
         }
     }
 }

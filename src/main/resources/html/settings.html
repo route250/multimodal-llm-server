@@ -45,8 +45,29 @@
             <input id="api-key" type="password" autocomplete="off">
             <span class="hint">認証を使わないサーバーでは空欄にします。</span>
         </label>
+        <label>AIの名前
+            <input id="bot-name" type="text">
+            <span class="hint">`${BOT_NAME}`でプロンプトへ埋め込みます。</span>
+        </label>
         <label>メインプロンプト
             <textarea id="system-prompt"></textarea>
+            <span class="hint">`${BOT_NAME}`と`${DATETIME}`を展開します。</span>
+        </label>
+        <label>初対面の人用プロンプト
+            <textarea id="first-meeting-prompt"></textarea>
+            <span class="hint">未登録人物の入室時に、メインプロンプトへ1回だけ追加します。`${BOT_NAME}`と`${DATETIME}`を展開します。</span>
+        </label>
+        <label>知っている人用プロンプト
+            <textarea id="known-person-prompt"></textarea>
+            <span class="hint">登録済み人物の入室時に、メインプロンプトへ1回だけ追加します。`${BOT_NAME}`と`${DATETIME}`を展開します。</span>
+        </label>
+        <label>未登録人物通知のメッセージフォーマット
+            <textarea id="unknown-person-message-format"></textarea>
+            <span class="hint">`${BOT_NAME}`、`${DATETIME}`、`${USER_NAME}`、`${FACE_ID}`を展開します。未登録時の`${USER_NAME}`は「不明」です。</span>
+        </label>
+        <label>登録済み人物通知のメッセージフォーマット
+            <textarea id="known-person-message-format"></textarea>
+            <span class="hint">`${BOT_NAME}`、`${DATETIME}`、`${USER_NAME}`、`${FACE_ID}`を展開します。</span>
         </label>
         <div class="actions">
             <button id="reset" class="reset" type="button">デフォルトにリセット</button>
@@ -60,14 +81,20 @@
         baseUrl: "http://localhost:8767/v1",
         model: "LFM2\\.5",
         apiKey: "",
-        systemPrompt: ""
+        botName: "", systemPrompt: "", firstMeetingPrompt: "", knownPersonPrompt: "",
+        unknownPersonMessageFormat: "", knownPersonMessageFormat: ""
     };
     const group = new URLSearchParams(location.search).get("group") || "group-1";
     const form = document.getElementById("settings-form");
     const baseUrl = document.getElementById("base-url");
     const model = document.getElementById("model");
     const apiKey = document.getElementById("api-key");
+    const botName = document.getElementById("bot-name");
     const systemPrompt = document.getElementById("system-prompt");
+    const firstMeetingPrompt = document.getElementById("first-meeting-prompt");
+    const knownPersonPrompt = document.getElementById("known-person-prompt");
+    const unknownPersonMessageFormat = document.getElementById("unknown-person-message-format");
+    const knownPersonMessageFormat = document.getElementById("known-person-message-format");
     const status = document.getElementById("status");
     const save = document.getElementById("save");
     let defaults = FALLBACK_DEFAULTS;
@@ -77,7 +104,12 @@
         baseUrl.value = defaults.baseUrl;
         model.value = defaults.model;
         apiKey.value = defaults.apiKey;
+        botName.value = defaults.botName;
         systemPrompt.value = defaults.systemPrompt;
+        firstMeetingPrompt.value = defaults.firstMeetingPrompt;
+        knownPersonPrompt.value = defaults.knownPersonPrompt;
+        unknownPersonMessageFormat.value = defaults.unknownPersonMessageFormat;
+        knownPersonMessageFormat.value = defaults.knownPersonMessageFormat;
         status.className = "";
         status.textContent = "";
     });
@@ -89,7 +121,12 @@
         baseUrl.value = settings.baseUrl || "";
         model.value = settings.model || "";
         apiKey.value = settings.apiKey || "";
+        botName.value = settings.botName || "";
         systemPrompt.value = settings.systemPrompt || "";
+        firstMeetingPrompt.value = settings.firstMeetingPrompt || "";
+        knownPersonPrompt.value = settings.knownPersonPrompt || "";
+        unknownPersonMessageFormat.value = settings.unknownPersonMessageFormat || "";
+        knownPersonMessageFormat.value = settings.knownPersonMessageFormat || "";
     }
     form.addEventListener("submit", async (event) => {
         event.preventDefault();
@@ -100,7 +137,12 @@
             const response = await fetch(`/chat/settings?group=${encodeURIComponent(group)}`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json; charset=utf-8" },
-                body: JSON.stringify({ baseUrl: baseUrl.value, model: model.value, apiKey: apiKey.value, systemPrompt: systemPrompt.value })
+                body: JSON.stringify({
+                    baseUrl: baseUrl.value, model: model.value, apiKey: apiKey.value, botName: botName.value,
+                    systemPrompt: systemPrompt.value, firstMeetingPrompt: firstMeetingPrompt.value,
+                    knownPersonPrompt: knownPersonPrompt.value, unknownPersonMessageFormat: unknownPersonMessageFormat.value,
+                    knownPersonMessageFormat: knownPersonMessageFormat.value
+                })
             });
             if (!response.ok) throw new Error(await errorMessage(response));
             const result = await response.json();

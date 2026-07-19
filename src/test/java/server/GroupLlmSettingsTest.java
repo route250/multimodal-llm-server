@@ -15,7 +15,8 @@ class GroupLlmSettingsTest {
         Path localRoot = Path.of("tmp", "group-settings-test-" + System.nanoTime());
         try {
             GroupLlmSettings settings = new GroupLlmSettings(
-                    "http://example.test/v1", "test-model", "secret", "メインプロンプト");
+                    "http://example.test/v1", "test-model", "secret", "テストAI", "メインプロンプト",
+                    "初対面", "既知", "未登録 ${FACE_ID}", "登録済み ${USER_NAME}");
 
             settings.save(localRoot, "group-2");
             GroupLlmSettings loaded = GroupLlmSettings.load(localRoot, "group-2");
@@ -36,8 +37,9 @@ class GroupLlmSettingsTest {
             GroupLlmSettings defaults = GroupLlmSettings.load(localRoot, "group-1");
 
             assertEquals(GroupLlmSettings.DEFAULT_BASE_URL, defaults.toConfig().baseUri().toString());
-            assertEquals(GroupLlmSettings.DEFAULT_LFM25_MODEL, defaults.toConfig().model());
-            assertEquals(GroupLlmSettings.DEFAULT_LFM25_PROMPT.strip(), defaults.systemPrompt());
+            assertEquals(GroupLlmSettings.LFM25_MODEL, defaults.toConfig().model());
+            assertEquals(GroupLlmSettings.LFM25_PROMPT.strip(), defaults.systemPrompt());
+            assertEquals(GroupLlmSettings.LFM25_BOT_NAME, JsonFields.string(defaults.toJson(), "botName"));
         } finally {
             Files.deleteIfExists(localRoot);
         }
@@ -50,8 +52,9 @@ class GroupLlmSettingsTest {
             GroupLlmSettings defaults = GroupLlmSettings.load(localRoot, "group-2");
 
             assertEquals(GroupLlmSettings.DEFAULT_BASE_URL, JsonFields.string(defaults.toJson(), "baseUrl"));
-            assertEquals(GroupLlmSettings.DEFAULT_GEMMA4_MODEL, JsonFields.string(defaults.toJson(), "model"));
-            assertEquals(GroupLlmSettings.DEFAULT_GEMMA4_PROMPT.strip(), JsonFields.string(defaults.toJson(), "systemPrompt"));
+            assertEquals(GroupLlmSettings.GEMMA4_MODEL, JsonFields.string(defaults.toJson(), "model"));
+            assertEquals(GroupLlmSettings.GEMMA4_PROMPT.strip(), JsonFields.string(defaults.toJson(), "systemPrompt"));
+            assertEquals(GroupLlmSettings.GEMMA4_BOT_NAME, JsonFields.string(defaults.toJson(), "botName"));
             assertEquals("", JsonFields.string(defaults.toJson(), "apiKey"));
         } finally {
             Files.deleteIfExists(localRoot);
@@ -62,9 +65,10 @@ class GroupLlmSettingsTest {
     void usesFormerGroup2OpenAiDefaultsForGroup3() {
         GroupLlmSettings defaults = GroupLlmSettings.defaults("group-3");
 
-        assertEquals(GroupLlmSettings.DEFAULT_OPENAI_BASE_URL, JsonFields.string(defaults.toJson(), "baseUrl"));
-        assertEquals(GroupLlmSettings.DEFAULT_OPENAI_MODEL, JsonFields.string(defaults.toJson(), "model"));
-        assertEquals(GroupLlmSettings.DEFAULT_OPENAI_PROMPT.strip(), JsonFields.string(defaults.toJson(), "systemPrompt"));
+        assertEquals(GroupLlmSettings.OPENAI_BASE_URL, JsonFields.string(defaults.toJson(), "baseUrl"));
+        assertEquals(GroupLlmSettings.OPENAI_MODEL, JsonFields.string(defaults.toJson(), "model"));
+            assertEquals(GroupLlmSettings.OPENAI_PROMPT.strip(), JsonFields.string(defaults.toJson(), "systemPrompt"));
+            assertEquals(GroupLlmSettings.OPENAI_BOT_NAME, JsonFields.string(defaults.toJson(), "botName"));
     }
 
     @Test
@@ -78,7 +82,7 @@ class GroupLlmSettingsTest {
             GroupLlmSettings loaded = GroupLlmSettings.load(localRoot, "group-2");
 
             assertEquals(GroupLlmSettings.DEFAULT_BASE_URL, loaded.toConfig().baseUri().toString());
-            assertEquals(GroupLlmSettings.DEFAULT_GEMMA4_MODEL, loaded.toConfig().model());
+            assertEquals(GroupLlmSettings.GEMMA4_MODEL, loaded.toConfig().model());
             assertEquals(GroupLlmSettings.defaults("group-2").toJson(), loaded.toJson());
 
             loaded.save(localRoot, "group-2");
@@ -86,6 +90,11 @@ class GroupLlmSettingsTest {
             assertEquals("", JsonFields.string(saved, "baseUrl"));
             assertEquals("", JsonFields.string(saved, "model"));
             assertEquals("", JsonFields.string(saved, "systemPrompt"));
+            assertEquals("", JsonFields.string(saved, "botName"));
+            assertEquals("", JsonFields.string(saved, "firstMeetingPrompt"));
+            assertEquals("", JsonFields.string(saved, "knownPersonPrompt"));
+            assertEquals("", JsonFields.string(saved, "unknownPersonMessageFormat"));
+            assertEquals("", JsonFields.string(saved, "knownPersonMessageFormat"));
         } finally {
             Files.deleteIfExists(localRoot.resolve("group-2").resolve("llm.json"));
             Files.deleteIfExists(localRoot.resolve("group-2"));
@@ -105,6 +114,7 @@ class GroupLlmSettingsTest {
 
     @Test
     void rejectsBlankBaseUrlWhenSaving() {
-        assertThrows(IllegalArgumentException.class, () -> new GroupLlmSettings("", "model", "", ""));
+        assertThrows(IllegalArgumentException.class, () -> new GroupLlmSettings(
+                "", "model", "", "AI", "prompt", "first", "known", "unknown", "registered"));
     }
 }

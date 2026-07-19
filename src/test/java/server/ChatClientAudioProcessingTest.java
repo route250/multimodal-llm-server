@@ -38,7 +38,8 @@ import audio.AudioProcessor;
 class ChatClientAudioProcessingTest {
     private static final String PCM16LE = "audio/pcm; rate=16000; channels=1; format=s16le";
     private static final String PCM_VAD = "audio/pcm-vad; rate=16000; channels=1; format=s16le; vad-frame-samples=256";
-    private static final String DEFAULT_SYSTEM_MESSAGE = "system:" + ChatClient.DEFAULT_SYSTEM_PROMPT.stripTrailing();
+    private static final String DEFAULT_SYSTEM_MESSAGE = "system:" + GroupLlmSettings.defaults("group-1")
+            .promptTemplates().expandedSystemPrompt();
 
     @Test
     void audioRequestReturnsBeforeAudioProcessorCompletes() throws Exception {

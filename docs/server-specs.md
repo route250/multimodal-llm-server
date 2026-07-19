@@ -359,13 +359,22 @@ LLM_TIMEOUT_SECONDS=120
   "baseUrl": "http://localhost:8767/v1",
   "model": "LFM2\\.5",
   "apiKey": "",
-  "systemPrompt": "メインプロンプト"
+  "botName": "りり",
+  "systemPrompt": "あなたは会話AIの「${BOT_NAME}」です。",
+  "firstMeetingPrompt": "初対面の人への追加指示",
+  "knownPersonPrompt": "知っている人への追加指示",
+  "unknownPersonMessageFormat": "だれか他の人が居ます(trackId:${FACE_ID})。",
+  "knownPersonMessageFormat": "ユーザ名 ${USER_NAME}(trackId:${FACE_ID})と出会いました。"
 }
 ```
 
 - 設定ファイルまたは POST の各項目が空文字の場合は、その Group の既定値を使用します。保存時は既定値と同じ項目を空文字で保存し、変更された項目だけを保存します。
 - `baseUrl` は検証時に空文字にできません。`apiKey` は空文字を指定できます。
 - `systemPrompt` は Group 設定から各 `ChatClient` へ渡し、LLM 呼び出し時に system メッセージとして先頭へ追加します。LLM クライアント自体は保持しません。
+- `botName`、`systemPrompt`、`firstMeetingPrompt`、`knownPersonPrompt`、`unknownPersonMessageFormat`、`knownPersonMessageFormat`も空文字または欠落時はGroup別既定値を使用し、既定値と一致する場合は空文字で保存します。
+- `${BOT_NAME}`と`${DATETIME}`はすべてのプロンプトテンプレートで展開します。`${DATETIME}`はAsia/Tokyoの`yyyy年M月d日 HH時mm分ss秒`形式です。
+- `${USER_NAME}`と`${FACE_ID}`は人物通知フォーマットだけで展開します。未登録人物の`${USER_NAME}`は`不明`、`${FACE_ID}`はFaceDBのtrack IDです。未対応変数は変更しません。
+- 人物入室時のLLM呼び出しだけは、メインプロンプトの末尾へ未登録用または登録済み用の追加プロンプトを改行して追加します。人物通知は別のsystem履歴メッセージとして保存します。
 - Base URL のホスト名が `openai.com` またはそのサブドメインで `apiKey` が空文字の場合は、サーバー環境の `OPENAI_API_KEY` を使用します。環境変数も空の場合は HTTP 400 を返します。
 - `model` は検証時に空文字にできず、Java 正規表現としてコンパイルできる必要があります。
 - 保存前に `GET /v1/models` を実行して `model` に一致するモデル ID を 1 件特定し、そのモデルで `POST /v1/responses` を実行して空でない応答を確認します。

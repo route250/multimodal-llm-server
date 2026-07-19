@@ -47,10 +47,7 @@ import onnx.OnnxModelException;
 
 public class ChatClient {
     /** 設定がない ChatClient が使用するシステムプロンプトです。 */
-    public static final String DEFAULT_SYSTEM_PROMPT = """
-                あなたは会話AIの「りり」です。目の前の相手と親しみのある会話をします。AIの発言だけを出力して下さい。
-                あなたのセリフのみ出力して下さい。
-                """;
+    public static final String DEFAULT_SYSTEM_PROMPT = GroupLlmSettings.LFM25_PROMPT;
     private static final int MAX_HISTORY_MESSAGES = 20;
 
     private final String id;
@@ -104,15 +101,15 @@ public class ChatClient {
             AudioProcessor audioProcessor,
             GroupLlmSettings settings,
             TextToSpeech textToSpeech) {
-        this(id, chatGroup, audioProcessor, new LlmOpenAI(settings.toConfig()), settings.systemPrompt(), textToSpeech);
+        this(id, chatGroup, audioProcessor, new LlmOpenAI(settings.toConfig()), settings.promptTemplates(), textToSpeech);
     }
 
     ChatClient(String id, ChatGroup chatGroup, AudioProcessor audioProcessor) {
-        this(id, chatGroup, audioProcessor, new LlmOpenAI(), DEFAULT_SYSTEM_PROMPT, TextToSpeech.disabled());
+        this(id, chatGroup, audioProcessor, new LlmOpenAI(), GroupLlmSettings.defaults("group-1").promptTemplates(), TextToSpeech.disabled());
     }
 
     ChatClient(String id, ChatGroup chatGroup, AudioProcessor audioProcessor, LLM llm) {
-        this(id, chatGroup, audioProcessor, llm, DEFAULT_SYSTEM_PROMPT, TextToSpeech.disabled());
+        this(id, chatGroup, audioProcessor, llm, GroupLlmSettings.defaults("group-1").promptTemplates(), TextToSpeech.disabled());
     }
 
     ChatClient(
@@ -121,9 +118,10 @@ public class ChatClient {
             AudioProcessor audioProcessor,
             LLM llm,
             TextToSpeech textToSpeech) {
-        this(id, chatGroup, audioProcessor, llm, DEFAULT_SYSTEM_PROMPT, textToSpeech);
+        this(id, chatGroup, audioProcessor, llm, GroupLlmSettings.defaults("group-1").promptTemplates(), textToSpeech);
     }
 
+    /** テストおよび個別接続用に、メインプロンプトだけを指定します。 */
     ChatClient(
             String id,
             ChatGroup chatGroup,
@@ -131,11 +129,26 @@ public class ChatClient {
             LLM llm,
             String systemPrompt,
             TextToSpeech textToSpeech) {
+        this(id, chatGroup, audioProcessor, llm,
+                new PromptTemplates(GroupLlmSettings.LFM25_BOT_NAME, systemPrompt,
+                        GroupLlmSettings.LFM25_FIRST_MEETING_PROMPT, GroupLlmSettings.LFM25_KNOWN_PERSON_PROMPT,
+                        GroupLlmSettings.LFM25_UNKNOWN_PERSON_MESSAGE_FORMAT,
+                        GroupLlmSettings.LFM25_KNOWN_PERSON_MESSAGE_FORMAT),
+                textToSpeech);
+    }
+
+    ChatClient(
+            String id,
+            ChatGroup chatGroup,
+            AudioProcessor audioProcessor,
+            LLM llm,
+            PromptTemplates promptTemplates,
+            TextToSpeech textToSpeech) {
         this.id = id;
         this.chatGroup = chatGroup;
         this.audioProcessor = audioProcessor;
         this.diagnosticsContext = AudioDiagnostics.context(chatGroup.id(), id);
-        this.languageModel = new LanguageModelContext(llm, systemPrompt);
+        this.languageModel = new LanguageModelContext(llm, promptTemplates);
         this.textToSpeech = textToSpeech;
         this.audioProcessor.setDiagnosticsContext(chatGroup.id(), id);
         this.audioProcessor.setSpeechStateListener(this::handleSpeechStateChange);
@@ -147,8 +160,8 @@ public class ChatClient {
     }
 
     /** Group 設定の保存後に、次の LLM 呼び出しから使用するモデルを切り替えます。 */
-    void setLanguageModel(LLM llm, String systemPrompt) {
-        this.languageModel = new LanguageModelContext(llm, systemPrompt);
+    void setLanguageModel(LLM llm, PromptTemplates promptTemplates) {
+        this.languageModel = new LanguageModelContext(llm, promptTemplates);
     }
 
     public int nextId() {
@@ -325,7 +338,7 @@ public class ChatClient {
         }
         ChatMessage faceEventMessage = null;
         if ("person-entered".equals(result.presenceState()) || finalPersonLeft) {
-            String eventText = facePresenceHistoryText(result, faceDbTrackId);
+            String eventText = facePresenceHistoryText(result, faceDbTrackId, languageModel.promptTemplates());
             faceEventMessage = new ChatMessage("system", eventText);
             synchronized (conversationLock) {
                 conversationHistory.add(faceEventMessage);
@@ -334,7 +347,7 @@ public class ChatClient {
         }
         sendToGroupIfOpen(ServerEvent.facePresence(result));
         if ("person-entered".equals(result.presenceState()) && faceEventMessage != null) {
-            startAssistantReplyFromHistory(faceEventMessage);
+            startAssistantReplyFromHistory(faceEventMessage, result.known() && result.personName() != null && !result.personName().isBlank());
         }
     }
     List<ChatMessage> conversationHistoryForTest() {
@@ -344,24 +357,16 @@ public class ChatClient {
     }
 
     public static String facePresenceHistoryText(FaceEventResult result) {
-        return facePresenceHistoryText(result, result.trackId());
+        return facePresenceHistoryText(result, result.trackId(), GroupLlmSettings.defaults("group-1").promptTemplates());
     }
 
-    private static String facePresenceHistoryText(FaceEventResult result, String faceDbTrackId) {
-        String faceEventMessage;
+    private static String facePresenceHistoryText(FaceEventResult result, String faceDbTrackId, PromptTemplates templates) {
         if ("person-left".equals(result.presenceState())) {
-            faceEventMessage = "人物認識通知\n認識結果: 不在\n相手の名前: 不在\ntrackId: 不在";
-        } else {
-            String trackId = faceDbTrackId == null || faceDbTrackId.isBlank() ? "" : faceDbTrackId;
-            if( !result.known() || result.personName() == null || result.personName().isBlank() ) {
-                faceEventMessage = "人物認識通知\n認識結果: 名前不明\n相手の名前: 不明\ntrackId: " + trackId;
-                faceEventMessage = "だれか他の人が居ます(trackId:"+trackId+")。挨拶をしてお名前を聞いてみましょう。名前がわかったらツールをコール";
-            } else {
-                faceEventMessage = "人物認識通知\n認識結果: 登録済み\n相手の名前: "+result.personName()+"\ntrackId: "+trackId;
-                faceEventMessage = "\"ユーザ名 "+result.personName()+"(trackId:"+trackId+")と出会いました。友人として挨拶から\"";
-            }
+            return "人物認識通知\n認識結果: 不在\n相手の名前: 不在\ntrackId: 不在";
         }
-        return faceEventMessage;
+        String trackId = faceDbTrackId == null || faceDbTrackId.isBlank() ? "" : faceDbTrackId;
+        boolean known = result.known() && result.personName() != null && !result.personName().isBlank();
+        return templates.faceMessage(known, result.personName(), trackId);
     }
 
     private void finishPlaybackTracking(long assistantTurnId, long clientMicSampleIndex) {
@@ -558,7 +563,7 @@ public class ChatClient {
         startAssistantTask(assistantTurnId, task);
     }
 
-    private void startAssistantReplyFromHistory(ChatMessage triggerMessage) {
+    private void startAssistantReplyFromHistory(ChatMessage triggerMessage, boolean knownPerson) {
         long assistantTurnId = beginAssistantTurn();
         AudioDiagnostics.log("assistant-turn-start", diagnosticsContext, Json.fields(
                 "assistantTurnId", assistantTurnId,
@@ -566,7 +571,7 @@ public class ChatClient {
                 "triggerChars", triggerMessage.text().length(),
                 "triggerText", triggerMessage.text()));
         FutureTask<Void> task = new FutureTask<>(() -> {
-            replyToConversationHistory(triggerMessage, assistantTurnId);
+            replyToConversationHistory(triggerMessage, assistantTurnId, knownPerson);
             return null;
         });
         startAssistantTask(assistantTurnId, task);
@@ -595,10 +600,10 @@ public class ChatClient {
             pendingUserMessages.put(assistantTurnId, new PendingUserMessage(userMessage));
             requestMessages = requestMessages(userMessage);
         }
-        replyWithMessages(assistantTurnId, chunker, userMessage, requestMessages, true, false);
+        replyWithMessages(assistantTurnId, chunker, userMessage, requestMessages, true, false, null);
     }
 
-    private void replyToConversationHistory(ChatMessage triggerMessage, long assistantTurnId) {
+    private void replyToConversationHistory(ChatMessage triggerMessage, long assistantTurnId, boolean knownPerson) {
         if (isClosed()) {
             return;
         }
@@ -607,7 +612,7 @@ public class ChatClient {
         synchronized (conversationLock) {
             requestMessages = List.copyOf(conversationHistory);
         }
-        replyWithMessages(assistantTurnId, chunker, triggerMessage, requestMessages, false, true);
+        replyWithMessages(assistantTurnId, chunker, triggerMessage, requestMessages, false, true, knownPerson);
     }
 
     private void replyWithMessages(
@@ -616,7 +621,8 @@ public class ChatClient {
             ChatMessage userMessage,
             List<ChatMessage> requestMessages,
             boolean publishUserMessage,
-            boolean userMessageAlreadyInHistory) {
+            boolean userMessageAlreadyInHistory,
+            Boolean encounterKnownPerson) {
         try {
             if (publishUserMessage) {
                 sendToGroupIfOpen(ServerEvent.userMessage(userMessage.text()));
@@ -624,7 +630,11 @@ public class ChatClient {
             sendToGroupIfOpen(ServerEvent.assistantState("LLM"));
             LanguageModelContext currentLanguageModel = languageModel;
             List<LLM.Message> llmMessages = new ArrayList<>(requestMessages.size() + 1);
-            String currentSystemPrompt = currentLanguageModel.systemPrompt();
+            String currentSystemPrompt = currentLanguageModel.promptTemplates().expandedSystemPrompt();
+            if (encounterKnownPerson != null) {
+                String encounterPrompt = currentLanguageModel.promptTemplates().encounterPrompt(encounterKnownPerson);
+                if (!encounterPrompt.isBlank()) currentSystemPrompt = currentSystemPrompt + "\n" + encounterPrompt;
+            }
             if (!currentSystemPrompt.isBlank()) {
                 llmMessages.add(new LLM.Message("system", currentSystemPrompt));
             }
@@ -666,12 +676,12 @@ public class ChatClient {
     }
 
     /** 1回の応答で LLM とシステムプロンプトの組み合わせを固定します。 */
-    private record LanguageModelContext(LLM llm, String systemPrompt) {
+    private record LanguageModelContext(LLM llm, PromptTemplates promptTemplates) {
         private LanguageModelContext {
             if (llm == null) {
                 throw new IllegalArgumentException("llm must not be null");
             }
-            systemPrompt = systemPrompt == null ? "" : systemPrompt.strip();
+            if (promptTemplates == null) throw new IllegalArgumentException("promptTemplates must not be null");
         }
     }
 

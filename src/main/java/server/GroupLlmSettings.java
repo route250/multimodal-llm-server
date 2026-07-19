@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+
 import json.Json;
 import json.JsonFields;
 import llm.LLM;
@@ -15,53 +16,89 @@ import llm.LlmOpenAI;
 final class GroupLlmSettings {
     private static final String FILE_NAME = "llm.json";
     static final String DEFAULT_BASE_URL = LlmOpenAI.DEFAULT_BASE_URI.toString();
-    static final String DEFAULT_LFM25_MODEL =LlmOpenAI.DEFAULT_MODEL_PATTERN;
-    static final String DEFAULT_LFM25_PROMPT = ChatClient.DEFAULT_SYSTEM_PROMPT;
-    static final String DEFAULT_GEMMA4_MODEL = "gemma[-_]?4[-]?e2b";
-    static final String DEFAULT_GEMMA4_PROMPT = ChatClient.DEFAULT_SYSTEM_PROMPT.replace("りり","ジェマ");
-    static final String DEFAULT_OPENAI_BASE_URL = LlmOpenAI.OPENAI_BASE_URI.toString();
-    static final String DEFAULT_OPENAI_MODEL = LlmOpenAI.OPENAI_MODEL_PATTERN;
-    static final String DEFAULT_OPENAI_PROMPT = ChatClient.DEFAULT_SYSTEM_PROMPT.replace("りり","チャッピー");
+
+    static final String LFM25_MODEL = LlmOpenAI.DEFAULT_MODEL_PATTERN;
+    static final String LFM25_BOT_NAME = "りり";
+    static final String LFM25_PROMPT = """
+            あなたは会話AIの「${BOT_NAME}」です。目の前の相手と親しみのある会話をします。AIの発言だけを出力して下さい。
+            あなたのセリフのみ出力して下さい。
+            """;
+    static final String LFM25_FIRST_MEETING_PROMPT = "挨拶をしてお名前を聞いてみましょう。名前がわかったらツールをコール";
+    static final String LFM25_KNOWN_PERSON_PROMPT = "友人として挨拶してください。";
+    static final String LFM25_UNKNOWN_PERSON_MESSAGE_FORMAT = "だれか他の人が居ます(trackId:${FACE_ID})。";
+    static final String LFM25_KNOWN_PERSON_MESSAGE_FORMAT = "ユーザ名 ${USER_NAME}(trackId:${FACE_ID})と出会いました。";
+
+    static final String GEMMA4_MODEL = "gemma[-_]?4[-]?e2b";
+    static final String GEMMA4_BOT_NAME = "ジェマ";
+    static final String GEMMA4_PROMPT = """
+            あなたは会話AIの「${BOT_NAME}」です。目の前の相手と親しみのある会話をします。AIの発言だけを出力して下さい。
+            あなたのセリフのみ出力して下さい。
+            """;
+    static final String GEMMA4_FIRST_MEETING_PROMPT = "挨拶をしてお名前を聞いてみましょう。名前がわかったらツールをコール";
+    static final String GEMMA4_KNOWN_PERSON_PROMPT = "友人として挨拶してください。";
+    static final String GEMMA4_UNKNOWN_PERSON_MESSAGE_FORMAT = "だれか他の人が居ます(trackId:${FACE_ID})。";
+    static final String GEMMA4_KNOWN_PERSON_MESSAGE_FORMAT = "ユーザ名 ${USER_NAME}(trackId:${FACE_ID})と出会いました。";
+
+    static final String OPENAI_BASE_URL = LlmOpenAI.OPENAI_BASE_URI.toString();
+    static final String OPENAI_MODEL = LlmOpenAI.OPENAI_MODEL_PATTERN;
+    static final String OPENAI_BOT_NAME = "チャッピー";
+    static final String OPENAI_PROMPT = """
+            あなたは会話AIの「${BOT_NAME}」です。目の前の相手と親しみのある会話をします。AIの発言だけを出力して下さい。
+            あなたのセリフのみ出力して下さい。
+            """;
+    static final String OPENAI_FIRST_MEETING_PROMPT = "挨拶をしてお名前を聞いてみましょう。名前がわかったらツールをコール";
+    static final String OPENAI_KNOWN_PERSON_PROMPT = "友人として挨拶してください。";
+    static final String OPENAI_UNKNOWN_PERSON_MESSAGE_FORMAT = "だれか他の人が居ます(trackId:${FACE_ID})。";
+    static final String OPENAI_KNOWN_PERSON_MESSAGE_FORMAT = "ユーザ名 ${USER_NAME}(trackId:${FACE_ID})と出会いました。";
+
     private final String baseUrl;
     private final String model;
     private final String apiKey;
+    private final String botName;
     private final String systemPrompt;
+    private final String firstMeetingPrompt;
+    private final String knownPersonPrompt;
+    private final String unknownPersonMessageFormat;
+    private final String knownPersonMessageFormat;
 
-    GroupLlmSettings(String baseUrl, String model, String apiKey, String systemPrompt) {
+    GroupLlmSettings(
+            String baseUrl, String model, String apiKey, String botName, String systemPrompt,
+            String firstMeetingPrompt, String knownPersonPrompt,
+            String unknownPersonMessageFormat, String knownPersonMessageFormat) {
         this.baseUrl = required(baseUrl, "baseUrl");
         this.model = required(model, "model");
         this.apiKey = text(apiKey);
+        this.botName = text(botName);
         this.systemPrompt = text(systemPrompt);
+        this.firstMeetingPrompt = text(firstMeetingPrompt);
+        this.knownPersonPrompt = text(knownPersonPrompt);
+        this.unknownPersonMessageFormat = text(unknownPersonMessageFormat);
+        this.knownPersonMessageFormat = text(knownPersonMessageFormat);
     }
 
     static GroupLlmSettings defaults(String groupId) {
         if ("group-2".equals(groupId)) {
-            return new GroupLlmSettings(
-                DEFAULT_BASE_URL,
-                DEFAULT_GEMMA4_MODEL,
-                "", DEFAULT_GEMMA4_PROMPT);
+            return new GroupLlmSettings(DEFAULT_BASE_URL, GEMMA4_MODEL, "",
+                GEMMA4_BOT_NAME, GEMMA4_PROMPT, GEMMA4_FIRST_MEETING_PROMPT, GEMMA4_KNOWN_PERSON_PROMPT,
+                GEMMA4_UNKNOWN_PERSON_MESSAGE_FORMAT, GEMMA4_KNOWN_PERSON_MESSAGE_FORMAT
+            );
+        } else if ("group-3".equals(groupId)) {
+            return new GroupLlmSettings(OPENAI_BASE_URL, OPENAI_MODEL, "",
+                OPENAI_BOT_NAME, OPENAI_PROMPT, OPENAI_FIRST_MEETING_PROMPT, OPENAI_KNOWN_PERSON_PROMPT,
+                OPENAI_UNKNOWN_PERSON_MESSAGE_FORMAT, OPENAI_KNOWN_PERSON_MESSAGE_FORMAT
+            );
+        } else {
+            return new GroupLlmSettings(DEFAULT_BASE_URL, LFM25_MODEL, "",
+                LFM25_BOT_NAME, LFM25_PROMPT, LFM25_FIRST_MEETING_PROMPT, LFM25_KNOWN_PERSON_PROMPT,
+                LFM25_UNKNOWN_PERSON_MESSAGE_FORMAT, LFM25_KNOWN_PERSON_MESSAGE_FORMAT
+            );
         }
-        if ("group-3".equals(groupId)) {
-            return new GroupLlmSettings(
-                DEFAULT_OPENAI_BASE_URL,
-                DEFAULT_OPENAI_MODEL,
-                "", DEFAULT_OPENAI_PROMPT);
-        }
-        return new GroupLlmSettings(DEFAULT_BASE_URL, DEFAULT_LFM25_MODEL, "", DEFAULT_LFM25_PROMPT);
     }
 
     static GroupLlmSettings load(Path localRoot, String groupId) throws IOException {
         Path file = file(localRoot, groupId);
-        if (!Files.isRegularFile(file)) {
-            return defaults(groupId);
-        }
-        String json = Files.readString(file, StandardCharsets.UTF_8);
-        GroupLlmSettings defaults = defaults(groupId);
-        return new GroupLlmSettings(
-                defaultIfBlank(JsonFields.stringOrDefault(json, "baseUrl", ""), defaults.baseUrl),
-                defaultIfBlank(JsonFields.stringOrDefault(json, "model", ""), defaults.model),
-                defaultIfBlank(JsonFields.stringOrDefault(json, "apiKey", ""), defaults.apiKey),
-                defaultIfBlank(JsonFields.stringOrDefault(json, "systemPrompt", ""), defaults.systemPrompt));
+        if (!Files.isRegularFile(file)) return defaults(groupId);
+        return fromJson(Files.readString(file, StandardCharsets.UTF_8), groupId);
     }
 
     static GroupLlmSettings fromJson(String json, String groupId) {
@@ -70,11 +107,18 @@ final class GroupLlmSettings {
                 defaultIfBlank(JsonFields.stringOrDefault(json, "baseUrl", ""), defaults.baseUrl),
                 defaultIfBlank(JsonFields.stringOrDefault(json, "model", ""), defaults.model),
                 defaultIfBlank(JsonFields.stringOrDefault(json, "apiKey", ""), defaults.apiKey),
-                defaultIfBlank(JsonFields.stringOrDefault(json, "systemPrompt", ""), defaults.systemPrompt));
+                defaultIfBlank(JsonFields.stringOrDefault(json, "botName", ""), defaults.botName),
+                defaultIfBlank(JsonFields.stringOrDefault(json, "systemPrompt", ""), defaults.systemPrompt),
+                defaultIfBlank(JsonFields.stringOrDefault(json, "firstMeetingPrompt", ""), defaults.firstMeetingPrompt),
+                defaultIfBlank(JsonFields.stringOrDefault(json, "knownPersonPrompt", ""), defaults.knownPersonPrompt),
+                defaultIfBlank(JsonFields.stringOrDefault(json, "unknownPersonMessageFormat", ""), defaults.unknownPersonMessageFormat),
+                defaultIfBlank(JsonFields.stringOrDefault(json, "knownPersonMessageFormat", ""), defaults.knownPersonMessageFormat));
     }
 
-    String systemPrompt() {
-        return systemPrompt;
+    String systemPrompt() { return systemPrompt; }
+    PromptTemplates promptTemplates() {
+        return new PromptTemplates(botName, systemPrompt, firstMeetingPrompt, knownPersonPrompt,
+                unknownPersonMessageFormat, knownPersonMessageFormat);
     }
 
     void save(Path localRoot, String groupId) throws IOException {
@@ -82,88 +126,59 @@ final class GroupLlmSettings {
         Files.createDirectories(target.getParent());
         Path temporary = target.resolveSibling(FILE_NAME + ".tmp");
         Files.writeString(temporary, toStorageJson(defaults(groupId)) + "\n", StandardCharsets.UTF_8);
-        try {
-            Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-        } catch (java.nio.file.AtomicMoveNotSupportedException e) {
-            Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING);
-        }
+        try { Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE); }
+        catch (java.nio.file.AtomicMoveNotSupportedException e) { Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING); }
     }
 
     LLM.Config toConfig() {
         LLM.Config defaults = LlmOpenAI.fromEnvironment();
         URI uri = URI.create(baseUrl);
-        return new LLM.Config(
-                uri,
-                model,
-                defaults.timeout(),
-                resolveApiKey(uri, apiKey, System.getenv("OPENAI_API_KEY")));
+        return new LLM.Config(uri, model, defaults.timeout(), resolveApiKey(uri, apiKey, System.getenv("OPENAI_API_KEY")));
     }
 
     String toJson() {
-        return Json.object(Json.fields(
-                "baseUrl", baseUrl,
-                "model", model,
-                "apiKey", apiKey,
-                "systemPrompt", systemPrompt));
+        return Json.object(Json.fields("baseUrl", baseUrl, "model", model, "apiKey", apiKey,
+                "botName", botName, "systemPrompt", systemPrompt, "firstMeetingPrompt", firstMeetingPrompt,
+                "knownPersonPrompt", knownPersonPrompt, "unknownPersonMessageFormat", unknownPersonMessageFormat,
+                "knownPersonMessageFormat", knownPersonMessageFormat));
     }
 
     String toSettingsJson(GroupLlmSettings defaults) {
-        return Json.object(Json.fields(
-                "baseUrl", baseUrl,
-                "model", model,
-                "apiKey", apiKey,
-                "systemPrompt", systemPrompt,
-                "defaults", Json.raw(defaults.toJson())));
+        return Json.object(Json.fields("baseUrl", baseUrl, "model", model, "apiKey", apiKey,
+                "botName", botName, "systemPrompt", systemPrompt, "firstMeetingPrompt", firstMeetingPrompt,
+                "knownPersonPrompt", knownPersonPrompt, "unknownPersonMessageFormat", unknownPersonMessageFormat,
+                "knownPersonMessageFormat", knownPersonMessageFormat, "defaults", Json.raw(defaults.toJson())));
     }
 
     /** 既定値と同じ項目は空欄にして、変更された項目だけを保存します。 */
     String toStorageJson(GroupLlmSettings defaults) {
-        return Json.object(Json.fields(
-                "baseUrl", same(baseUrl, defaults.baseUrl) ? "" : baseUrl,
-                "model", same(model, defaults.model) ? "" : model,
-                "apiKey", same(apiKey, defaults.apiKey) ? "" : apiKey,
-                "systemPrompt", same(systemPrompt, defaults.systemPrompt) ? "" : systemPrompt));
+        return Json.object(Json.fields("baseUrl", stored(baseUrl, defaults.baseUrl), "model", stored(model, defaults.model),
+                "apiKey", stored(apiKey, defaults.apiKey), "botName", stored(botName, defaults.botName),
+                "systemPrompt", stored(systemPrompt, defaults.systemPrompt),
+                "firstMeetingPrompt", stored(firstMeetingPrompt, defaults.firstMeetingPrompt),
+                "knownPersonPrompt", stored(knownPersonPrompt, defaults.knownPersonPrompt),
+                "unknownPersonMessageFormat", stored(unknownPersonMessageFormat, defaults.unknownPersonMessageFormat),
+                "knownPersonMessageFormat", stored(knownPersonMessageFormat, defaults.knownPersonMessageFormat)));
     }
 
-    private static Path file(Path localRoot, String groupId) {
-        return localRoot.resolve(groupId).resolve(FILE_NAME);
-    }
-
-    private static String text(String value) {
-        return value == null ? "" : value.strip();
-    }
-
+    private static Path file(Path localRoot, String groupId) { return localRoot.resolve(groupId).resolve(FILE_NAME); }
+    private static String text(String value) { return value == null ? "" : value.strip(); }
     private static String required(String value, String name) {
         String result = text(value);
-        if (result.isEmpty()) {
-            throw new IllegalArgumentException(name + " must not be blank");
-        }
+        if (result.isEmpty()) throw new IllegalArgumentException(name + " must not be blank");
         return result;
     }
+    private static String defaultIfBlank(String value, String defaultValue) { return text(value).isEmpty() ? defaultValue : text(value); }
+    private static String stored(String value, String defaultValue) { return text(value).equals(text(defaultValue)) ? "" : value; }
 
     /** OpenAI 公式 API だけは、空欄の設定値をサーバー環境変数で補完します。 */
     static String resolveApiKey(URI baseUri, String configuredApiKey, String environmentApiKey) {
         String configured = text(configuredApiKey);
-        if (!configured.isEmpty()) {
-            return configured;
-        }
+        if (!configured.isEmpty()) return configured;
         String host = baseUri.getHost();
-        if (host == null || !(host.equalsIgnoreCase("openai.com") || host.toLowerCase().endsWith(".openai.com"))) {
-            return "";
-        }
+        if (host == null || !(host.equalsIgnoreCase("openai.com") || host.toLowerCase().endsWith(".openai.com"))) return "";
         String environment = text(environmentApiKey);
-        if (environment.isEmpty()) {
-            throw new IllegalArgumentException("OPENAI_API_KEY must be set when API KEY is empty for an openai.com Base URL");
-        }
+        if (environment.isEmpty()) throw new IllegalArgumentException("OPENAI_API_KEY must be set when API KEY is empty for an openai.com Base URL");
         return environment;
-    }
-
-    private static String defaultIfBlank(String value, String defaultValue) {
-        String result = text(value);
-        return result.isEmpty() ? defaultValue : result;
-    }
-
-    private static boolean same(String left, String right) {
-        return text(left).equals(text(right));
     }
 }
