@@ -1,6 +1,7 @@
 package audio.tts;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.sun.net.httpserver.HttpServer;
@@ -33,14 +34,21 @@ class Lfm2AudioTextToSpeechTest {
                     Duration.ofSeconds(5)));
             List<AudioDelta> deltas = new ArrayList<>();
 
-            textToSpeech.synthesizeStreaming("こんにちは。", deltas::add);
+            textToSpeech.synthesizeStreaming("こんにちは😃😄。", deltas::add);
 
             assertEquals(1, deltas.size());
             assertEquals(new AudioDelta("AAAA", "pcm", 24000), deltas.getFirst());
             assertTrue(body.get().contains("\"stream\":true"));
             assertTrue(body.get().contains("\"content\":\"Perform TTS.\""));
             assertTrue(body.get().contains("\"content\":\"こんにちは。\""));
+            assertFalse(body.get().contains("😃"));
+            assertFalse(body.get().contains("😄"));
         }
+    }
+
+    @Test
+    void removesEmojiCodePointsFromSpeechText() {
+        assertEquals("顔を認識しました。", Lfm2AudioTextToSpeech.removeEmoji("顔😃を認識☀️しました。👨‍👩‍👧1️⃣"));
     }
 
     @Test

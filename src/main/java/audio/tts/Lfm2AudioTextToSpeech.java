@@ -51,7 +51,10 @@ public class Lfm2AudioTextToSpeech implements TextToSpeech {
 
     @Override
     public void synthesizeStreaming(String text, Consumer<AudioDelta> onDelta) {
-        String speechText = requireText(text, "text");
+        String speechText = removeEmoji(requireText(text, "text"));
+        if (speechText.isBlank()) {
+            return;
+        }
         HttpRequest request = HttpRequest.newBuilder(endpoint)
                 .timeout(timeout)
                 .header("Content-Type", "application/json")
@@ -73,6 +76,49 @@ public class Lfm2AudioTextToSpeech implements TextToSpeech {
             Thread.currentThread().interrupt();
             throw new TextToSpeechException("interrupted while requesting lfm2-audio-server at " + endpoint, e);
         }
+    }
+
+    /**
+     * TTS エンジンが発話できない絵文字と、絵文字の表示を構成するコードポイントを除去します。
+     */
+    static String removeEmoji(String text) {
+        StringBuilder result = new StringBuilder(text.length());
+        int[] codePoints = text.codePoints().toArray();
+        for (int index = 0; index < codePoints.length; index++) {
+            if (!isEmojiCodePoint(codePoints[index])
+                    && !isEmojiJoiner(codePoints, index)
+                    && !isKeycapBase(codePoints, index)) {
+                result.appendCodePoint(codePoints[index]);
+            }
+        }
+        return result.toString();
+    }
+
+    private static boolean isEmojiCodePoint(int codePoint) {
+        return (codePoint >= 0x1F000 && codePoint <= 0x1FAFF)
+                || (codePoint >= 0x2600 && codePoint <= 0x27BF)
+                || codePoint == 0xFE0F
+                || codePoint == 0x20E3
+                || (codePoint >= 0xE0020 && codePoint <= 0xE007F);
+    }
+
+    private static boolean isEmojiJoiner(int[] codePoints, int index) {
+        return codePoints[index] == 0x200D
+                && ((index > 0 && isEmojiCodePoint(codePoints[index - 1]))
+                        || (index + 1 < codePoints.length && isEmojiCodePoint(codePoints[index + 1])));
+    }
+
+    private static boolean isKeycapBase(int[] codePoints, int index) {
+        int codePoint = codePoints[index];
+        if (!((codePoint >= '0' && codePoint <= '9') || codePoint == '#' || codePoint == '*')) {
+            return false;
+        }
+        if (index + 1 < codePoints.length && codePoints[index + 1] == 0x20E3) {
+            return true;
+        }
+        return index + 2 < codePoints.length
+                && codePoints[index + 1] == 0xFE0F
+                && codePoints[index + 2] == 0x20E3;
     }
 
     private String requestBody(String text) {
