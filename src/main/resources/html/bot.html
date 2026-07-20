@@ -553,12 +553,12 @@
 </main>
 
 <script type="module">
-    import * as faceapi from "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/dist/face-api.esm.js";
+    import * as faceapi from "/vendor/face-api/face-api.esm.js";
     import { ChatAudio } from "/js/chat-audio.js";
     import { ChatEvents } from "/js/chat-events.js";
     import { drawFace } from "/js/face.js";
 
-    const modelUrl = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/model/";
+    const modelUrl = "/vendor/face-api/model/";
     const sessionId = crypto.randomUUID();
     const groupInput = document.getElementById("group");
     const openSettings = document.getElementById("open-settings");
