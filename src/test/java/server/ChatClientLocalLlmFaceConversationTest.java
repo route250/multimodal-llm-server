@@ -16,6 +16,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -33,6 +34,7 @@ import llm.LlmOpenAI;
  * 実際のローカル LLM を使い、顔認識から始まる ChatClient の複数ターン会話を検証します。
  */
 class ChatClientLocalLlmFaceConversationTest {
+    private static final int RETRY_COUNT = 10;
     private static final URI DEFAULT_BASE_URI = URI.create("http://127.0.0.1:8767/v1");
     private static final Duration LLM_TIMEOUT = Duration.ofSeconds(120);
     private static final String MODEL_PATTERN = "LFM2\\.5.*JP";
@@ -44,31 +46,42 @@ class ChatClientLocalLlmFaceConversationTest {
             throws Exception {
         URI baseUri = localLlmBaseUri();
         assumeLocalLlmAvailable(baseUri);
-        FaceDB faceDB = new FaceDB(tempDir);
+        repeatTenTimes(tempDir, attempt -> {
+            FaceDB faceDB = new FaceDB(tempDir);
 
-        try (MlServer server = new MlServer(0, faceDB)) {
-            ChatGroup group = new ChatGroup("group-local-llm-test", server);
-            ChatClient listener = group.join("listener");
-            ChatClient client = newClient(group, baseUri);
-            listener.events().clear();
+            try (MlServer server = new MlServer(0, faceDB)) {
+                ChatGroup group = new ChatGroup("group-local-llm-test", server);
+                ChatClient listener = group.join("listener");
+                ChatClient client = newClient(group, baseUri);
+                listener.events().clear();
 
-            FaceEventResult result = client.handleFacePresence(
-                    faceDB,
-                    faceRequest("person-entered", UNKNOWN_BROWSER_TRACK_ID, descriptor(0.1)));
-            assertFalse(result.known());
+                FaceEventResult result = client.handleFacePresence(
+                        faceDB,
+                        faceRequest("person-entered", UNKNOWN_BROWSER_TRACK_ID, descriptor(0.1)));
+                assertFalse(result.known());
 
-            String greeting = awaitAssistantTurn(client, listener);
-            assertTrue(containsGreeting(greeting), () -> "挨拶がありません: " + greeting);
-            assertTrue(greeting.contains("名前"), () -> "名前を尋ねていません: " + greeting);
+                String greeting = awaitAssistantTurn(client, listener);
+                System.out.println("Greeting:"+greeting);
+                assertTrue(containsGreeting(greeting), () -> "挨拶がありません: " + greeting);
+                assertTrue(greeting.contains("名前"), () -> "名前を尋ねていません: " + greeting);
+                assertFalse(greeting.contains("trackId"), () -> "trackIdを出力しています:" + greeting );
+                assertFalse(greeting.contains("track-0"), () -> "trackIdを出力しています:" + greeting );
+                assertFalse(greeting.contains("trak-0"), () -> "trackIdを出力しています:" + greeting );
 
-            client.handle(textRequest("私の名前は太郎です。"));
-            String reply = awaitAssistantTurn(client, listener);
-
-            String personsJson = Files.readString(tempDir.resolve("persons.json"), StandardCharsets.UTF_8);
-            assertTrue(personsJson.contains("\"name\":\"太郎\""), personsJson);
-            assertFalse(reply.isBlank(), "名前登録後の会話応答がありません");
-            assertTrue(reply.contains("太郎"), () -> "登録名を使って会話を継続していません: " + reply);
-        }
+                client.handle(textRequest("私の名前は太郎です。"));
+                String reply = awaitAssistantTurn(client, listener);
+                System.out.println("Reply:"+reply);
+                Path x = tempDir.resolve("persons.json" );
+                assertTrue( Files.isRegularFile(x), "名前が登録されてません。" );
+                String personsJson = Files.readString(tempDir.resolve("persons.json"), StandardCharsets.UTF_8);
+                assertTrue(personsJson.contains("\"name\":\"太郎\""), "名前が登録されてません。"+personsJson);
+                assertFalse(reply.isBlank(), "名前登録後の会話応答がありません");
+                assertFalse(reply.contains("trackId"), () -> "trackIdを出力しています:" + reply );
+                assertFalse(reply.contains("track-0"), () -> "trackIdを出力しています:" + reply );
+                assertFalse(reply.contains("trak-0"), () -> "trackIdを出力しています:" + reply );
+                assertTrue(reply.contains("太郎"), () -> "登録名を使って会話を継続していません: " + reply);
+            }
+        });
     }
 
     @Test
@@ -76,35 +89,83 @@ class ChatClientLocalLlmFaceConversationTest {
             throws Exception {
         URI baseUri = localLlmBaseUri();
         assumeLocalLlmAvailable(baseUri);
-        FaceDB faceDB = new FaceDB(tempDir);
+        repeatTenTimes(tempDir, attempt -> {
+            FaceDB faceDB = new FaceDB(tempDir);
 
-        try (MlServer server = new MlServer(0, faceDB)) {
-            String registeredTrackId = faceDB.createTrackId();
-            faceDB.register(registeredTrackId, descriptor(0.2), jpegDataUrl());
-            faceDB.assign(registeredTrackId, "花子");
+            try (MlServer server = new MlServer(0, faceDB)) {
+                String registeredTrackId = faceDB.createTrackId();
+                faceDB.register(registeredTrackId, descriptor(0.2), jpegDataUrl());
+                faceDB.assign(registeredTrackId, "花子");
 
-            ChatGroup group = new ChatGroup("group-local-llm-test", server);
-            ChatClient listener = group.join("listener");
-            ChatClient client = newClient(group, baseUri);
-            listener.events().clear();
+                ChatGroup group = new ChatGroup("group-local-llm-test", server);
+                ChatClient listener = group.join("listener");
+                ChatClient client = newClient(group, baseUri);
+                listener.events().clear();
 
-            FaceEventResult result = client.handleFacePresence(
-                    faceDB,
-                    faceRequest("person-entered", KNOWN_BROWSER_TRACK_ID, descriptor(0.2)));
-            assertTrue(result.known());
+                FaceEventResult result = client.handleFacePresence(
+                        faceDB,
+                        faceRequest("person-entered", KNOWN_BROWSER_TRACK_ID, descriptor(0.2)));
+                assertTrue(result.known());
 
-            String greeting = awaitAssistantTurn(client, listener);
-            assertTrue(containsGreeting(greeting), () -> "挨拶がありません: " + greeting);
-            assertTrue(greeting.contains("花子"), () -> "登録名を使っていません: " + greeting);
-            assertFalse(greeting.contains("名前"), () -> "登録済みユーザーへ名前を尋ねています: " + greeting);
+                String greeting = awaitAssistantTurn(client, listener);
+                assertTrue(containsGreeting(greeting), () -> "挨拶がありません: " + greeting);
+                assertTrue(greeting.contains("花子"), () -> "登録名を使っていません: " + greeting);
+                assertFalse(greeting.contains("名前"), () -> "登録済みユーザーへ名前を尋ねています: " + greeting);
+                assertFalse(greeting.contains("trackId"), () -> "trackIdを出力しています:" + greeting );
+                assertFalse(greeting.contains("track-0"), () -> "trackIdを出力しています:" + greeting );
+                assertFalse(greeting.contains("trak-0"), () -> "trackIdを出力しています:" + greeting );
 
-            client.handle(textRequest("今日は元気です。りりは元気ですか？"));
-            String reply = awaitAssistantTurn(client, listener);
+                client.handle(textRequest("今日は元気です。りりは元気ですか？"));
+                String reply = awaitAssistantTurn(client, listener);
 
-            assertFalse(reply.isBlank(), "ユーザー回答後の会話応答がありません");
-            assertFalse(Files.exists(tempDir.resolve("trak-000001").resolve("trak-000001.json")),
-                    "登録済みユーザーに対して名前登録ツールを呼び出しています");
+                assertFalse(reply.isBlank(), "ユーザー回答後の会話応答がありません");
+                assertFalse(Files.exists(tempDir.resolve("trak-000001").resolve("trak-000001.json")),
+                        "登録済みユーザーに対して名前登録ツールを呼び出しています");
+                assertFalse(reply.contains("trackId"), () -> "trackIdを出力しています:" + reply );
+                assertFalse(reply.contains("track-0"), () -> "trackIdを出力しています:" + reply );
+                assertFalse(reply.contains("trak-0"), () -> "trackIdを出力しています:" + reply );
+            }
+        });
+    }
+
+    /** 10 回すべてに合格することを確認し、不合格の試行内容を標準出力へ記録します。 */
+    private static void repeatTenTimes(Path tempDir, ThrowingAttempt attempt) throws Exception {
+        List<String> failures = new ArrayList<>();
+        for (int index = 1; index <= RETRY_COUNT; index++) {
+            resetTempDir(tempDir);
+            try {
+                attempt.run(index);
+            } catch (Throwable failure) {
+                String detail = "試行 " + index + "/" + RETRY_COUNT + " の不合格:\n"
+                        + failure;
+                System.out.println(detail);
+                //failure.printStackTrace(System.out);
+                failures.add(detail);
+            }
         }
+        assertTrue(failures.isEmpty(), () -> String.join("\n\n", failures));
+    }
+
+    /** 試行ごとに顔データベースを初期状態から作り直します。 */
+    private static void resetTempDir(Path tempDir) throws IOException {
+        try (var files = Files.walk(tempDir)) {
+            files.sorted(Comparator.reverseOrder())
+                    .filter(path -> !path.equals(tempDir))
+                    .forEach(path -> {
+                        try {
+                            Files.delete(path);
+                        } catch (IOException e) {
+                            throw new java.io.UncheckedIOException(e);
+                        }
+                    });
+        } catch (java.io.UncheckedIOException e) {
+            throw e.getCause();
+        }
+    }
+
+    @FunctionalInterface
+    private interface ThrowingAttempt {
+        void run(int index) throws Exception;
     }
 
     private static ChatClient newClient(ChatGroup group, URI baseUri) {

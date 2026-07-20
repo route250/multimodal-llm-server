@@ -15,6 +15,8 @@ import java.time.Duration;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
+import llm.tools.PersonToolABC;
+
 /** 起動中の llama.cpp に対する LlmOpenAI のツール呼び出しを検証します。 */
 class LlmOpenAILlamaCppTest {
     private static final URI DEFAULT_BASE_URI = URI.create("http://localhost:8767/v1");
@@ -27,7 +29,7 @@ class LlmOpenAILlamaCppTest {
         LlmOpenAI model = new LlmOpenAI(new LLM.Config(
                 baseUri, "LFM2\\.5", Duration.ofSeconds(120), ""));
         List<LLM.Message> response = model.call(List.of(
-                new LLM.Message("system", "名前を名乗ったらassign_face_nameツールを呼び出してください。"),
+                new LLM.Message("system", "名前を名乗ったら"+PersonToolABC.NAME+"ツールを呼び出してください。"),
                 new LLM.Message("user", "trackIdはtrak-000001です。私の名前は太郎です。")),
                 List.of(new LlmOpenAITest.RecordingTool()));
 

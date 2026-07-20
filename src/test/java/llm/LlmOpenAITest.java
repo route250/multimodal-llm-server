@@ -144,7 +144,7 @@ class LlmOpenAITest {
                     respond(exchange, sse("{\"type\":\"response.output_item.done\",\"item\":{"+
                             "\"id\":\"fc_1\",\"type\":\"function_call\",\"status\":\"completed\","+
                             "\"arguments\":\"{\\\"trackId\\\":\\\"trak-000001\\\",\\\"name\\\":\\\"太郎\\\"}\","+
-                            "\"call_id\":\"call_1\",\"name\":\"assign_face_name\"}}"));
+                            "\"call_id\":\"call_1\",\"name\":\""+PersonToolABC.NAME+"\"}}"));
                 } else {
                     secondBody.set(body);
                     respond(exchange, sse("{\"type\":\"response.output_text.delta\",\"delta\":\"登録しました\"}"));

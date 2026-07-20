@@ -20,13 +20,13 @@ final class GroupLlmSettings {
     static final String LFM25_MODEL = LlmOpenAI.DEFAULT_MODEL_PATTERN;
     static final String LFM25_BOT_NAME = "りり";
     static final String LFM25_PROMPT = """
-            あなたは会話AIの「${BOT_NAME}」です。目の前の相手と親しみのある会話をします。AIの発言だけを出力して下さい。
+            あなたの名前は「${BOT_NAME}」です。ユーザと親しみのある会話をして下さい。AIの発言だけを出力して下さい。
             あなたのセリフのみ出力して下さい。
             """;
-    static final String LFM25_FIRST_MEETING_PROMPT = "挨拶をしてお名前を聞いてみましょう。名前がわかったらツールをコール";
-    static final String LFM25_KNOWN_PERSON_PROMPT = "友人として挨拶してください。";
-    static final String LFM25_UNKNOWN_PERSON_MESSAGE_FORMAT = "だれか他の人が居ます(trackId:${FACE_ID})。";
-    static final String LFM25_KNOWN_PERSON_MESSAGE_FORMAT = "ユーザ名 ${USER_NAME}(trackId:${FACE_ID})と出会いました。";
+    static final String LFM25_FIRST_MEETING_PROMPT = "だれか他のユーザが居たら、最初に、挨拶をしてお名前を聞いて下さい。たとえば「あなたのお名前を教えて下さい」「お名前はなんですか？」など";
+    static final String LFM25_KNOWN_PERSON_PROMPT = "ユーザと友人として挨拶して下さい。";
+    static final String LFM25_UNKNOWN_PERSON_MESSAGE_FORMAT = "だれか他のユーザが居ます。trackId:${FACE_ID})ですが、これはツールコールにだけ使用して会話には使わないこと。";
+    static final String LFM25_KNOWN_PERSON_MESSAGE_FORMAT = "ユーザ名 ${USER_NAME}(trackId:${FACE_ID})と出会いました。trackIdは、会話には使わないこと。";
 
     static final String GEMMA4_MODEL = "gemma[-_]?4[-]?e2b";
     static final String GEMMA4_BOT_NAME = "ジェマ";

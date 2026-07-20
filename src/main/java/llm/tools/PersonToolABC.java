@@ -7,7 +7,6 @@ import com.openai.core.JsonValue;
 import com.openai.models.responses.FunctionTool;
 import com.openai.models.responses.ResponseFunctionToolCall;
 
-import audio.AudioDiagnostics;
 import json.Json;
 import json.JsonFields;
 import llm.LLM;
@@ -15,12 +14,14 @@ import llm.LLM;
 public abstract class PersonToolABC extends LLM.Tool {
 
     /** 人物名を追跡 ID に関連付ける Function Tool の識別子です。 */
-    public static final String NAME = "assign_face_name";
+    public static final String NAME = "assign_user_name";
+    public static final String PARAM_TRACK_ID="trackId";
+    public static final String PARAM_NAME="userName";
 
     public PersonToolABC() {
         super(
             NAME,
-            "trackIdに人物名を登録します。ユーザーが自分の名前を名乗ったときに呼び出します。"
+            "trackIdに対応するユーザ名を覚えます。ユーザーが名前を名乗ったときに呼び出します。"
         );
     }
 
@@ -29,15 +30,15 @@ public abstract class PersonToolABC extends LLM.Tool {
         return FunctionTool.Parameters.builder()
             .putAdditionalProperty("type", JsonValue.from("object"))
             .putAdditionalProperty("properties", JsonValue.from(Map.of(
-                    "trackId", Map.of(
+                    PARAM_TRACK_ID, Map.of(
                             "type", "string",
-                            "description", "FaceDB が採番した追跡ID。形式: trak-000000"),
-                    "name", Map.of(
+                            "description", "ユーザのID"),
+                    PARAM_NAME, Map.of(
                         "type", "string",
-                        "description", "覚える名前。禁止:不明,unknown"
+                        "description", "覚えるユーザ名。禁止:不明,unknown"
                     )
             )))
-            .putAdditionalProperty("required", JsonValue.from(List.of("trackId", "name")))
+            .putAdditionalProperty("required", JsonValue.from(List.of(PARAM_TRACK_ID, PARAM_NAME)))
             .putAdditionalProperty("additionalProperties", JsonValue.from(false))
             .build();
     }
@@ -45,20 +46,29 @@ public abstract class PersonToolABC extends LLM.Tool {
     @Override
     public final String exec(ResponseFunctionToolCall toolCall, String arguments ) {
         String callId = toolCall.callId();
-        String trackId = JsonFields.stringOrDefault(arguments, "trackId", "").trim();
-        String name = JsonFields.stringOrDefault(arguments, "name", "").trim();
+        String trackId = JsonFields.stringOrDefault(arguments, PARAM_TRACK_ID, "").trim();
+        String name = JsonFields.stringOrDefault(arguments, PARAM_NAME, "").trim();
         if (!isAssistantTurnActive()) {
             this.diag( callId, trackId, name, "ignored", "assistant-turn-inactive", null);
             return Json.object(Json.fields(
                     "status", "failed",
                     "error", "assistant turn is no longer active"));
         }
-
-        if (trackId.isBlank() || name.isBlank() || "unknown".equalsIgnoreCase(name) || "不明".equals(name)) {
-            this.diag(callId,trackId,name,"ignored","invalid-argument",null);
+        String reason = "";
+        if( trackId==null || trackId.isBlank() ) {
+            reason = reason+PARAM_TRACK_ID+"がブランクです。";
+        }
+        if( name==null || name.isBlank() ) {
+            reason = reason+PARAM_NAME+"がブランクです。";
+        }
+        if( "unknown".equalsIgnoreCase(name) || "不明".equals(name) ) {
+            reason = reason+PARAM_NAME+"が不正です。";
+        }
+        if (reason.length()>0) {
+            this.diag(callId,trackId,name,"ignored",reason,null);
             return Json.object(Json.fields(
                     "status", "failed",
-                    "error", "ユーザに名前を聞いてね。",
+                    "error", reason,
                     "trackId", trackId,
                     "name", name));
         }
@@ -77,7 +87,7 @@ public abstract class PersonToolABC extends LLM.Tool {
                 "status", "ok",
                 "trackId", trackId,
                 "name", name,
-                "message", "覚えました。’"+name+"'さんとの会話を進めてください。"
+                "message", "’"+name+"'さんを覚えました。"
         ));
     }
     /**
