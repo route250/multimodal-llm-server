@@ -3,9 +3,6 @@ package llm;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import com.openai.core.JsonValue;
-import com.openai.models.responses.FunctionTool;
-import com.openai.models.responses.ResponseFunctionToolCall;
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
 import java.io.OutputStream;
@@ -14,8 +11,8 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
+import llm.tools.PersonToolABC;
 import org.junit.jupiter.api.Test;
 
 /** LlmOpenAI のモデル解決、通常呼び出し、ストリーミング、ツール呼び出しを検証します。 */
@@ -73,9 +70,11 @@ class LlmOpenAITest {
                     List.of(new LLM.Message("user", "太郎を登録して")), List.of(tool));
 
             assertEquals("登録しました", response.get(0).message);
-            assertEquals("{\"trackId\":\"trak-000001\",\"name\":\"太郎\"}", tool.arguments.get());
+            assertEquals("trak-000001", tool.trackId.get());
+            assertEquals("太郎", tool.name.get());
             assertTrue(secondBody.get().contains("\"type\":\"function_call\""));
             assertTrue(secondBody.get().contains("\"type\":\"function_call_output\""));
+            assertTrue(secondBody.get().contains("\\\"status\\\":\\\"ok\\\""));
         }
     }
 
@@ -92,29 +91,24 @@ class LlmOpenAITest {
         return body.append("data: [DONE]\n\n").toString();
     }
 
-    static final class RecordingTool extends LLM.Tool {
-        private final AtomicReference<String> arguments = new AtomicReference<>();
+    /** PersonToolABC の実際の入力検証と結果形式を使うテスト用実装です。 */
+    static final class RecordingTool extends PersonToolABC {
+        private final AtomicReference<String> trackId = new AtomicReference<>();
+        private final AtomicReference<String> name = new AtomicReference<>();
 
         RecordingTool() {
-            super("assign_face_name", "人物名を登録します");
+            super();
         }
 
         @Override
-        public FunctionTool.Parameters parameters() {
-            return FunctionTool.Parameters.builder()
-                    .putAdditionalProperty("type", JsonValue.from("object"))
-                    .putAdditionalProperty("properties", JsonValue.from(Map.of(
-                            "trackId", Map.of("type", "string"),
-                            "name", Map.of("type", "string"))))
-                    .putAdditionalProperty("required", JsonValue.from(List.of("trackId", "name")))
-                    .putAdditionalProperty("additionalProperties", JsonValue.from(false))
-                    .build();
+        protected boolean isAssistantTurnActive() {
+            return true;
         }
 
         @Override
-        public String exec(ResponseFunctionToolCall call, String arguments) {
-            this.arguments.set(arguments);
-            return "{\"status\":\"ok\"}";
+        protected void assignFaceName(String trackId, String name) {
+            this.trackId.set(trackId);
+            this.name.set(name);
         }
     }
 

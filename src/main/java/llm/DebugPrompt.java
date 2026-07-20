@@ -2,14 +2,8 @@ package llm;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 
-import com.openai.core.JsonValue;
-import com.openai.models.responses.FunctionTool;
-import com.openai.models.responses.ResponseFunctionToolCall;
-
-import json.Json;
-import json.JsonFields;
+import llm.tools.PersonToolABC;
 import llm.tools.WeatherTool;
 
 public class DebugPrompt {
@@ -76,53 +70,22 @@ public class DebugPrompt {
             }
         }
     }
-    public static class PersonTool extends LLM.Tool {
+    public static class PersonTool extends PersonToolABC {
 
         public PersonTool() {
-            super(
-                "persons",
-                "ユーザから聞いた名前を覚える。"
-            );
+            super();
         }
 
         @Override
-        public FunctionTool.Parameters parameters() {
-            return FunctionTool.Parameters.builder()
-                .putAdditionalProperty("type", JsonValue.from("object"))
-                .putAdditionalProperty("properties", JsonValue.from(Map.of(
-                        "trackId", Map.of(
-                                "type", "string",
-                                "description", "人物映像の追跡ID track-999999"),
-                        "name", Map.of(
-                            "type", "string",
-                            "description", "覚える名前。禁止:不明,unknown"
-                        )
-                )))
-                .putAdditionalProperty("required", JsonValue.from(List.of("trackId", "name")))
-                .putAdditionalProperty("additionalProperties", JsonValue.from(false))
-                .build();
+        protected void assignFaceName(String trackId, String name) {
+            System.out.println("### Called "+trackId+" = "+name);
         }
-
         @Override
-        public String exec(ResponseFunctionToolCall functionCall, String arguments ) {
-            System.out.println("###CALLED### "+this.name);
-            String trackId = JsonFields.stringOrDefault(arguments, "trackId", "").trim();
-            String name = JsonFields.stringOrDefault(arguments, "name", "").trim();
-            if (trackId.isBlank() || name.isBlank() || "unknown".equalsIgnoreCase(name) || "不明".equals(name)) {
-                return Json.object(Json.fields(
-                        "status", "failed",
-                        "error", "ユーザに名前を聞いてね。",
-                        "trackId", trackId,
-                        "name", name));
-            }
-            System.out.printf("register person: trackId=%s, name=%s%n", trackId, name);
-            return Json.object(Json.fields(
-                    "status", "ok",
-                    "trackId", trackId,
-                    "name", name,
-                    "message", "覚えました。’"+name+"'さんとの会話を進めてください。"
-            ));
+        protected void diag(String callId, String trackId, String name, String status, String reason, Throwable error) {
+            String errorMessage = error == null ? "" : error.getMessage();
+            System.err.printf(
+                    "[PersonTool] callId=%s trackId=%s name=%s status=%s reason=%s error=%s%n",
+                    callId, trackId, name, status, reason, errorMessage);
         }
-
     }
 }

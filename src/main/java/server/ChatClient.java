@@ -16,10 +16,6 @@ import java.util.concurrent.Future;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.LinkedBlockingQueue;
 
-import com.openai.core.JsonValue;
-import com.openai.models.responses.FunctionTool;
-import com.openai.models.responses.ResponseFunctionToolCall;
-
 import audio.AudioDiagnostics;
 import audio.AudioProcessor;
 import audio.AudioProcessor.SpeechStateChange;
@@ -37,10 +33,10 @@ import audio.vad.smartturn.LazySmartTurnV3;
 import facedb.FaceDB;
 import facedb.FacePossibility;
 import json.Json;
-import json.JsonFields;
 import llm.ChatMessage;
 import llm.LLM;
 import llm.LlmOpenAI;
+import llm.tools.PersonToolABC;
 import llm.LanguageModelException;
 import model.download.SmartTurnV3ModelDownloader;
 import onnx.OnnxModelException;
@@ -1011,95 +1007,39 @@ public class ChatClient {
     private record PendingAssistantChunk(ChatMessage userMessage, boolean userMessageAlreadyInHistory, String text) {
     }
 
-    public class PersonTool extends LLM.Tool {
-
+    private class PersonTool extends PersonToolABC {
         private final long assistantTurnId;
-
-        public PersonTool(long assistantTurnId) {
-            super(
-                "assign_face_name",
-                "trackIdに人物名を登録します。ユーザーが自分の名前を名乗ったときに呼び出します。"
-            );
+        public PersonTool( long assistantTurnId ) {
+            super();
             this.assistantTurnId = assistantTurnId;
         }
 
         @Override
-        public FunctionTool.Parameters parameters() {
-            return FunctionTool.Parameters.builder()
-                .putAdditionalProperty("type", JsonValue.from("object"))
-                .putAdditionalProperty("properties", JsonValue.from(Map.of(
-                        "trackId", Map.of(
-                                "type", "string",
-                                "description", "FaceDB が採番した追跡ID。形式: trak-000000"),
-                        "name", Map.of(
-                            "type", "string",
-                            "description", "覚える名前。禁止:不明,unknown"
-                        )
-                )))
-                .putAdditionalProperty("required", JsonValue.from(List.of("trackId", "name")))
-                .putAdditionalProperty("additionalProperties", JsonValue.from(false))
-                .build();
+        protected boolean isAssistantTurnActive() {
+            return ChatClient.this.isAssistantTurnActive(assistantTurnId);
         }
 
         @Override
-        public String exec(ResponseFunctionToolCall toolCall, String arguments ) {
-            AudioDiagnostics.log("llm-tool-call", diagnosticsContext, Json.fields(
-                    "assistantTurnId", assistantTurnId,
-                    "toolName", toolCall.name(),
-                    "callId", toolCall.callId()));
-
-            if (!isAssistantTurnActive(assistantTurnId)) {
-                AudioDiagnostics.log("llm-tool-call-ignored", diagnosticsContext, Json.fields(
-                        "assistantTurnId", assistantTurnId,
-                        "toolName", toolCall.name(),
-                        "reason", "assistant-turn-inactive"));
-                return Json.object(Json.fields(
-                        "status", "failed",
-                        "error", "assistant turn is no longer active"));
-            }
-
-            String trackId = JsonFields.stringOrDefault(arguments, "trackId", "").trim();
-            String name = JsonFields.stringOrDefault(arguments, "name", "").trim();
-            if (trackId.isBlank() || name.isBlank() || "unknown".equalsIgnoreCase(name) || "不明".equals(name)) {
-                AudioDiagnostics.log("llm-tool-call-ignored", diagnosticsContext, Json.fields(
-                        "assistantTurnId", assistantTurnId,
-                        "toolName", toolCall.name(),
-                        "reason", "invalid-argument",
-                        "trackId", trackId,
-                        "name", name));
-                return Json.object(Json.fields(
-                        "status", "failed",
-                        "error", "ユーザに名前を聞いてね。",
-                        "trackId", trackId,
-                        "name", name));
-            }
-            try {
-                chatGroup.assignFaceName(trackId, name);
-            } catch (IllegalArgumentException | IllegalStateException e) {
-                AudioDiagnostics.log("llm-tool-call-ignored", diagnosticsContext, Json.fields(
-                    "assistantTurnId", assistantTurnId,
-                    "toolName", toolCall.name(),
-                    "reason", "assign-failed",
+        protected void assignFaceName(String trackId, String name) {
+            ChatClient.this.chatGroup.assignFaceName(trackId, name);
+        }
+        @Override
+        protected void diag(String callId, String trackId, String name, String status, String reason, Throwable error) {
+            if( ChatClient.this.diagnosticsContext!=null ) {
+                Map<String,Object> jsonObject = Json.fields(
+                    "callId", callId,
                     "trackId", trackId,
                     "name", name,
-                    "error", e.getMessage()));
-                return Json.object(Json.fields(
-                        "status", "failed",
-                        "error", e.getMessage(),
-                        "trackId", trackId,
-                        "name", name));
+                    "status", status
+                );
+                if( reason!=null && reason.length()>0 ) {
+                    jsonObject.put("reason",reason);
+                }
+                if( error!=null ) {
+                    jsonObject.put("error", error.getMessage() );
+                }
+                AudioDiagnostics.log("face-name-assigned", diagnosticsContext, jsonObject);
             }
-            AudioDiagnostics.log("face-name-assigned", diagnosticsContext, Json.fields(
-                    "assistantTurnId", assistantTurnId,
-                    "trackId", trackId,
-                    "name", name));
-            return Json.object(Json.fields(
-                    "status", "ok",
-                    "trackId", trackId,
-                    "name", name,
-                    "message", "覚えました。’"+name+"'さんとの会話を進めてください。"
-            ));
         }
     }
-
 }

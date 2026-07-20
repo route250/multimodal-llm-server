@@ -110,6 +110,7 @@ public class LlmOpenAI extends LLM {
                     .apiKey(this.apikey)
                     .build();
 
+            List<LlmLogger.ToolResult> toolResults = new ArrayList<>();
             boolean called = true;
             while(called) {
                 called = false;
@@ -129,12 +130,16 @@ public class LlmOpenAI extends LLM {
                 }
                 ResponseCreateParams request = builder.build();
                 StringBuilder output_content = new StringBuilder();
+                LlmLogger.Exchange logger = LlmLogger.saveRequest(
+                        responsesEndpoint(), model, reasoning, messages, tools == null ? List.of() : tools,
+                        List.copyOf(toolResults));
                 try (StreamResponse<ResponseStreamEvent> stream = client.responses().createStreaming(request)) {
                     for( Iterator<ResponseStreamEvent> it = stream.stream().iterator(); it.hasNext(); ) {
                         ResponseStreamEvent event = it.next();
                         if (event.isOutputTextDelta()) {
                             String delta = event.asOutputTextDelta().delta();
                             output_content.append(delta);
+                            logger.textDelta(delta);
                             if( callback != null ) {
                                 callback.accept(delta);
                             }
@@ -143,6 +148,7 @@ public class LlmOpenAI extends LLM {
                             var output = event.asOutputItemDone().item();
                             if (output.isFunctionCall()) {
                                 ResponseFunctionToolCall functionCall = output.asFunctionCall();
+                                logger.toolCall(functionCall.name(), functionCall.callId(), functionCall.arguments());
                                 System.out.printf("Tool call: %s(%s)%n", functionCall.name(), functionCall.arguments());
                                 String tool_output = null;
                                 for( Tool t : tools ) {
@@ -150,6 +156,13 @@ public class LlmOpenAI extends LLM {
                                         tool_output = t.exec(functionCall);
                                     }
                                 }
+                                logger.toolOutput(functionCall.callId(), tool_output);
+                                toolResults.add(new LlmLogger.ToolResult(
+                                        functionCall.id().orElse(""),
+                                        functionCall.callId(),
+                                        functionCall.name(),
+                                        functionCall.arguments(),
+                                        tool_output == null ? "" : tool_output));
                                 input_messages.add(ResponseInputItem.ofFunctionCall(functionCall));
                                 input_messages.add(ResponseInputItem.ofFunctionCallOutput(
                                         ResponseInputItem.FunctionCallOutput.builder()
@@ -160,12 +173,21 @@ public class LlmOpenAI extends LLM {
                             }
                         }
                     }
+                } catch (RuntimeException e) {
+                    logger.error(e);
+                    throw e;
                 } finally {
+                    logger.saveResponse();
                     if( output_content.length()>0 ) {
                         resps.add( new Message("assistant",output_content.toString()));
                     }
                 }
             }
             return resps;
+        }
+
+        /** Responses API の実際の送信先を診断ログに記録します。 */
+        private URI responsesEndpoint() {
+            return URI.create(baseUrl.endsWith("/") ? baseUrl + "responses" : baseUrl + "/responses");
         }
 }

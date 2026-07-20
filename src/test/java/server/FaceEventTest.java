@@ -26,6 +26,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import llm.tools.PersonToolABC;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -258,7 +260,7 @@ class FaceEventTest {
             ToolCallingLanguageModel languageModel = new ToolCallingLanguageModel(
                     "fc_1",
                     "call_1",
-                    "assign_face_name",
+                    PersonToolABC.NAME,
                     "{\"trackId\":\"trak-000000\",\"name\":\"太郎\"}");
             ChatClient client = new ChatClient(
                     "client-1",
@@ -271,7 +273,7 @@ class FaceEventTest {
                     "私の名前は、太郎です".getBytes(StandardCharsets.UTF_8)));
 
             assertTrue(languageModel.awaitCalls(1));
-            assertTrue(languageModel.tools().stream().anyMatch(tool -> "assign_face_name".equals(tool.name)));
+            assertTrue(languageModel.tools().stream().anyMatch(tool -> PersonToolABC.NAME.equals(tool.name)));
             ServerEvent confirmation = pollUntil(listener, event -> "assistant-audio-chunk".equals(event.type()));
             assertNotNull(confirmation);
             assertTrue(confirmation.message().contains("登録しました。"));
