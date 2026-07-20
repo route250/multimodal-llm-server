@@ -145,13 +145,15 @@ class FaceEventTest {
             assertEquals(1, languageModel.calls().size());
             assertEquals(List.of(
                     "system:" + GroupLlmSettings.defaults("group-1").promptTemplates().expandedSystemPrompt()
-                            + "\n挨拶をしてお名前を聞いてみましょう。名前がわかったらツールをコール",
-                    "system:だれか他の人が居ます(trackId:trak-000000)。"),
+                            + "\n" + GroupLlmSettings.LFM25_FIRST_MEETING_PROMPT,
+                    "system:<!-- assign_user_name の内部データ: trak-000000 -->\n"
+                            + "未登録の相手です。会話文は「こんにちは！お名前を教えてください。」だけを出力する。"),
                     languageModel.calls().get(0));
             var history = client.conversationHistoryForTest();
             assertEquals(2, history.size());
             assertEquals("system", history.get(0).role());
-            assertEquals("だれか他の人が居ます(trackId:trak-000000)。",
+            assertEquals("<!-- assign_user_name の内部データ: trak-000000 -->\n"
+                            + "未登録の相手です。会話文は「こんにちは！お名前を教えてください。」だけを出力する。",
                     history.get(0).text());
             assertEquals("system", history.get(1).role());
             assertEquals("人物認識通知\n認識結果: 不在\n相手の名前: 不在\ntrackId: 不在", history.get(1).text());
@@ -161,7 +163,8 @@ class FaceEventTest {
     @Test
     void facePresenceHistoryTextUsesUnknownPersonGreeting() {
         assertEquals(
-                "だれか他の人が居ます(trackId:legacy)。",
+                "<!-- assign_user_name の内部データ: legacy -->\n"
+                        + "未登録の相手です。会話文は「こんにちは！お名前を教えてください。」だけを出力する。",
                 ChatClient.facePresenceHistoryText(FaceEventResult.unknownFace("sample-000000")));
     }
 
@@ -188,8 +191,9 @@ class FaceEventTest {
             assertEquals("browser-track-42", result.trackId());
             assertEquals(List.of(
                     "system:" + GroupLlmSettings.defaults("group-1").promptTemplates().expandedSystemPrompt()
-                            + "\n挨拶をしてお名前を聞いてみましょう。名前がわかったらツールをコール",
-                    "system:だれか他の人が居ます(trackId:trak-000000)。"),
+                            + "\n" + GroupLlmSettings.LFM25_FIRST_MEETING_PROMPT,
+                    "system:<!-- assign_user_name の内部データ: trak-000000 -->\n"
+                            + "未登録の相手です。会話文は「こんにちは！お名前を教えてください。」だけを出力する。"),
                     languageModel.calls().get(0));
         }
     }
@@ -213,8 +217,8 @@ class FaceEventTest {
             assertTrue(languageModel.awaitCalls(1));
             assertEquals(List.of(
                     "system:" + GroupLlmSettings.defaults("group-1").promptTemplates().expandedSystemPrompt()
-                            + "\n友人として挨拶してください。",
-                    "system:ユーザ名 花子(trackId:trak-000001)と出会いました。"),
+                            + "\n" + GroupLlmSettings.LFM25_KNOWN_PERSON_PROMPT,
+                    "system:登録済みの相手は 花子 さんです。会話文は「こんにちは、花子さん。今日は元気ですか？」だけを出力する。"),
                     languageModel.calls().get(0));
         }
     }
@@ -261,7 +265,7 @@ class FaceEventTest {
                     "fc_1",
                     "call_1",
                     PersonToolABC.NAME,
-                    "{\"trackId\":\"trak-000000\",\"name\":\"太郎\"}");
+                    "{\""+PersonToolABC.PARAM_TRACK_ID+"\":\"trak-000000\",\""+PersonToolABC.PARAM_NAME+"\":\"太郎\"}");
             ChatClient client = new ChatClient(
                     "client-1",
                     group,

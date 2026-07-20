@@ -20,13 +20,15 @@ final class GroupLlmSettings {
     static final String LFM25_MODEL = LlmOpenAI.DEFAULT_MODEL_PATTERN;
     static final String LFM25_BOT_NAME = "りり";
     static final String LFM25_PROMPT = """
-            あなたの名前は「${BOT_NAME}」です。ユーザと親しみのある会話をして下さい。AIの発言だけを出力して下さい。
-            あなたのセリフのみ出力して下さい。
+            あなたは会話AI「${BOT_NAME}」。相手に読み上げる日本語のセリフだけを出力する。
+            HTMLコメントとシステム通知は会話文へ引用・説明・復唱しない。内部データと内部データの文字列を会話文に出力しない。
+            未登録の相手が氏名を名乗った場合は、会話文を出力する前に assign_user_name 関数を1回実行する。
+            関数には、直前の HTMLコメント内の内部データと、相手が名乗った氏名を渡す。文章だけで登録完了を表現してはならない。
             """;
-    static final String LFM25_FIRST_MEETING_PROMPT = "だれか他のユーザが居たら、最初に、挨拶をしてお名前を聞いて下さい。たとえば「あなたのお名前を教えて下さい」「お名前はなんですか？」など";
-    static final String LFM25_KNOWN_PERSON_PROMPT = "ユーザと友人として挨拶して下さい。";
-    static final String LFM25_UNKNOWN_PERSON_MESSAGE_FORMAT = "だれか他のユーザが居ます。trackId:${FACE_ID})ですが、これはツールコールにだけ使用して会話には使わないこと。";
-    static final String LFM25_KNOWN_PERSON_MESSAGE_FORMAT = "ユーザ名 ${USER_NAME}(trackId:${FACE_ID})と出会いました。trackIdは、会話には使わないこと。";
+    static final String LFM25_FIRST_MEETING_PROMPT = "未登録の相手です。会話文は「こんにちは！お名前を教えてください。」だけを出力する。";
+    static final String LFM25_KNOWN_PERSON_PROMPT = "登録済みの相手です。通知にある人を呼びかけ、こんにちはと今日の体調を尋ねる1文だけを出力する。";
+    static final String LFM25_UNKNOWN_PERSON_MESSAGE_FORMAT = "<!-- assign_user_name の内部データ: ${FACE_ID} -->\n未登録の相手です。会話文は「こんにちは！お名前を教えてください。」だけを出力する。";
+    static final String LFM25_KNOWN_PERSON_MESSAGE_FORMAT = "登録済みの相手は ${USER_NAME} さんです。会話文は「こんにちは、${USER_NAME}さん。今日は元気ですか？」だけを出力する。";
 
     static final String GEMMA4_MODEL = "gemma[-_]?4[-]?e2b";
     static final String GEMMA4_BOT_NAME = "ジェマ";

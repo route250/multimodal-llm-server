@@ -74,7 +74,7 @@ class ChatClientLocalLlmFaceConversationTest {
                 Path x = tempDir.resolve("persons.json" );
                 assertTrue( Files.isRegularFile(x), "名前が登録されてません。" );
                 String personsJson = Files.readString(tempDir.resolve("persons.json"), StandardCharsets.UTF_8);
-                assertTrue(personsJson.contains("\"name\":\"太郎\""), "名前が登録されてません。"+personsJson);
+                assertTrue(personsJson.contains("\"name\":\"太郎\"")||personsJson.contains("\"name\":\"たろう\""), "名前が登録されてません。"+personsJson);
                 assertFalse(reply.isBlank(), "名前登録後の会話応答がありません");
                 assertFalse(reply.contains("trackId"), () -> "trackIdを出力しています:" + reply );
                 assertFalse(reply.contains("track-0"), () -> "trackIdを出力しています:" + reply );

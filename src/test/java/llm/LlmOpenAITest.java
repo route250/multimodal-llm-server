@@ -143,7 +143,7 @@ class LlmOpenAITest {
                     firstBody.set(body);
                     respond(exchange, sse("{\"type\":\"response.output_item.done\",\"item\":{"+
                             "\"id\":\"fc_1\",\"type\":\"function_call\",\"status\":\"completed\","+
-                            "\"arguments\":\"{\\\"trackId\\\":\\\"trak-000001\\\",\\\"name\\\":\\\"太郎\\\"}\","+
+                            "\"arguments\":\"{\\\""+PersonToolABC.PARAM_TRACK_ID+"\\\":\\\"trak-000001\\\",\\\""+PersonToolABC.PARAM_NAME+"\\\":\\\"太郎\\\"}\","+
                             "\"call_id\":\"call_1\",\"name\":\""+PersonToolABC.NAME+"\"}}"));
                 } else {
                     secondBody.set(body);
