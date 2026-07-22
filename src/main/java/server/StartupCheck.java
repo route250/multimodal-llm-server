@@ -51,9 +51,19 @@ final class StartupCheck {
     }
 
     private void verifySmartTurn() {
+
+        long start = 0;
+        long end = 0;
         try {
-            turnDetector.isTurnComplete(new float[SmartTurnV3.WINDOW_SAMPLES]);
+            float[] samples = new float[SmartTurnV3.WINDOW_SECONDS];
+            for( int i=1; i<samples.length; i+=4) {samples[i]=0.5f;}
+            for( int i=3; i<samples.length; i+=4) {samples[i]=-0.5f;}
+            for( int i=0; i<5; i++ ) {
+                if( i==2 ) start = System.currentTimeMillis();
+                turnDetector.isTurnComplete(samples);
+            }
         } finally {
+            end = System.currentTimeMillis();
             if (turnDetector instanceof AutoCloseable closeable) {
                 try {
                     closeable.close();
@@ -62,7 +72,8 @@ final class StartupCheck {
                 }
             }
         }
-        System.out.println("Startup check passed: SmartTurn");
+        long elaps = (end-start)/3;
+        System.out.println("Startup check passed: SmartTurn Avg."+elaps+"(ms)");
     }
 
     private void verifyStt() {

@@ -16,7 +16,7 @@ class GroupLlmSettingsTest {
         try {
             GroupLlmSettings settings = new GroupLlmSettings(
                     "http://example.test/v1", "test-model", "secret", "テストAI", "メインプロンプト",
-                    "初対面", "既知", "未登録 ${FACE_ID}", "登録済み ${USER_NAME}");
+                    "初対面", "既知", "未登録 ${FACE_ID}", "登録済み ${USER_NAME}", "登録完了 ${USER_NAME}");
 
             settings.save(localRoot, "group-2");
             GroupLlmSettings loaded = GroupLlmSettings.load(localRoot, "group-2");
@@ -95,6 +95,7 @@ class GroupLlmSettingsTest {
             assertEquals("", JsonFields.string(saved, "knownPersonPrompt"));
             assertEquals("", JsonFields.string(saved, "unknownPersonMessageFormat"));
             assertEquals("", JsonFields.string(saved, "knownPersonMessageFormat"));
+            assertEquals("", JsonFields.string(saved, "assignedPersonMessageFormat"));
         } finally {
             Files.deleteIfExists(localRoot.resolve("group-2").resolve("llm.json"));
             Files.deleteIfExists(localRoot.resolve("group-2"));
@@ -115,6 +116,6 @@ class GroupLlmSettingsTest {
     @Test
     void rejectsBlankBaseUrlWhenSaving() {
         assertThrows(IllegalArgumentException.class, () -> new GroupLlmSettings(
-                "", "model", "", "AI", "prompt", "first", "known", "unknown", "registered"));
+                "", "model", "", "AI", "prompt", "first", "known", "unknown", "registered", "assigned"));
     }
 }

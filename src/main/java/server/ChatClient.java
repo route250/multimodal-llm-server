@@ -41,47 +41,89 @@ import llm.LanguageModelException;
 import model.download.SmartTurnV3ModelDownloader;
 import onnx.OnnxModelException;
 
+/**
+ * 1 件の SSE 接続に対応するチャット参加者です。
+ * <p>
+ * 音声入力の直列処理、STT 結果による応答の中断、LLM/TTS の非同期実行、
+ * および再生確認済みメッセージだけを会話履歴へ確定する処理を担当します。
+ * ChatGroup へのイベント配信と、クライアント固有のイベント待ち行列は分離しています。
+ */
 public class ChatClient {
     /** 設定がない ChatClient が使用するシステムプロンプトです。 */
     public static final String DEFAULT_SYSTEM_PROMPT = GroupLlmSettings.LFM25_PROMPT;
+    /** 会話履歴としてメモリに保持する最大メッセージ件数です。 */
     private static final int MAX_HISTORY_MESSAGES = 20;
 
+    /** ChatGroup 内でこの接続を識別する sessionId です。 */
     private final String id;
+    /** このクライアントが参加するチャットルームです。 */
     private final ChatGroup chatGroup;
+    /** SSE ハンドラが取り出す、この接続専用のイベント待ち行列です。 */
     private final LinkedBlockingQueue<ServerEvent> events = new LinkedBlockingQueue<>();
+    /** PCM/VAD/RMS を受け取り、発話区間判定と音声認識を実行する処理器です。 */
     private final AudioProcessor audioProcessor;
+    /** この接続の音声診断ログに付与する groupId と sessionId です。 */
     private final AudioDiagnostics.Context diagnosticsContext;
-    private volatile LanguageModelContext languageModel;
+    /** 次の LLM 呼び出しで使用するモデルとプロンプトです。設定更新スレッドから置換されます。 */
+    private volatile LlmContext languageModel;
+    /** LLM のテキストを再生用音声へ変換する処理器です。 */
     private final TextToSpeech textToSpeech;
+    /** 音声チャンクを受信順に処理するための直列化用ロックです。 */
     private final Object audioTaskLock = new Object();
+    /** close とイベント配信の競合を防ぐロックです。 */
     private final Object lifecycleLock = new Object();
+    /** 会話履歴と再生確認待ちメッセージを保護するロックです。 */
     private final Object conversationLock = new Object();
+    /** assistant turn、中断、ブラウザ再生状態を保護するロックです。 */
     private final Object playbackControlLock = new Object();
+    /** 発話シーケンスごとの部分認識テキストを保護するロックです。 */
     private final Object partialTranscriptLock = new Object();
+    /** ブラウザ trackId と FaceDB trackId の対応表を保護するロックです。 */
     private final Object faceTrackLock = new Object();
+    /** 再生確認済みの発話だけを保持する、最大 20 件の会話履歴です。 */
     private final List<ChatMessage> conversationHistory = new ArrayList<>();
+    /** ユーザー発話により中断済みで、以後の出力を破棄する assistant turn の集合です。 */
     private final Set<Long> canceledAssistantTurnIds = new HashSet<>();
+    /** 履歴へユーザー発話を確定済みの assistant turn の集合です。 */
     private final Set<Long> rememberedUserAssistantTurnIds = new HashSet<>();
+    /** assistant 音声が再生確認されるまで保留するユーザー発話です。 */
     private final Map<Long, PendingUserMessage> pendingUserMessages = new LinkedHashMap<>();
+    /** chunk ごとの再生確認を受けるまで保留する assistant テキストです。 */
     private final Map<AssistantChunkKey, PendingAssistantChunk> pendingAssistantChunks = new LinkedHashMap<>();
+    /** assistant turn ごとの履歴内メッセージ位置です。複数 chunk を 1 メッセージへ結合します。 */
     private final Map<Long, Integer> rememberedAssistantMessageIndexes = new HashMap<>();
+    /** 発話シーケンスごとに受信した部分認識テキストです。 */
     private final Map<Long, String> partialTranscripts = new LinkedHashMap<>();
     // 同一セッション内で、入室済みの顔トラックを区別する。
     private final Map<String, String> trackmap = new LinkedHashMap<>();
+    /** 現在入室中のブラウザ顔トラックです。最後の 1 人が退出した時だけ不在通知を履歴へ残します。 */
     private final Map<String, FaceEventResult> activeFaceTracks = new LinkedHashMap<>();
+    /** 前の音声処理の完了後に次の処理を接続するための Future です。 */
     private CompletableFuture<Void> audioTaskTail = CompletableFuture.completedFuture(null);
+    /** 実行中の LLM/TTS タスクです。ユーザー発話時に cancel します。 */
     private Future<?> activeAssistantTask;
+    /** 現在の assistant 応答を識別する連番です。 */
     private long currentAssistantTurnId;
+    /** assistant 音声 chunk を識別する連番です。 */
     private long nextAssistantChunkId;
+    /** pause/resume/cancel イベントを対応付ける中断連番です。 */
     private long currentInterruptionId;
+    /** ブラウザが再生中と報告した assistant turn です。 */
     private long activePlaybackAssistantTurnId;
+    /** ブラウザ再生開始時のマイクサンプル位置です。未設定時は Long.MIN_VALUE です。 */
     private long activePlaybackStartSampleIndex = Long.MIN_VALUE;
+    /** STT 完了待ちで一時停止した assistant turn です。 */
     private long sttWaitAssistantTurnId;
+    /** STT 完了待ちで一時停止した発話シーケンスです。 */
     private long sttWaitSpeechSequenceId = Long.MIN_VALUE;
+    /** 現在の assistant turn が出力を配信可能かを表します。 */
     private boolean assistantTurnActive;
+    /** STT の最終結果を待つため、再生を一時停止中かを表します。 */
     private boolean sttWaitActive;
+    /** close 済みで新規処理とイベント配信を停止したかを表します。 */
     private boolean closed;
 
+    /** 本番用の音声認識・LLM・音声合成を使用して接続クライアントを作成します。 */
     public ChatClient(String id, ChatGroup chatGroup) {
         this(id, chatGroup, new AudioProcessor(
                 new LazySmartTurnV3(smartTurnModelPath()),
@@ -91,6 +133,7 @@ public class ChatClient {
                 defaultTextToSpeech());
     }
 
+    /** Group の LLM 設定を OpenAI 実装とプロンプトテンプレートへ変換する生成経路です。 */
     private ChatClient(
             String id,
             ChatGroup chatGroup,
@@ -100,14 +143,17 @@ public class ChatClient {
         this(id, chatGroup, audioProcessor, new LlmOpenAI(settings.toConfig()), settings.promptTemplates(), textToSpeech);
     }
 
+    /** テスト用に AudioProcessor を差し替え、LLM と TTS は既定の無効化設定を使います。 */
     ChatClient(String id, ChatGroup chatGroup, AudioProcessor audioProcessor) {
         this(id, chatGroup, audioProcessor, new LlmOpenAI(), GroupLlmSettings.defaults("group-1").promptTemplates(), TextToSpeech.disabled());
     }
 
+    /** テスト用に AudioProcessor と LLM を差し替え、TTS は無効化します。 */
     ChatClient(String id, ChatGroup chatGroup, AudioProcessor audioProcessor, LLM llm) {
         this(id, chatGroup, audioProcessor, llm, GroupLlmSettings.defaults("group-1").promptTemplates(), TextToSpeech.disabled());
     }
 
+    /** テスト用に AudioProcessor、LLM、TTS を個別に差し替えます。 */
     ChatClient(
             String id,
             ChatGroup chatGroup,
@@ -118,6 +164,7 @@ public class ChatClient {
     }
 
     /** テストおよび個別接続用に、メインプロンプトだけを指定します。 */
+    /** 指定されたメインプロンプトから、人物認識用を含むプロンプトテンプレートを組み立てます。 */
     ChatClient(
             String id,
             ChatGroup chatGroup,
@@ -129,10 +176,12 @@ public class ChatClient {
                 new PromptTemplates(GroupLlmSettings.LFM25_BOT_NAME, systemPrompt,
                         GroupLlmSettings.LFM25_FIRST_MEETING_PROMPT, GroupLlmSettings.LFM25_KNOWN_PERSON_PROMPT,
                         GroupLlmSettings.LFM25_UNKNOWN_PERSON_MESSAGE_FORMAT,
-                        GroupLlmSettings.LFM25_KNOWN_PERSON_MESSAGE_FORMAT),
+                        GroupLlmSettings.LFM25_KNOWN_PERSON_MESSAGE_FORMAT,
+                        GroupLlmSettings.LFM25_ASSIGNED_PERSON_MESSAGE_FORMAT),
                 textToSpeech);
     }
 
+    /** 依存オブジェクトを直接受け取る内部生成経路です。AudioProcessor の通知先もここで登録します。 */
     ChatClient(
             String id,
             ChatGroup chatGroup,
@@ -144,13 +193,14 @@ public class ChatClient {
         this.chatGroup = chatGroup;
         this.audioProcessor = audioProcessor;
         this.diagnosticsContext = AudioDiagnostics.context(chatGroup.id(), id);
-        this.languageModel = new LanguageModelContext(llm, promptTemplates);
+        this.languageModel = new LlmContext(llm, promptTemplates);
         this.textToSpeech = textToSpeech;
         this.audioProcessor.setDiagnosticsContext(chatGroup.id(), id);
         this.audioProcessor.setSpeechStateListener(this::handleSpeechStateChange);
         this.audioProcessor.setTranscriptionStartedListener(this::handleTranscriptionStarted);
     }
 
+    /** この接続の sessionId を返します。 */
     public String id() {
         return id;
     }
@@ -167,29 +217,36 @@ public class ChatClient {
 
     /** Group 設定の保存後に、次の LLM 呼び出しから使用するモデルを切り替えます。 */
     void setLanguageModel(LLM llm, PromptTemplates promptTemplates) {
-        this.languageModel = new LanguageModelContext(llm, promptTemplates);
+        this.languageModel = new LlmContext(llm, promptTemplates);
     }
 
+    /** ChatGroup が管理するイベント用の連番を取得します。 */
     public int nextId() {
         return this.chatGroup.nextId();
     }
+    /** ChatGroup の executor でタスクを実行します。 */
     public void execute(Runnable r) {
         this.chatGroup.execute(r);
     }
+    /** ChatGroup の executor へ結果を持たないタスクを投入します。 */
     public Future<?> submit(Runnable task) {
         return this.chatGroup.submit(task);
     }
+    /** ChatGroup の executor へタスクを投入し、完了時に指定した結果を返します。 */
     public <T> Future<T> submit(Runnable task, T result ) {
         return this.chatGroup.submit(task,result);
     }
+    /** ChatGroup の executor へ結果を返すタスクを投入します。 */
     public <T> Future<T> submit(Callable<T> task) {
         return this.chatGroup.submit(task);
     }
 
+    /** SSE ハンドラが待機するイベント待ち行列を返します。 */
     public LinkedBlockingQueue<ServerEvent> events() {
         return events;
     }
 
+    /** リクエスト種別に応じて、音声処理・テキスト応答・イベント配信へ振り分けます。 */
     public void handle(ChatRequest request) {
         if ("audio".equals(request.type())) {
             handleAudio(request);
@@ -202,6 +259,7 @@ public class ChatClient {
         sendToGroup(request.toEvent());
     }
 
+    /** 空白だけの本文を除外して、テキスト入力への assistant 応答を開始します。 */
     private void handleText(ChatRequest request) {
         String text = request.textBody().trim();
         if (!text.isBlank()) {
@@ -209,10 +267,16 @@ public class ChatClient {
         }
     }
 
+    /** クライアント時刻を持たない互換入力を、未指定サンプル位置として処理します。 */
     private void handleAudio(ChatRequest request) {
         handleAudio(request, Long.MIN_VALUE, Long.MIN_VALUE);
     }
 
+    /**
+     * PCM/VAD/RMS の 1 チャンクを受け付けます。
+     * バイト配列を複製してからキューへ入れるため、HTTP リクエストのバッファが解放されても
+     * 非同期処理が参照する内容は変化しません。
+     */
     public void handleAudio(ChatRequest request, long clientStartSampleIndex, long clientEndSampleIndexExclusive) {
         if (!request.isPcmVadAudio()) {
             throw new HttpRequestException(400,
@@ -229,6 +293,7 @@ public class ChatClient {
         }
     }
 
+    /** 直列化済みの音声チャンクを STT へ渡し、認識結果を処理します。 */
     private void processAudio(
             byte[] body,
             byte[] vadBytes,
@@ -261,6 +326,10 @@ public class ChatClient {
         }
     }
 
+    /**
+     * ブラウザの再生状態を受け取り、再生済み chunk を会話履歴へ確定します。
+     * recognized=true の報告がない chunk は履歴へ保存しません。
+     */
     public void handlePlayback(PlaybackEvent playbackEvent) {
         AudioDiagnostics.log("playback-report", diagnosticsContext, Json.fields(
                 "assistantTurnId", playbackEvent.assistantTurnId(),
@@ -282,6 +351,10 @@ public class ChatClient {
         }
     }
 
+    /**
+     * 顔トラックの入退室を FaceDB へ反映し、ブラウザと LLM 向けの認識結果を生成します。
+     * ブラウザの trackId は一時的なため、FaceDB 用の trackId に変換して扱います。
+     */
     public FaceEventResult handleFacePresence(FaceDB faceDB,FaceEventRequest request ) throws IOException {
         if ("person-left".equals(request.eventType())) {
             String faceDbTrackId;
@@ -356,16 +429,19 @@ public class ChatClient {
             startAssistantReplyFromHistory(faceEventMessage, result.known() && result.personName() != null && !result.personName().isBlank());
         }
     }
+    /** テスト用に、ロックで保護された会話履歴の不変コピーを返します。 */
     List<ChatMessage> conversationHistoryForTest() {
         synchronized (conversationLock) {
             return List.copyOf(conversationHistory);
         }
     }
 
+    /** 既定のプロンプトテンプレートを用いて、顔認識イベント用の履歴テキストを生成します。 */
     public static String facePresenceHistoryText(FaceEventResult result) {
         return facePresenceHistoryText(result, result.trackId(), GroupLlmSettings.defaults("group-1").promptTemplates());
     }
 
+    /** FaceDB の trackId と認識結果から、LLM に渡す人物認識通知を生成します。 */
     private static String facePresenceHistoryText(FaceEventResult result, String faceDbTrackId, PromptTemplates templates) {
         if ("person-left".equals(result.presenceState())) {
             return "人物認識通知\n認識結果: 不在\n相手の名前: 不在\ntrackId: 不在";
@@ -375,6 +451,7 @@ public class ChatClient {
         return templates.faceMessage(known, result.personName(), trackId);
     }
 
+    /** 対象の再生が開始位置以降で終了した場合だけ、再生追跡状態を解除します。 */
     private void finishPlaybackTracking(long assistantTurnId, long clientMicSampleIndex) {
         if (activePlaybackStartSampleIndex == Long.MIN_VALUE
                 || activePlaybackAssistantTurnId != assistantTurnId
@@ -384,6 +461,7 @@ public class ChatClient {
         activePlaybackStartSampleIndex = Long.MIN_VALUE;
     }
 
+    /** 音声認識開始時に、現在の assistant 音声を pause して最終認識結果を待機します。 */
     private void handleTranscriptionStarted(TranscriptionStarted started) {
         ServerEvent event = null;
         synchronized (playbackControlLock) {
@@ -413,6 +491,7 @@ public class ChatClient {
         sendToGroupIfOpen(event);
     }
 
+    /** AudioProcessor の発話状態変化をブラウザへ配信します。 */
     private void handleSpeechStateChange(SpeechStateChange change) {
         sendToGroupIfOpen(ServerEvent.speechState(
                 change.previousState().name(),
@@ -421,6 +500,7 @@ public class ChatClient {
                 change.sampleIndex()));
     }
 
+    /** 最終認識が空だった場合、STT 待機で pause した音声を resume します。 */
     private void resumePlaybackForEmptyTranscript(long speechSequenceId) {
         ServerEvent event = null;
         synchronized (playbackControlLock) {
@@ -448,6 +528,10 @@ public class ChatClient {
         sendToGroupIfOpen(event);
     }
 
+    /**
+     * 部分認識では表示更新と現在の応答の中断を行い、最終認識では新しい応答を開始します。
+     * 部分認識と最終認識が重複する場合は、重複する文字列を除いて結合します。
+     */
     private void handleTranscriptionResult(TranscriptionResult result) {
         String text = result.transcription().text();
         String transcript = text == null ? "" : text.trim();
@@ -470,6 +554,7 @@ public class ChatClient {
         startAssistantReply(finalTranscript);
     }
 
+    /** 部分認識を発話シーケンス単位で統合し、古いシーケンスの結果を破棄します。 */
     private String rememberPartialTranscript(long speechSequenceId, String transcript) {
         synchronized (partialTranscriptLock) {
             partialTranscripts.keySet().removeIf(id -> id < speechSequenceId);
@@ -480,6 +565,7 @@ public class ChatClient {
         }
     }
 
+    /** 保存済みの部分認識を取り出して最終認識と結合し、そのシーケンスを削除します。 */
     private String takeFinalTranscript(long speechSequenceId, String transcript) {
         synchronized (partialTranscriptLock) {
             String partial = partialTranscripts.remove(speechSequenceId);
@@ -487,6 +573,7 @@ public class ChatClient {
         }
     }
 
+    /** 前回文字列の末尾と今回文字列の先頭の共通部分を 1 回だけにして結合します。 */
     private static String mergeTranscriptText(String current, String next) {
         String left = current == null ? "" : current.trim();
         String right = next == null ? "" : next.trim();
@@ -500,6 +587,7 @@ public class ChatClient {
         return left + right.substring(overlap);
     }
 
+    /** left の接尾辞と right の接頭辞が一致する最大文字数を返します。 */
     private static int longestSuffixPrefixOverlap(String left, String right) {
         int max = Math.min(left.length(), right.length());
         for (int length = max; length > 0; length--) {
@@ -510,6 +598,7 @@ public class ChatClient {
         return 0;
     }
 
+    /** ユーザー発話が確定した時点で、競合する LLM/TTS/再生待ちの応答を中断します。 */
     private void cancelCurrentAssistantTurnForTranscript(long speechSequenceId) {
         ServerEvent event = null;
         Future<?> taskToCancel = null;
@@ -556,6 +645,7 @@ public class ChatClient {
         }
     }
 
+    /** ユーザー発話の認識テキストから、新しい assistant turn を開始します。 */
     private void startAssistantReply(String transcript) {
         long assistantTurnId = beginAssistantTurn();
         AudioDiagnostics.log("assistant-turn-start", diagnosticsContext, Json.fields(
@@ -569,6 +659,7 @@ public class ChatClient {
         startAssistantTask(assistantTurnId, task);
     }
 
+    /** 人物入室など、履歴に追加済みのシステムメッセージを契機に assistant turn を開始します。 */
     private void startAssistantReplyFromHistory(ChatMessage triggerMessage, boolean knownPerson) {
         long assistantTurnId = beginAssistantTurn();
         AudioDiagnostics.log("assistant-turn-start", diagnosticsContext, Json.fields(
@@ -583,6 +674,7 @@ public class ChatClient {
         startAssistantTask(assistantTurnId, task);
     }
 
+    /** 最新かつ未中断の turn だけを実行し、古い turn のタスクは開始前に取り消します。 */
     private void startAssistantTask(long assistantTurnId, FutureTask<Void> task) {
         synchronized (playbackControlLock) {
             if (currentAssistantTurnId == assistantTurnId && !canceledAssistantTurnIds.contains(assistantTurnId)) {
@@ -594,6 +686,7 @@ public class ChatClient {
         execute(task);
     }
 
+    /** ユーザー発話を保留し、既存履歴と合わせて LLM へ送るメッセージ列を組み立てます。 */
     private void replyToTranscript(String transcript, long assistantTurnId) {
         if (isClosed()) {
             return;
@@ -609,6 +702,7 @@ public class ChatClient {
         replyWithMessages(assistantTurnId, chunker, userMessage, requestMessages, true, false, null);
     }
 
+    /** 履歴に確定済みのシステムイベントを起点として、履歴全体に対する応答を生成します。 */
     private void replyToConversationHistory(ChatMessage triggerMessage, long assistantTurnId, boolean knownPerson) {
         if (isClosed()) {
             return;
@@ -621,6 +715,10 @@ public class ChatClient {
         replyWithMessages(assistantTurnId, chunker, triggerMessage, requestMessages, false, true, knownPerson);
     }
 
+    /**
+     * LLM のストリーミング出力を文単位の TTS chunk に変換して配信します。
+     * 例外時は assistant 応答を履歴へ残さず、保留中のユーザー発話だけを確定します。
+     */
     private void replyWithMessages(
             long assistantTurnId,
             StreamingTextChunker chunker,
@@ -634,7 +732,7 @@ public class ChatClient {
                 sendToGroupIfOpen(ServerEvent.userMessage(userMessage.text()));
             }
             sendToGroupIfOpen(ServerEvent.assistantState("LLM"));
-            LanguageModelContext currentLanguageModel = languageModel;
+            LlmContext currentLanguageModel = languageModel;
             List<LLM.Message> llmMessages = new ArrayList<>(requestMessages.size() + 1);
             String currentSystemPrompt = currentLanguageModel.promptTemplates().expandedSystemPrompt();
             if (encounterKnownPerson != null) {
@@ -681,16 +779,7 @@ public class ChatClient {
         }
     }
 
-    /** 1回の応答で LLM とシステムプロンプトの組み合わせを固定します。 */
-    private record LanguageModelContext(LLM llm, PromptTemplates promptTemplates) {
-        private LanguageModelContext {
-            if (llm == null) {
-                throw new IllegalArgumentException("llm must not be null");
-            }
-            if (promptTemplates == null) throw new IllegalArgumentException("promptTemplates must not be null");
-        }
-    }
-
+    /** assistant turn の連番を進め、以前の実行タスク参照を初期化します。 */
     private long beginAssistantTurn() {
         synchronized (playbackControlLock) {
             currentAssistantTurnId++;
@@ -700,6 +789,7 @@ public class ChatClient {
         }
     }
 
+    /** 指定した turn が最新かつ未中断なら、応答生成の完了状態を記録します。 */
     private void finishAssistantTurn(long assistantTurnId) {
         synchronized (playbackControlLock) {
             if (currentAssistantTurnId == assistantTurnId && !canceledAssistantTurnIds.contains(assistantTurnId)) {
@@ -709,6 +799,7 @@ public class ChatClient {
         }
     }
 
+    /** 指定した turn が最新で、中断および接続終了されていないかを判定します。 */
     private boolean isAssistantTurnActive(long assistantTurnId) {
         synchronized (playbackControlLock) {
             return currentAssistantTurnId == assistantTurnId
@@ -717,6 +808,7 @@ public class ChatClient {
         }
     }
 
+    /** 確定済み履歴の末尾に今回のユーザー発話を追加した、LLM リクエスト用の不変リストを返します。 */
     private List<ChatMessage> requestMessages(ChatMessage userMessage) {
         List<ChatMessage> messages = new ArrayList<>(conversationHistory.size() + 1);
         messages.addAll(conversationHistory);
@@ -724,6 +816,7 @@ public class ChatClient {
         return List.copyOf(messages);
     }
 
+    /** 再生確認済みの chunk を履歴へ追加し、同じ turn の assistant 文は 1 件へ結合します。 */
     private void rememberRecognizedChunk(long assistantTurnId, long chunkId) {
         PendingAssistantChunk chunk;
         synchronized (conversationLock) {
@@ -741,6 +834,7 @@ public class ChatClient {
                 "textChars", chunk.text().length()));
     }
 
+    /** この turn の最初の再生確認時だけ、対応するユーザー発話を履歴へ確定します。 */
     private void rememberUserMessageForRecognizedAssistant(long assistantTurnId, PendingAssistantChunk chunk) {
         if (chunk.userMessageAlreadyInHistory() || rememberedUserAssistantTurnIds.contains(assistantTurnId)) {
             return;
@@ -751,6 +845,7 @@ public class ChatClient {
         rememberedUserAssistantTurnIds.add(assistantTurnId);
     }
 
+    /** LLM/TTS の失敗時に、assistant 応答なしでユーザー発話だけを履歴へ確定します。 */
     private void rememberUserMessageWithoutAssistant(long assistantTurnId) {
         synchronized (conversationLock) {
             PendingUserMessage pendingUserMessage = pendingUserMessages.remove(assistantTurnId);
@@ -763,6 +858,7 @@ public class ChatClient {
         }
     }
 
+    /** 新しい発話開始時に、古い turn の再生未確認ユーザー発話を単独で履歴へ確定します。 */
     private void rememberStalePendingUserMessages(long currentAssistantTurnId) {
         List<Long> staleAssistantTurnIds = pendingUserMessages.keySet().stream()
                 .filter(assistantTurnId -> assistantTurnId < currentAssistantTurnId)
@@ -778,6 +874,7 @@ public class ChatClient {
         trimConversationHistory();
     }
 
+    /** 同一 assistant turn の再生確認済みテキストを、履歴内の 1 メッセージへ連結します。 */
     private void rememberAssistantChunk(long assistantTurnId, String text) {
         Integer historyIndex = rememberedAssistantMessageIndexes.get(assistantTurnId);
         if (historyIndex == null || historyIndex < 0 || historyIndex >= conversationHistory.size()) {
@@ -794,6 +891,23 @@ public class ChatClient {
         conversationHistory.set(historyIndex, new ChatMessage("assistant", currentMessage.text() + text));
     }
 
+    /**
+     * 人物名の登録成功を system メッセージとして会話履歴へ確定します。
+     * 入室時の既知人物通知と同じテンプレートを使い、${USER_NAME}、${FACE_ID}、${BOT_NAME}、${DATETIME}
+     * を Group ごとの設定に従って展開します。
+     */
+    private void rememberFaceNameAssignment(String faceDbTrackId, String name) {
+        String notification = languageModel.promptTemplates().assignedPersonMessage(name, faceDbTrackId);
+        if (notification.isBlank()) {
+            return;
+        }
+        synchronized (conversationLock) {
+            conversationHistory.add(new ChatMessage("system", notification));
+            trimConversationHistory();
+        }
+    }
+
+    /** 履歴件数を上限以内にし、削除した先頭件数に合わせて assistant の履歴位置を補正します。 */
     private void trimConversationHistory() {
         int removedCount = 0;
         while (conversationHistory.size() > MAX_HISTORY_MESSAGES) {
@@ -808,6 +922,10 @@ public class ChatClient {
         rememberedAssistantMessageIndexes.replaceAll((assistantTurnId, index) -> index - removed);
     }
 
+    /**
+     * テキスト chunk を音声へ変換して配信します。
+     * 配信直前に保留情報を記録し、ブラウザからの recognized 報告で履歴へ確定できるようにします。
+     */
     private void speak(
             long assistantTurnId,
             ChatMessage userMessage,
@@ -866,12 +984,14 @@ public class ChatClient {
         }
     }
 
+    /** 再生確認と音声データを対応付ける chunkId を採番します。 */
     private long nextAssistantChunkId() {
         synchronized (playbackControlLock) {
             return ++nextAssistantChunkId;
         }
     }
 
+    /** PCM 音声のバイト数とサンプルレートから、配信音声の合計時間を秒で算出します。 */
     private static double audioDurationSeconds(List<AudioDelta> audioDeltas) {
         double seconds = 0;
         for (AudioDelta audio : audioDeltas) {
@@ -883,6 +1003,7 @@ public class ChatClient {
         return seconds;
     }
 
+    /** 音声認識または音声区間判定の失敗を診断ログと system イベントで通知します。 */
     private void sendAudioProcessingFailure(RuntimeException e) {
         AudioDiagnostics.log("audio-processing-error", diagnosticsContext, Json.fields(
                 "errorClass", e.getClass().getName(),
@@ -890,6 +1011,7 @@ public class ChatClient {
         sendToGroupIfOpen(ServerEvent.system("audio processing failed: " + e.getMessage()));
     }
 
+    /** 接続が開いている場合だけ、イベントを所属 ChatGroup へ配信します。 */
     private void sendToGroupIfOpen(ServerEvent event) {
         synchronized (lifecycleLock) {
             if (!closed) {
@@ -898,18 +1020,22 @@ public class ChatClient {
         }
     }
 
+    /** 所属 ChatGroup の全接続クライアントへイベントを配信します。 */
     private void sendToGroup(ServerEvent event) {
         chatGroup.publish(event);
     }
 
+    /** ChatGroup から配信されたイベントを、このクライアントの SSE 待ち行列へ追加します。 */
     public void receive(ServerEvent event) {
         events.offer(event);
     }
 
+    /** 接続終了を理由として、このクライアントの処理を停止します。 */
     public void close() {
         close("client-close");
     }
 
+    /** 接続を閉じ、進行中の音声認識・応答生成・再生待ち状態をすべて解除します。 */
     void close(String reason) {
         synchronized (lifecycleLock) {
             if (closed) {
@@ -923,6 +1049,7 @@ public class ChatClient {
     /**
      * 停止操作で、STT、LLM、TTS、再生待ちの応答をまとめてキャンセルする。
      */
+    /** 接続は維持したまま、進行中の STT・LLM・TTS・再生待ちを停止します。 */
     public void cancelActiveWork(String reason) {
         synchronized (lifecycleLock) {
             if (closed) {
@@ -932,6 +1059,7 @@ public class ChatClient {
         cancelActiveWorkNow(reason);
     }
 
+    /** ロック取得済みまたは close 済みでも実行できる、処理状態の一括初期化本体です。 */
     private void cancelActiveWorkNow(String reason) {
         Future<?> taskToCancel;
         long canceledTurnId;
@@ -964,20 +1092,34 @@ public class ChatClient {
                 "assistantTurnId", canceledTurnId > 0 ? canceledTurnId : null));
     }
 
+    /** 接続終了済みかを、ライフサイクルロック下で判定します。 */
     private boolean isClosed() {
         synchronized (lifecycleLock) {
             return closed;
         }
     }
 
+    /** SmartTurn V3 モデルの絶対正規化パスを返します。 */
     private static Path smartTurnModelPath() {
         return SmartTurnV3ModelDownloader.MODEL_PATH.toAbsolutePath().normalize();
     }
 
+    /** 本番用の LFM2 Audio TTS 実装を生成します。 */
     private static TextToSpeech defaultTextToSpeech() {
         return new Lfm2AudioTextToSpeech();
     }
 
+    /** 1 回の応答で LLM とシステムプロンプトの組み合わせを固定する不変値です。 */
+    private record LlmContext(LLM llm, PromptTemplates promptTemplates) {
+        private LlmContext {
+            if (llm == null) {
+                throw new IllegalArgumentException("llm must not be null");
+            }
+            if (promptTemplates == null) throw new IllegalArgumentException("promptTemplates must not be null");
+        }
+    }
+
+    /** ブラウザが送信する、assistant 音声 chunk の再生状態と再生確認情報です。 */
     public record PlaybackEvent(
             long assistantTurnId,
             long chunkId,
@@ -998,32 +1140,41 @@ public class ChatClient {
         }
     }
 
+    /** 再生確認待ち assistant chunk を一意に特定する複合キーです。 */
     private record AssistantChunkKey(long assistantTurnId, long chunkId) {
     }
 
+    /** assistant 音声の再生確認まで会話履歴への追加を保留するユーザー発話です。 */
     private record PendingUserMessage(ChatMessage userMessage) {
     }
 
+    /** 再生確認まで保留する assistant chunk と、その生成元ユーザー発話です。 */
     private record PendingAssistantChunk(ChatMessage userMessage, boolean userMessageAlreadyInHistory, String text) {
     }
 
+    /** LLM が人物名を確定するために呼び出すツールの、このクライアント用実装です。 */
     private class PersonTool extends PersonToolABC {
         private final long assistantTurnId;
+        /** 呼び出し元の assistant turn を記録してツール実行の有効性を判定します。 */
         public PersonTool( long assistantTurnId ) {
             super();
             this.assistantTurnId = assistantTurnId;
         }
 
         @Override
+        /** 中断済み turn からの人物名更新を防ぎます。 */
         protected boolean isAssistantTurnActive() {
             return ChatClient.this.isAssistantTurnActive(assistantTurnId);
         }
 
         @Override
+        /** FaceDB の trackId に人物名を割り当てます。 */
         protected void assignFaceName(String trackId, String name) {
             ChatClient.this.chatGroup.assignFaceName(trackId, name);
+            ChatClient.this.rememberFaceNameAssignment(trackId, name);
         }
         @Override
+        /** 人物名割り当てツールの実行結果を音声診断ログへ記録します。 */
         protected void diag(String callId, String trackId, String name, String status, String reason, Throwable error) {
             if( ChatClient.this.diagnosticsContext!=null ) {
                 Map<String,Object> jsonObject = Json.fields(

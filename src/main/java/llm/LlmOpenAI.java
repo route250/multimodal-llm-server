@@ -59,10 +59,14 @@ public class LlmOpenAI extends LLM {
                 .build();
             ModelService modelService = client.models();
             List<String> result = new ArrayList<>();
-            System.out.println("Available models:");
+
+            StringBuilder sb = new StringBuilder();
             for (Model model : modelService.list().items()) {
                 result.add(model.id());
+                sb.append(model.id()).append(",");
             }
+            if(sb.length()>1) sb.setLength(sb.length()-1);
+            System.out.println("Available models:"+sb.toString());
             return result;
         }
 
@@ -136,6 +140,14 @@ public class LlmOpenAI extends LLM {
                 try (StreamResponse<ResponseStreamEvent> stream = client.responses().createStreaming(request)) {
                     for( Iterator<ResponseStreamEvent> it = stream.stream().iterator(); it.hasNext(); ) {
                         ResponseStreamEvent event = it.next();
+                        if( event.isReasoningTextDelta() ) {
+                            String delta = event.asReasoningTextDelta().delta();
+                            System.out.print(delta);
+                        }
+                        if( event.isReasoningTextDone() ) {
+                            String delta = event.asReasoningTextDone().text();
+                            System.out.println(delta);
+                        }
                         if (event.isOutputTextDelta()) {
                             String delta = event.asOutputTextDelta().delta();
                             output_content.append(delta);

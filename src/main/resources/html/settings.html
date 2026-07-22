@@ -69,6 +69,10 @@
             <textarea id="known-person-message-format"></textarea>
             <span class="hint">`${BOT_NAME}`、`${DATETIME}`、`${USER_NAME}`、`${FACE_ID}`を展開します。</span>
         </label>
+        <label>人物名登録通知のメッセージフォーマット
+            <textarea id="assigned-person-message-format"></textarea>
+            <span class="hint">人物名の登録成功後に会話履歴へ追加します。`${BOT_NAME}`、`${DATETIME}`、`${USER_NAME}`、`${FACE_ID}`を展開します。</span>
+        </label>
         <div class="actions">
             <button id="reset" class="reset" type="button">デフォルトにリセット</button>
             <button id="save" class="save" type="submit">検証して保存</button>
@@ -82,7 +86,7 @@
         model: "LFM2\\.5",
         apiKey: "",
         botName: "", systemPrompt: "", firstMeetingPrompt: "", knownPersonPrompt: "",
-        unknownPersonMessageFormat: "", knownPersonMessageFormat: ""
+        unknownPersonMessageFormat: "", knownPersonMessageFormat: "", assignedPersonMessageFormat: ""
     };
     const group = new URLSearchParams(location.search).get("group") || "group-1";
     const form = document.getElementById("settings-form");
@@ -95,6 +99,7 @@
     const knownPersonPrompt = document.getElementById("known-person-prompt");
     const unknownPersonMessageFormat = document.getElementById("unknown-person-message-format");
     const knownPersonMessageFormat = document.getElementById("known-person-message-format");
+    const assignedPersonMessageFormat = document.getElementById("assigned-person-message-format");
     const status = document.getElementById("status");
     const save = document.getElementById("save");
     let defaults = FALLBACK_DEFAULTS;
@@ -110,6 +115,7 @@
         knownPersonPrompt.value = defaults.knownPersonPrompt;
         unknownPersonMessageFormat.value = defaults.unknownPersonMessageFormat;
         knownPersonMessageFormat.value = defaults.knownPersonMessageFormat;
+        assignedPersonMessageFormat.value = defaults.assignedPersonMessageFormat;
         status.className = "";
         status.textContent = "";
     });
@@ -127,6 +133,7 @@
         knownPersonPrompt.value = settings.knownPersonPrompt || "";
         unknownPersonMessageFormat.value = settings.unknownPersonMessageFormat || "";
         knownPersonMessageFormat.value = settings.knownPersonMessageFormat || "";
+        assignedPersonMessageFormat.value = settings.assignedPersonMessageFormat || "";
     }
     form.addEventListener("submit", async (event) => {
         event.preventDefault();
@@ -141,7 +148,8 @@
                     baseUrl: baseUrl.value, model: model.value, apiKey: apiKey.value, botName: botName.value,
                     systemPrompt: systemPrompt.value, firstMeetingPrompt: firstMeetingPrompt.value,
                     knownPersonPrompt: knownPersonPrompt.value, unknownPersonMessageFormat: unknownPersonMessageFormat.value,
-                    knownPersonMessageFormat: knownPersonMessageFormat.value
+                    knownPersonMessageFormat: knownPersonMessageFormat.value,
+                    assignedPersonMessageFormat: assignedPersonMessageFormat.value
                 })
             });
             if (!response.ok) throw new Error(await errorMessage(response));
