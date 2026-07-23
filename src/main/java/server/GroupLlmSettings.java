@@ -20,26 +20,29 @@ final class GroupLlmSettings {
     static final String LFM25_MODEL = LlmOpenAI.DEFAULT_MODEL_PATTERN;
     static final String LFM25_BOT_NAME = "りり";
     static final String LFM25_PROMPT = """
-            あなたは会話AI「${BOT_NAME}」。相手に読み上げる日本語のセリフだけを出力する。
+            あなたは会話AI「${BOT_NAME}」。**相手に読み上げる日本語のセリフだけを出力すること**
             HTMLコメントとシステム通知は会話文へ引用・説明・復唱しない。内部データと内部データの文字列を会話文に出力しない。
             未登録の相手が氏名を名乗った場合は、会話文を出力する前に assign_user_name 関数を1回実行する。
             関数には、直前の HTMLコメント内の内部データと、相手が名乗った氏名を渡す。文章だけで登録完了を表現してはならない。
+            話題をランダムに決めて、次の会話をすすめること。
             """;
     static final String LFM25_FIRST_MEETING_PROMPT = "未登録の相手です。会話文は「こんにちは！お名前を教えてください。」だけを出力する。";
     static final String LFM25_KNOWN_PERSON_PROMPT = "登録済みの相手です。通知にある人を呼びかけ、こんにちはと今日の体調を尋ねる1文だけを出力する。";
-    static final String LFM25_UNKNOWN_PERSON_MESSAGE_FORMAT = "<!-- assign_user_name の内部データ: ${FACE_ID} -->\n未登録の相手です。会話文は「こんにちは！お名前を教えてください。」だけを出力する。";
-    static final String LFM25_KNOWN_PERSON_MESSAGE_FORMAT = "登録済みの相手は ${USER_NAME} さんです。会話文は「こんにちは、${USER_NAME}さん。今日は元気ですか？」だけを出力する。";
+    static final String LFM25_UNKNOWN_PERSON_MESSAGE_FORMAT = "<!-- assign_user_name の内部データ: ${FACE_ID} -->\n未登録の相手です。";
+    static final String LFM25_KNOWN_PERSON_MESSAGE_FORMAT = "<!-- 登録済みの相手は ${USER_NAME} さんです。assign_user_name の内部データ: ${FACE_ID} -->";
+    static final String LFM25_ASSIGNED_PERSON_MESSAGE_FORMAT = "<!-- ${USER_NAME} さんとして登録しました。assign_user_name の内部データ: ${FACE_ID} -->";
 
     static final String GEMMA4_MODEL = "gemma[-_]?4[-]?e2b";
     static final String GEMMA4_BOT_NAME = "ジェマ";
     static final String GEMMA4_PROMPT = """
-            あなたは会話AIの「${BOT_NAME}」です。目の前の相手と親しみのある会話をします。AIの発言だけを出力して下さい。
-            あなたのセリフのみ出力して下さい。
+            あなたは会話AIの「${BOT_NAME}」です。相手と親しみのあるフレンドリーな会話をします。
+            **あなたのセリフのみ出力して下さい**
             """;
     static final String GEMMA4_FIRST_MEETING_PROMPT = "挨拶をしてお名前を聞いてみましょう。名前がわかったらツールをコール";
     static final String GEMMA4_KNOWN_PERSON_PROMPT = "友人として挨拶してください。";
     static final String GEMMA4_UNKNOWN_PERSON_MESSAGE_FORMAT = "だれか他の人が居ます(trackId:${FACE_ID})。";
     static final String GEMMA4_KNOWN_PERSON_MESSAGE_FORMAT = "ユーザ名 ${USER_NAME}(trackId:${FACE_ID})と出会いました。";
+    static final String GEMMA4_ASSIGNED_PERSON_MESSAGE_FORMAT = "ユーザ名 ${USER_NAME}(trackId:${FACE_ID})を登録しました。";
 
     static final String OPENAI_BASE_URL = LlmOpenAI.OPENAI_BASE_URI.toString();
     static final String OPENAI_MODEL = LlmOpenAI.OPENAI_MODEL_PATTERN;
@@ -52,6 +55,7 @@ final class GroupLlmSettings {
     static final String OPENAI_KNOWN_PERSON_PROMPT = "友人として挨拶してください。";
     static final String OPENAI_UNKNOWN_PERSON_MESSAGE_FORMAT = "だれか他の人が居ます(trackId:${FACE_ID})。";
     static final String OPENAI_KNOWN_PERSON_MESSAGE_FORMAT = "ユーザ名 ${USER_NAME}(trackId:${FACE_ID})と出会いました。";
+    static final String OPENAI_ASSIGNED_PERSON_MESSAGE_FORMAT = "ユーザ名 ${USER_NAME}(trackId:${FACE_ID})を登録しました。";
 
     private final String baseUrl;
     private final String model;
@@ -62,11 +66,12 @@ final class GroupLlmSettings {
     private final String knownPersonPrompt;
     private final String unknownPersonMessageFormat;
     private final String knownPersonMessageFormat;
+    private final String assignedPersonMessageFormat;
 
     GroupLlmSettings(
             String baseUrl, String model, String apiKey, String botName, String systemPrompt,
             String firstMeetingPrompt, String knownPersonPrompt,
-            String unknownPersonMessageFormat, String knownPersonMessageFormat) {
+            String unknownPersonMessageFormat, String knownPersonMessageFormat, String assignedPersonMessageFormat) {
         this.baseUrl = required(baseUrl, "baseUrl");
         this.model = required(model, "model");
         this.apiKey = text(apiKey);
@@ -76,23 +81,24 @@ final class GroupLlmSettings {
         this.knownPersonPrompt = text(knownPersonPrompt);
         this.unknownPersonMessageFormat = text(unknownPersonMessageFormat);
         this.knownPersonMessageFormat = text(knownPersonMessageFormat);
+        this.assignedPersonMessageFormat = text(assignedPersonMessageFormat);
     }
 
     static GroupLlmSettings defaults(String groupId) {
         if ("group-2".equals(groupId)) {
             return new GroupLlmSettings(DEFAULT_BASE_URL, GEMMA4_MODEL, "",
                 GEMMA4_BOT_NAME, GEMMA4_PROMPT, GEMMA4_FIRST_MEETING_PROMPT, GEMMA4_KNOWN_PERSON_PROMPT,
-                GEMMA4_UNKNOWN_PERSON_MESSAGE_FORMAT, GEMMA4_KNOWN_PERSON_MESSAGE_FORMAT
+                GEMMA4_UNKNOWN_PERSON_MESSAGE_FORMAT, GEMMA4_KNOWN_PERSON_MESSAGE_FORMAT, GEMMA4_ASSIGNED_PERSON_MESSAGE_FORMAT
             );
         } else if ("group-3".equals(groupId)) {
             return new GroupLlmSettings(OPENAI_BASE_URL, OPENAI_MODEL, "",
                 OPENAI_BOT_NAME, OPENAI_PROMPT, OPENAI_FIRST_MEETING_PROMPT, OPENAI_KNOWN_PERSON_PROMPT,
-                OPENAI_UNKNOWN_PERSON_MESSAGE_FORMAT, OPENAI_KNOWN_PERSON_MESSAGE_FORMAT
+                OPENAI_UNKNOWN_PERSON_MESSAGE_FORMAT, OPENAI_KNOWN_PERSON_MESSAGE_FORMAT, OPENAI_ASSIGNED_PERSON_MESSAGE_FORMAT
             );
         } else {
             return new GroupLlmSettings(DEFAULT_BASE_URL, LFM25_MODEL, "",
                 LFM25_BOT_NAME, LFM25_PROMPT, LFM25_FIRST_MEETING_PROMPT, LFM25_KNOWN_PERSON_PROMPT,
-                LFM25_UNKNOWN_PERSON_MESSAGE_FORMAT, LFM25_KNOWN_PERSON_MESSAGE_FORMAT
+                LFM25_UNKNOWN_PERSON_MESSAGE_FORMAT, LFM25_KNOWN_PERSON_MESSAGE_FORMAT, LFM25_ASSIGNED_PERSON_MESSAGE_FORMAT
             );
         }
     }
@@ -114,13 +120,14 @@ final class GroupLlmSettings {
                 defaultIfBlank(JsonFields.stringOrDefault(json, "firstMeetingPrompt", ""), defaults.firstMeetingPrompt),
                 defaultIfBlank(JsonFields.stringOrDefault(json, "knownPersonPrompt", ""), defaults.knownPersonPrompt),
                 defaultIfBlank(JsonFields.stringOrDefault(json, "unknownPersonMessageFormat", ""), defaults.unknownPersonMessageFormat),
-                defaultIfBlank(JsonFields.stringOrDefault(json, "knownPersonMessageFormat", ""), defaults.knownPersonMessageFormat));
+                defaultIfBlank(JsonFields.stringOrDefault(json, "knownPersonMessageFormat", ""), defaults.knownPersonMessageFormat),
+                defaultIfBlank(JsonFields.stringOrDefault(json, "assignedPersonMessageFormat", ""), defaults.assignedPersonMessageFormat));
     }
 
     String systemPrompt() { return systemPrompt; }
     PromptTemplates promptTemplates() {
         return new PromptTemplates(botName, systemPrompt, firstMeetingPrompt, knownPersonPrompt,
-                unknownPersonMessageFormat, knownPersonMessageFormat);
+                unknownPersonMessageFormat, knownPersonMessageFormat, assignedPersonMessageFormat);
     }
 
     void save(Path localRoot, String groupId) throws IOException {
@@ -142,14 +149,16 @@ final class GroupLlmSettings {
         return Json.object(Json.fields("baseUrl", baseUrl, "model", model, "apiKey", apiKey,
                 "botName", botName, "systemPrompt", systemPrompt, "firstMeetingPrompt", firstMeetingPrompt,
                 "knownPersonPrompt", knownPersonPrompt, "unknownPersonMessageFormat", unknownPersonMessageFormat,
-                "knownPersonMessageFormat", knownPersonMessageFormat));
+                "knownPersonMessageFormat", knownPersonMessageFormat,
+                "assignedPersonMessageFormat", assignedPersonMessageFormat));
     }
 
     String toSettingsJson(GroupLlmSettings defaults) {
         return Json.object(Json.fields("baseUrl", baseUrl, "model", model, "apiKey", apiKey,
                 "botName", botName, "systemPrompt", systemPrompt, "firstMeetingPrompt", firstMeetingPrompt,
                 "knownPersonPrompt", knownPersonPrompt, "unknownPersonMessageFormat", unknownPersonMessageFormat,
-                "knownPersonMessageFormat", knownPersonMessageFormat, "defaults", Json.raw(defaults.toJson())));
+                "knownPersonMessageFormat", knownPersonMessageFormat,
+                "assignedPersonMessageFormat", assignedPersonMessageFormat, "defaults", Json.raw(defaults.toJson())));
     }
 
     /** 既定値と同じ項目は空欄にして、変更された項目だけを保存します。 */
@@ -160,7 +169,8 @@ final class GroupLlmSettings {
                 "firstMeetingPrompt", stored(firstMeetingPrompt, defaults.firstMeetingPrompt),
                 "knownPersonPrompt", stored(knownPersonPrompt, defaults.knownPersonPrompt),
                 "unknownPersonMessageFormat", stored(unknownPersonMessageFormat, defaults.unknownPersonMessageFormat),
-                "knownPersonMessageFormat", stored(knownPersonMessageFormat, defaults.knownPersonMessageFormat)));
+                "knownPersonMessageFormat", stored(knownPersonMessageFormat, defaults.knownPersonMessageFormat),
+                "assignedPersonMessageFormat", stored(assignedPersonMessageFormat, defaults.assignedPersonMessageFormat)));
     }
 
     private static Path file(Path localRoot, String groupId) { return localRoot.resolve(groupId).resolve(FILE_NAME); }

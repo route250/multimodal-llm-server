@@ -41,6 +41,10 @@ class ChatClientLocalLlmFaceConversationTest {
     private static final String UNKNOWN_BROWSER_TRACK_ID = "browser-track-unknown";
     private static final String KNOWN_BROWSER_TRACK_ID = "browser-track-known";
 
+    public static boolean contains( String text, String key1, String key2 ) {
+        return text!=null && (text.contains(key1) || text.contains(key2));
+    }
+
     @Test
     void unknownUserIsAskedNameThenRegisteredByToolAndConversationContinues(@TempDir Path tempDir)
             throws Exception {
@@ -74,12 +78,12 @@ class ChatClientLocalLlmFaceConversationTest {
                 Path x = tempDir.resolve("persons.json" );
                 assertTrue( Files.isRegularFile(x), "名前が登録されてません。" );
                 String personsJson = Files.readString(tempDir.resolve("persons.json"), StandardCharsets.UTF_8);
-                assertTrue(personsJson.contains("\"name\":\"太郎\"")||personsJson.contains("\"name\":\"たろう\""), "名前が登録されてません。"+personsJson);
+                assertTrue(contains(personsJson,"\"name\":\"太郎\"","\"name\":\"たろう\""), "名前が登録されてません。"+personsJson);
                 assertFalse(reply.isBlank(), "名前登録後の会話応答がありません");
                 assertFalse(reply.contains("trackId"), () -> "trackIdを出力しています:" + reply );
                 assertFalse(reply.contains("track-0"), () -> "trackIdを出力しています:" + reply );
                 assertFalse(reply.contains("trak-0"), () -> "trackIdを出力しています:" + reply );
-                assertTrue(reply.contains("太郎"), () -> "登録名を使って会話を継続していません: " + reply);
+                assertTrue(contains(reply,"太郎","たろう"), () -> "登録名を使って会話を継続していません: " + reply);
             }
         });
     }

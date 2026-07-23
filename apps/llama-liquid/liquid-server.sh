@@ -58,7 +58,7 @@ $LIQUID_BIN/llama-liquid-audio-server -lv 1 --port $LIQUID_PORT -m $CKPT/$M11 -m
 LIQUID_PID=$!
 
 echo "start llama-server http://localhost:$LLAMACPP_PORT"
-"$LLAMACPP_BIN/llama-server" -lv 1 --port "$LLAMACPP_PORT" --models-dir "$CKPT" --models-max 1 --models-autoload --sleep-idle-seconds 600 >>"$LLAMACPP_LOGFILE" 2>&1 &
+"$LLAMACPP_BIN/llama-server" -lv 1 --port "$LLAMACPP_PORT" --models-dir "$CKPT" --models-max 1 --models-autoload --sleep-idle-seconds 600 --reasoning off >>"$LLAMACPP_LOGFILE" 2>&1 &
 LLAMACPP_PID=$!
 
 wait "$LIQUID_PID" "$LLAMACPP_PID"

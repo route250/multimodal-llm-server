@@ -8,10 +8,12 @@ import java.time.format.DateTimeFormatter;
 /** LLM に送るプロンプトテンプレートと変数展開を担当します。 */
 record PromptTemplates(
         String botName, String systemPrompt, String firstMeetingPrompt, String knownPersonPrompt,
-        String unknownPersonMessageFormat, String knownPersonMessageFormat) {
+        String unknownPersonMessageFormat, String knownPersonMessageFormat, String assignedPersonMessageFormat,
+        Clock clock
+    ) {
     private static final ZoneId TOKYO = ZoneId.of("Asia/Tokyo");
     private static final DateTimeFormatter DATETIME_FORMAT = DateTimeFormatter.ofPattern("uuuu年M月d日 HH時mm分ss秒");
-
+    
     PromptTemplates {
         botName = text(botName);
         systemPrompt = text(systemPrompt);
@@ -19,25 +21,42 @@ record PromptTemplates(
         knownPersonPrompt = text(knownPersonPrompt);
         unknownPersonMessageFormat = text(unknownPersonMessageFormat);
         knownPersonMessageFormat = text(knownPersonMessageFormat);
+        assignedPersonMessageFormat = text(assignedPersonMessageFormat);
     }
 
-    String expandedSystemPrompt() { return expandedSystemPrompt(Clock.system(TOKYO)); }
-    String expandedSystemPrompt(Clock clock) { return common(systemPrompt, clock); }
-    String encounterPrompt(boolean known) { return encounterPrompt(known, Clock.system(TOKYO)); }
-    String encounterPrompt(boolean known, Clock clock) { return common(known ? knownPersonPrompt : firstMeetingPrompt, clock); }
-    String faceMessage(boolean known, String userName, String faceId) {
-        return faceMessage(known, userName, faceId, Clock.system(TOKYO));
+    PromptTemplates(
+        String botName, String systemPrompt, String firstMeetingPrompt, String knownPersonPrompt,
+        String unknownPersonMessageFormat, String knownPersonMessageFormat, String assignedPersonMessageFormat
+    ) {
+        this(botName,systemPrompt,firstMeetingPrompt,knownPersonPrompt,
+            unknownPersonMessageFormat,assignedPersonMessageFormat,assignedPersonMessageFormat,null);
     }
-    String faceMessage(boolean known, String userName, String faceId, Clock clock) {
-        return common(known ? knownPersonMessageFormat : unknownPersonMessageFormat, clock)
+
+    String expandedSystemPrompt() { return common(systemPrompt); }
+    String encounterPrompt(boolean known) { return common(known ? knownPersonPrompt : firstMeetingPrompt); }
+    String faceMessage(boolean known, String userName, String faceId) {
+        return common(known ? knownPersonMessageFormat : unknownPersonMessageFormat)
+                .replace("${USER_NAME}", text(userName).isEmpty() ? "不明" : text(userName))
+                .replace("${FACE_ID}", text(faceId));
+    }
+    /** 人物名の登録成功を LLM へ通知するメッセージを生成します。 */
+    String assignedPersonMessage(String userName, String faceId) {
+        return common(assignedPersonMessageFormat)
                 .replace("${USER_NAME}", text(userName).isEmpty() ? "不明" : text(userName))
                 .replace("${FACE_ID}", text(faceId));
     }
 
-    private String common(String template, Clock clock) {
+    /** 本日の日付と時刻 */
+    private String today() {
+        Clock clock = this.clock == null ? Clock.system(TOKYO) : this.clock;
+        String tm = DATETIME_FORMAT.format(ZonedDateTime.now(clock).withZoneSameInstant(TOKYO));
+        return tm;
+    }
+
+    private String common(String template) {
         return text(template)
                 .replace("${BOT_NAME}", botName)
-                .replace("${DATETIME}", DATETIME_FORMAT.format(ZonedDateTime.now(clock).withZoneSameInstant(TOKYO)));
+                .replace("${DATETIME}", today() );
     }
 
     private static String text(String value) { return value == null ? "" : value.strip(); }
