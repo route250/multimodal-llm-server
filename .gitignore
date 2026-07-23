@@ -28,3 +28,4 @@ tmp/
 .local
 
 *.swp
+**/.DS_Store

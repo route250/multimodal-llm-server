@@ -1,4 +1,4 @@
-import createVADModule from "/tenvad/ten_vad.js";
+import createVADModule from "/vendor/tenvad/ten_vad.js";
 
 export class ChatAudio {
     constructor(options) {
@@ -257,7 +257,7 @@ export class ChatAudio {
         }
         if (!this.tenVadModule) {
             this.tenVadModule = await createVADModule({
-                locateFile: (path) => `/tenvad/${path}`
+                locateFile: (path) => `/vendor/tenvad/${path}`
             });
             this.addTenVadHelpers();
         }
