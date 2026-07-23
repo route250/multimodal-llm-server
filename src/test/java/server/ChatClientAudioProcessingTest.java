@@ -23,6 +23,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 import llm.ChatMessage;
+import llm.ChatMessage.Role;
 import llm.LLM;
 import llm.LanguageModelException;
 import org.junit.jupiter.api.Test;
@@ -93,7 +94,7 @@ class ChatClientAudioProcessingTest {
         assertTrue(frontend.contains("audio-control-ignored-without-assistant-turn"));
         assertTrue(frontend.contains("X-Client-Mic-Start-Sample"));
         assertTrue(frontend.contains("/chat/playback"));
-        assertTrue(frontend.contains("import createVADModule from \"/tenvad/ten_vad.js\""));
+        assertTrue(frontend.contains("import createVADModule from \"/vendor/tenvad/ten_vad.js\""));
         assertTrue(frontend.contains("audio/pcm-vad; rate=16000; channels=1; format=s16le; vad-frame-samples=256"));
         assertTrue(frontend.contains("tenVadHopSamples = 256"));
         assertTrue(frontend.contains("const playbackFlag = (this.currentPlayback || this.pausedPlayback) ? 0x80 : 0"));
@@ -849,8 +850,8 @@ class ChatClientAudioProcessingTest {
             assertNotNull(pollUntil(listener, event -> "message-done".equals(event.type())));
 
             assertEquals(List.of(
-                    new ChatMessage("user", "開始"),
-                    new ChatMessage("assistant", "一つ目です。二つ目です。")),
+                    new ChatMessage(Role.User, "開始"),
+                    new ChatMessage(Role.Assistant, "一つ目です。二つ目です。")),
                     processorClient.conversationHistoryForTest());
         }
     }
@@ -870,7 +871,7 @@ class ChatClientAudioProcessingTest {
             processorClient.handle(ChatRequest.from("text/plain; charset=utf-8", "失敗しても残す".getBytes()));
             assertNotNull(pollUntil(listener, event -> event.message().contains("llm request failed: boom")));
 
-            assertEquals(List.of(new ChatMessage("user", "失敗しても残す")),
+            assertEquals(List.of(new ChatMessage(Role.User, "失敗しても残す")),
                     processorClient.conversationHistoryForTest());
         }
     }

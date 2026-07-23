@@ -75,10 +75,7 @@ final class LlmLogger {
             if (!first) json.append(",");
             first = false;
             LLM.Message message = messages.get(i);
-            String contentType = "assistant".equals(message.role) ? "output_text" : "input_text";
-            json.append("{\"type\":\"message\",\"role\":").append(Json.string(message.role))
-                    .append(",\"content\":[{\"type\":").append(Json.string(contentType))
-                    .append(",\"text\":").append(Json.string(message.message)).append("}]}");
+            message.toJson(json);
         }
         for (ToolResult result : toolResults) {
             if (!first) json.append(",");

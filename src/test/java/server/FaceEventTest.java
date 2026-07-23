@@ -28,6 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import llm.ChatMessage;
+import llm.ChatMessage.Role;
 import llm.tools.PersonToolABC;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -151,9 +152,9 @@ class FaceEventTest {
                     languageModel.calls().get(0));
             var history = client.conversationHistoryForTest();
             assertEquals(2, history.size());
-            assertEquals("system", history.get(0).role());
+            assertEquals(Role.System, history.get(0).role());
             assertEquals(templates.faceMessage(false, "", "trak-000000"), history.get(0).text());
-            assertEquals("system", history.get(1).role());
+            assertEquals(Role.System, history.get(1).role());
             assertEquals("人物認識通知\n認識結果: 不在\n相手の名前: 不在\ntrackId: 不在", history.get(1).text());
         }
     }
@@ -279,7 +280,7 @@ class FaceEventTest {
             assertNotNull(confirmation);
             assertTrue(confirmation.message().contains("登録しました。"));
             assertTrue(client.conversationHistoryForTest().contains(new ChatMessage(
-                    "system",
+                    Role.System,
                     GroupLlmSettings.defaults("group-test").promptTemplates()
                             .assignedPersonMessage("太郎", trackId))));
             String trackJson = Files.readString(tempDir.resolve("trak-000000").resolve("trak-000000.json"), StandardCharsets.UTF_8);

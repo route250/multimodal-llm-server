@@ -81,7 +81,7 @@ public interface LanguageModel {
         }
         for (int i = messages.size() - 1; i >= 0; i--) {
             ChatMessage message = messages.get(i);
-            if ("user".equals(message.role())) {
+            if (ChatMessage.Role.User==message.role()) {
                 return message.text();
             }
         }

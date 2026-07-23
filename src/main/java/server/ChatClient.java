@@ -34,6 +34,7 @@ import facedb.FaceDB;
 import facedb.FacePossibility;
 import json.Json;
 import llm.ChatMessage;
+import llm.ChatMessage.Role;
 import llm.LLM;
 import llm.LlmOpenAI;
 import llm.tools.PersonToolABC;
@@ -418,7 +419,7 @@ public class ChatClient {
         ChatMessage faceEventMessage = null;
         if ("person-entered".equals(result.presenceState()) || finalPersonLeft) {
             String eventText = facePresenceHistoryText(result, faceDbTrackId, languageModel.promptTemplates());
-            faceEventMessage = new ChatMessage("system", eventText);
+            faceEventMessage = new ChatMessage(Role.System, eventText);
             synchronized (conversationLock) {
                 conversationHistory.add(faceEventMessage);
                 trimConversationHistory();
@@ -692,7 +693,7 @@ public class ChatClient {
             return;
         }
         StreamingTextChunker chunker = new StreamingTextChunker();
-        ChatMessage userMessage = new ChatMessage("user", transcript);
+        ChatMessage userMessage = new ChatMessage(Role.User, transcript);
         List<ChatMessage> requestMessages;
         synchronized (conversationLock) {
             rememberStalePendingUserMessages(assistantTurnId);
@@ -740,10 +741,10 @@ public class ChatClient {
                 if (!encounterPrompt.isBlank()) currentSystemPrompt = currentSystemPrompt + "\n" + encounterPrompt;
             }
             if (!currentSystemPrompt.isBlank()) {
-                llmMessages.add(new LLM.Message("system", currentSystemPrompt));
+                llmMessages.add(new LLM.Message(LLM.Message.Role.System, currentSystemPrompt));
             }
             llmMessages.addAll(requestMessages.stream()
-                    .map(message -> new LLM.Message(message.role(), message.text()))
+                    .map(message -> new LLM.Message(message.role().name(), message.text()))
                     .toList());
             currentLanguageModel.llm().call(llmMessages, List.of(new PersonTool(assistantTurnId)), delta -> {
                 if (!isAssistantTurnActive(assistantTurnId)) {
@@ -878,17 +879,17 @@ public class ChatClient {
     private void rememberAssistantChunk(long assistantTurnId, String text) {
         Integer historyIndex = rememberedAssistantMessageIndexes.get(assistantTurnId);
         if (historyIndex == null || historyIndex < 0 || historyIndex >= conversationHistory.size()) {
-            conversationHistory.add(new ChatMessage("assistant", text));
+            conversationHistory.add(new ChatMessage(Role.Assistant, text));
             rememberedAssistantMessageIndexes.put(assistantTurnId, conversationHistory.size() - 1);
             return;
         }
         ChatMessage currentMessage = conversationHistory.get(historyIndex);
-        if (!"assistant".equals(currentMessage.role())) {
-            conversationHistory.add(new ChatMessage("assistant", text));
+        if (ChatMessage.Role.Assistant!=currentMessage.role()) {
+            conversationHistory.add(new ChatMessage(Role.Assistant, text));
             rememberedAssistantMessageIndexes.put(assistantTurnId, conversationHistory.size() - 1);
             return;
         }
-        conversationHistory.set(historyIndex, new ChatMessage("assistant", currentMessage.text() + text));
+        conversationHistory.set(historyIndex, new ChatMessage(Role.Assistant, currentMessage.text() + text));
     }
 
     /**
@@ -902,7 +903,7 @@ public class ChatClient {
             return;
         }
         synchronized (conversationLock) {
-            conversationHistory.add(new ChatMessage("system", notification));
+            conversationHistory.add(new ChatMessage(Role.System, notification));
             trimConversationHistory();
         }
     }
