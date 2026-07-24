@@ -8,6 +8,7 @@ import audio.tts.AudioDelta;
 import java.util.List;
 import java.util.function.Consumer;
 import llm.LLM;
+import llm.Message;
 import llm.LanguageModelException;
 import org.junit.jupiter.api.Test;
 

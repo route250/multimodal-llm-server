@@ -26,11 +26,11 @@ class LlmOpenAITest {
             LlmOpenAI model = model(server);
             List<String> deltas = new ArrayList<>();
 
-            List<LLM.Message> response = model.call(
-                    List.of(new LLM.Message("user", "音声認識の結果")), null, deltas::add);
+            List<Message> response = model.call(
+                    List.of(new Message("user", "音声認識の結果")), null, deltas::add);
 
             assertEquals("gemma_4e2b-it-q4_k_m", model.model());
-            assertEquals("こんにちは\nどうぞ", response.get(0).message);
+            assertEquals("こんにちは\nどうぞ", response.get(0).message());
             assertEquals(List.of("こんにちは", "\nどうぞ"), deltas);
             assertTrue(body.get().contains("\"model\":\"gemma_4e2b-it-q4_k_m\""));
             assertTrue(body.get().contains("\"input\":"));
@@ -48,9 +48,9 @@ class LlmOpenAITest {
                     server.baseUri(), "gemma", Duration.ofSeconds(5), "test-key"));
 
             assertEquals("ok", model.call(List.of(
-                    new LLM.Message("system", "日本語で答えてください"),
-                    new LLM.Message("assistant", "覚えました"),
-                    new LLM.Message("user", "続けてください")) ).get(0).message);
+                    new Message("system", "日本語で答えてください"),
+                    new Message("assistant", "覚えました"),
+                    new Message("user", "続けてください")) ).get(0).message());
             assertEquals("Bearer test-key", authorization.get());
             assertTrue(body.get().contains("\"role\":\"system\""));
             assertTrue(body.get().contains("\"role\":\"assistant\""));
@@ -66,10 +66,10 @@ class LlmOpenAITest {
             RecordingTool tool = new RecordingTool();
             LlmOpenAI model = model(server);
 
-            List<LLM.Message> response = model.call(
-                    List.of(new LLM.Message("user", "太郎を登録して")), List.of(tool));
+            List<Message> response = model.call(
+                    List.of(new Message("user", "太郎を登録して")), List.of(tool));
 
-            assertEquals("登録しました", response.get(0).message);
+            assertEquals("登録しました", response.get(0).message());
             assertEquals("trak-000001", tool.trackId.get());
             assertEquals("太郎", tool.name.get());
             assertTrue(secondBody.get().contains("\"type\":\"function_call\""));

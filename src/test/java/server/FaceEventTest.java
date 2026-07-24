@@ -27,8 +27,8 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import llm.ChatMessage;
-import llm.ChatMessage.Role;
+import llm.Message;
+import llm.Message.Role;
 import llm.tools.PersonToolABC;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -153,9 +153,9 @@ class FaceEventTest {
             var history = client.conversationHistoryForTest();
             assertEquals(2, history.size());
             assertEquals(Role.System, history.get(0).role());
-            assertEquals(templates.faceMessage(false, "", "trak-000000"), history.get(0).text());
+            assertEquals(templates.faceMessage(false, "", "trak-000000"), history.get(0).message());
             assertEquals(Role.System, history.get(1).role());
-            assertEquals("人物認識通知\n認識結果: 不在\n相手の名前: 不在\ntrackId: 不在", history.get(1).text());
+            assertEquals("人物認識通知\n認識結果: 不在\n相手の名前: 不在\ntrackId: 不在", history.get(1).message());
         }
     }
 
@@ -279,7 +279,7 @@ class FaceEventTest {
             ServerEvent confirmation = pollUntil(listener, event -> "assistant-audio-chunk".equals(event.type()));
             assertNotNull(confirmation);
             assertTrue(confirmation.message().contains("登録しました。"));
-            assertTrue(client.conversationHistoryForTest().contains(new ChatMessage(
+            assertTrue(client.conversationHistoryForTest().contains(new Message(
                     Role.System,
                     GroupLlmSettings.defaults("group-test").promptTemplates()
                             .assignedPersonMessage("太郎", trackId))));
@@ -422,7 +422,7 @@ class FaceEventTest {
         public List<Message> call(List<Message> messages, List<Tool> tools, Consumer<String> callback) {
             synchronized (calls) {
                 calls.add(messages.stream()
-                        .map(message -> message.role + ":" + message.message)
+                        .map(message -> message.role() + ":" + message.message())
                         .toList());
             }
             callsLatch.countDown();

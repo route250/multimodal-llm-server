@@ -94,7 +94,7 @@ public class LlmOpenAI extends LLM {
                 com.openai.models.responses.ResponseInputItem.Message.Builder mb =
                         ResponseInputItem.Message.builder()
                                 .type(ResponseInputItem.Message.Type.MESSAGE);
-                switch(m.role) {
+                switch(m.role()) {
                     case Message.Role.Assistant:
                         mb.role(Role.of("assistant"));
                         break;
@@ -108,9 +108,9 @@ public class LlmOpenAI extends LLM {
                         mb.role(Role.USER);
                         break;
                     default:
-                        throw new IllegalArgumentException("未対応の role です: " + m.role);
+                        throw new IllegalArgumentException("未対応の role です: " + m.role());
                 }
-                mb.addInputTextContent(m.message);
+                mb.addInputTextContent(m.message());
                 input_messages.add( ResponseInputItem.ofMessage( mb.build() ) );
             }
 

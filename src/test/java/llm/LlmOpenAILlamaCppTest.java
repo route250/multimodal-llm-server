@@ -28,13 +28,14 @@ class LlmOpenAILlamaCppTest {
 
         LlmOpenAI model = new LlmOpenAI(new LLM.Config(
                 baseUri, "LFM2\\.5", Duration.ofSeconds(120), ""));
-        List<LLM.Message> response = model.call(List.of(
-                new LLM.Message("system", "名前を名乗ったら"+PersonToolABC.NAME+"ツールを呼び出してください。"),
-                new LLM.Message("user", "trackIdはtrak-000001です。私の名前は太郎です。")),
+        List<Message> response = model.call(List.of(
+                new Message("system", "名前を名乗ったら"+PersonToolABC.NAME+"ツールを呼び出してください。"),
+                new Message("user", "trackIdはtrak-000001です。私の名前は太郎です。")),
                 List.of(new LlmOpenAITest.RecordingTool()));
 
         assertFalse(response.isEmpty());
-        assertTrue(response.get(0).message != null);
+        assertTrue(response.get(0).message() != null);
+        assertFalse(response.get(0).message().isBlank());
     }
 
     private static void assumeLlamaCppWithLfm25Model(URI baseUri) throws InterruptedException {

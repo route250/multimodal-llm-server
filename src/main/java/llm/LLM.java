@@ -32,42 +32,42 @@ public abstract class LLM {
             this(baseUri, model, timeout, "");
         }
     }
-    public static class Message {
-        public static enum Role{
-            Assistant,User,System,Developer;
-            public String toString() {
-                return this.name().toLowerCase();
-            }
-        }
-        public final Role role;
-        public final String message;
-        public Message( Role role, String message ) {
-            this.role=role!=null?role:Role.System;
-            this.message=message!=null?message:"";
-        }
-        public Message( String role, String message ) {
-            this(toRole(role),message);
-        }
-        public String toString() {
-            return "{\""+this.role+"\":\""+this.message+"\"}";
-        }
-        public static Message.Role toRole(String role) {
-            switch(role!=null?role.toLowerCase():"") {
-                case "assistant": return Message.Role.Assistant;
-                case "user": return Message.Role.User;
-                case "system": return Message.Role.System;
-                case "developer": return Message.Role.Developer;
-                default: return Message.Role.Assistant;
-            }
-        }
-        public StringBuilder toJson(StringBuilder json) {
-            String contentType = this.role==Role.Assistant ? "output_text" : "input_text";
-            json.append("{\"type\":\"message\",\"role\":").append(Json.string(this.role.toString()))
-                    .append(",\"content\":[{\"type\":").append(Json.string(contentType))
-                    .append(",\"text\":").append(Json.string(this.message)).append("}]}");
-            return json;
-        }
-    }
+    // public static class Message {
+    //     public static enum Role{
+    //         Assistant,User,System,Developer;
+    //         public String toString() {
+    //             return this.name().toLowerCase();
+    //         }
+    //     }
+    //     public final Role role;
+    //     public final String message;
+    //     public Message( Role role, String message ) {
+    //         this.role=role!=null?role:Role.System;
+    //         this.message=message!=null?message:"";
+    //     }
+    //     public Message( String role, String message ) {
+    //         this(toRole(role),message);
+    //     }
+    //     public String toString() {
+    //         return "{\""+this.role+"\":\""+this.message+"\"}";
+    //     }
+    //     public static Message.Role toRole(String role) {
+    //         switch(role!=null?role.toLowerCase():"") {
+    //             case "assistant": return Message.Role.Assistant;
+    //             case "user": return Message.Role.User;
+    //             case "system": return Message.Role.System;
+    //             case "developer": return Message.Role.Developer;
+    //             default: return Message.Role.Assistant;
+    //         }
+    //     }
+    //     public StringBuilder toJson(StringBuilder json) {
+    //         String contentType = this.role==Role.Assistant ? "output_text" : "input_text";
+    //         json.append("{\"type\":\"message\",\"role\":").append(Json.string(this.role.toString()))
+    //                 .append(",\"content\":[{\"type\":").append(Json.string(contentType))
+    //                 .append(",\"text\":").append(Json.string(this.message)).append("}]}");
+    //         return json;
+    //     }
+    // }
     public static abstract class Tool {
         public final String name;
         public final String description;
@@ -132,7 +132,7 @@ public abstract class LLM {
         List<Message> messages = call(List.of(new Message("user",message)));
         StringBuilder sb = new StringBuilder();
         for( Message m : messages ) {
-            sb.append(m.message);
+            sb.append(m.message());
         }
         return sb.toString();
     }

@@ -108,8 +108,8 @@ public class SampleOAI {
     public static void sample_impl_sample() {
         LlmOpenAI llm = new LlmOpenAI(
                 "http://localhost:8767", "p", "LFM2.5-1.2B-JP-202606-GGUF", false);
-        List<LLM.Message> responses = llm.call(
-                List.of(new LLM.Message("user", "東京の現在の天気を教えてください。必ず get_weather ツールを使用してください。")),
+        List<Message> responses = llm.call(
+                List.of(new Message("user", "東京の現在の天気を教えてください。必ず get_weather ツールを使用してください。")),
                 List.of(new WeatherTool()),
                 System.out::print);
         System.out.printf("%nAssistant message count: %d%n", responses.size());

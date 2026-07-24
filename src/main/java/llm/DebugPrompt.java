@@ -44,26 +44,26 @@ public class DebugPrompt {
         LLM.Config baseConfig = LlmOpenAI.fromEnvironment();
 
         String inputRole = "system";
-        List<List<LLM.Message>> test_case_list = List.of(
+        List<List<Message>> test_case_list = List.of(
                 List.of(
-                    new LLM.Message(inputRole, "だれか他の人が居ます(trackId:track-00001)。挨拶をしてお名前を聞いてみましょう。名前がわかったらツールをコール"),
-                    new LLM.Message("user", "はい、わたしの名前はかおりです。")
+                    new Message(inputRole, "だれか他の人が居ます(trackId:track-00001)。挨拶をしてお名前を聞いてみましょう。名前がわかったらツールをコール"),
+                    new Message("user", "はい、わたしの名前はかおりです。")
                 ),
-                List.of(new LLM.Message(inputRole, "ユーザ かおり(trackId:track-00001)に友人として挨拶しよう"))
+                List.of(new Message(inputRole, "ユーザ かおり(trackId:track-00001)に友人として挨拶しよう"))
         );
-        for( List<LLM.Message> test_case : test_case_list ) {
+        for( List<Message> test_case : test_case_list ) {
 
             System.out.println("-----------");
 
             LLM llm = new LlmOpenAI( baseConfig.baseUri().toString(), "p", baseConfig.model(), false );
-            List<LLM.Message> messages = new ArrayList<>();
-            messages.add( new LLM.Message("system",SYSTEM_PROMPT2));
+            List<Message> messages = new ArrayList<>();
+            messages.add( new Message("system",SYSTEM_PROMPT2));
 
-            for( LLM.Message input_message : test_case ) {
+            for( Message input_message : test_case ) {
                 System.out.println("[CALL]"+input_message);
                 messages.add(input_message);
-                List<LLM.Message> output = llm.call( messages, tools );
-                for( LLM.Message output_message : output ) {
+                List<Message> output = llm.call( messages, tools );
+                for( Message output_message : output ) {
                     System.out.println( "[OUTPUT]"+output_message );
                     messages.add(output_message);
                 }

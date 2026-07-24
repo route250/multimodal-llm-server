@@ -35,7 +35,7 @@ final class LlmLogger {
             URI endpoint,
             String model,
             boolean reasoning,
-            List<LLM.Message> messages,
+            List<Message> messages,
             List<LLM.Tool> tools,
             List<ToolResult> toolResults) {
         try {
@@ -55,7 +55,7 @@ final class LlmLogger {
     private static String requestBody(
             String model,
             boolean reasoning,
-            List<LLM.Message> messages,
+            List<Message> messages,
             List<LLM.Tool> tools,
             List<ToolResult> toolResults) {
         StringBuilder body = new StringBuilder("{\"model\":").append(Json.string(model));
@@ -68,13 +68,13 @@ final class LlmLogger {
         return body.append("}").toString();
     }
 
-    private static String inputJson(List<LLM.Message> messages, List<ToolResult> toolResults) {
+    private static String inputJson(List<Message> messages, List<ToolResult> toolResults) {
         StringBuilder json = new StringBuilder("[");
         boolean first = true;
         for (int i = 0; i < messages.size(); i++) {
             if (!first) json.append(",");
             first = false;
-            LLM.Message message = messages.get(i);
+            Message message = messages.get(i);
             message.toJson(json);
         }
         for (ToolResult result : toolResults) {

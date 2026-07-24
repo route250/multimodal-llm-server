@@ -10,12 +10,12 @@ import java.util.function.Consumer;
 public interface LanguageModel {
     String respond(String userText);
 
-    default String respond(List<ChatMessage> messages) {
+    default String respond(List<Message> messages) {
         return respond(lastUserText(messages));
     }
 
     default LanguageModelResponse respond(
-            List<ChatMessage> messages,
+            List<Message> messages,
             List<ToolDefinition> tools) {
         return respond(messages, tools, List.of());
     }
@@ -24,7 +24,7 @@ public interface LanguageModel {
      * ツール定義と実行済みツールの結果を含めて、非ストリーミングで応答を生成します。
      */
     default LanguageModelResponse respond(
-            List<ChatMessage> messages,
+            List<Message> messages,
             List<ToolDefinition> tools,
             List<ToolCallResult> toolResults) {
         StringBuilder text = new StringBuilder();
@@ -47,7 +47,7 @@ public interface LanguageModel {
         onDelta.accept(respond(userText));
     }
 
-    default void respondStreaming(List<ChatMessage> messages, Consumer<String> onDelta) {
+    default void respondStreaming(List<Message> messages, Consumer<String> onDelta) {
         respondStreamingEvents(messages, new StreamingResponseHandler() {
             @Override
             public void onTextDelta(String delta) {
@@ -56,33 +56,33 @@ public interface LanguageModel {
         });
     }
 
-    default void respondStreamingEvents(List<ChatMessage> messages, StreamingResponseHandler handler) {
+    default void respondStreamingEvents(List<Message> messages, StreamingResponseHandler handler) {
         respondStreaming(lastUserText(messages), handler::onTextDelta);
     }
 
     default void respondStreamingEvents(
-            List<ChatMessage> messages,
+            List<Message> messages,
             List<ToolDefinition> tools,
             StreamingResponseHandler handler) {
         respondStreamingEvents(messages, handler);
     }
 
     default void respondStreamingEvents(
-            List<ChatMessage> messages,
+            List<Message> messages,
             List<ToolDefinition> tools,
             List<ToolCallResult> toolResults,
             StreamingResponseHandler handler) {
         respondStreamingEvents(messages, tools, handler);
     }
 
-    private static String lastUserText(List<ChatMessage> messages) {
+    private static String lastUserText(List<Message> messages) {
         if (messages == null || messages.isEmpty()) {
             throw new IllegalArgumentException("messages must not be empty");
         }
         for (int i = messages.size() - 1; i >= 0; i--) {
-            ChatMessage message = messages.get(i);
-            if (ChatMessage.Role.User==message.role()) {
-                return message.text();
+            Message message = messages.get(i);
+            if (Message.Role.User==message.role()) {
+                return message.message();
             }
         }
         throw new IllegalArgumentException("messages must contain a user message");

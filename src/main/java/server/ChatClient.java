@@ -33,8 +33,8 @@ import audio.vad.smartturn.LazySmartTurnV3;
 import facedb.FaceDB;
 import facedb.FacePossibility;
 import json.Json;
-import llm.ChatMessage;
-import llm.ChatMessage.Role;
+import llm.Message;
+import llm.Message.Role;
 import llm.LLM;
 import llm.LlmOpenAI;
 import llm.tools.PersonToolABC;
@@ -82,7 +82,7 @@ public class ChatClient {
     /** ブラウザ trackId と FaceDB trackId の対応表を保護するロックです。 */
     private final Object faceTrackLock = new Object();
     /** 再生確認済みの発話だけを保持する、最大 20 件の会話履歴です。 */
-    private final List<ChatMessage> conversationHistory = new ArrayList<>();
+    private final List<Message> conversationHistory = new ArrayList<>();
     /** ユーザー発話により中断済みで、以後の出力を破棄する assistant turn の集合です。 */
     private final Set<Long> canceledAssistantTurnIds = new HashSet<>();
     /** 履歴へユーザー発話を確定済みの assistant turn の集合です。 */
@@ -416,10 +416,10 @@ public class ChatClient {
             }
             finalPersonLeft = "person-left".equals(result.presenceState()) && activeFaceTracks.isEmpty();
         }
-        ChatMessage faceEventMessage = null;
+        Message faceEventMessage = null;
         if ("person-entered".equals(result.presenceState()) || finalPersonLeft) {
             String eventText = facePresenceHistoryText(result, faceDbTrackId, languageModel.promptTemplates());
-            faceEventMessage = new ChatMessage(Role.System, eventText);
+            faceEventMessage = new Message(Role.System, eventText);
             synchronized (conversationLock) {
                 conversationHistory.add(faceEventMessage);
                 trimConversationHistory();
@@ -431,7 +431,7 @@ public class ChatClient {
         }
     }
     /** テスト用に、ロックで保護された会話履歴の不変コピーを返します。 */
-    List<ChatMessage> conversationHistoryForTest() {
+    List<Message> conversationHistoryForTest() {
         synchronized (conversationLock) {
             return List.copyOf(conversationHistory);
         }
@@ -661,13 +661,13 @@ public class ChatClient {
     }
 
     /** 人物入室など、履歴に追加済みのシステムメッセージを契機に assistant turn を開始します。 */
-    private void startAssistantReplyFromHistory(ChatMessage triggerMessage, boolean knownPerson) {
+    private void startAssistantReplyFromHistory(Message triggerMessage, boolean knownPerson) {
         long assistantTurnId = beginAssistantTurn();
         AudioDiagnostics.log("assistant-turn-start", diagnosticsContext, Json.fields(
                 "assistantTurnId", assistantTurnId,
                 "trigger", "conversation-history",
-                "triggerChars", triggerMessage.text().length(),
-                "triggerText", triggerMessage.text()));
+                "triggerChars", triggerMessage.message().length(),
+                "triggerText", triggerMessage.message()));
         FutureTask<Void> task = new FutureTask<>(() -> {
             replyToConversationHistory(triggerMessage, assistantTurnId, knownPerson);
             return null;
@@ -693,8 +693,8 @@ public class ChatClient {
             return;
         }
         StreamingTextChunker chunker = new StreamingTextChunker();
-        ChatMessage userMessage = new ChatMessage(Role.User, transcript);
-        List<ChatMessage> requestMessages;
+        Message userMessage = new Message(Role.User, transcript);
+        List<Message> requestMessages;
         synchronized (conversationLock) {
             rememberStalePendingUserMessages(assistantTurnId);
             pendingUserMessages.put(assistantTurnId, new PendingUserMessage(userMessage));
@@ -704,12 +704,12 @@ public class ChatClient {
     }
 
     /** 履歴に確定済みのシステムイベントを起点として、履歴全体に対する応答を生成します。 */
-    private void replyToConversationHistory(ChatMessage triggerMessage, long assistantTurnId, boolean knownPerson) {
+    private void replyToConversationHistory(Message triggerMessage, long assistantTurnId, boolean knownPerson) {
         if (isClosed()) {
             return;
         }
         StreamingTextChunker chunker = new StreamingTextChunker();
-        List<ChatMessage> requestMessages;
+        List<Message> requestMessages;
         synchronized (conversationLock) {
             requestMessages = List.copyOf(conversationHistory);
         }
@@ -723,28 +723,28 @@ public class ChatClient {
     private void replyWithMessages(
             long assistantTurnId,
             StreamingTextChunker chunker,
-            ChatMessage userMessage,
-            List<ChatMessage> requestMessages,
+            Message userMessage,
+            List<Message> requestMessages,
             boolean publishUserMessage,
             boolean userMessageAlreadyInHistory,
             Boolean encounterKnownPerson) {
         try {
             if (publishUserMessage) {
-                sendToGroupIfOpen(ServerEvent.userMessage(userMessage.text()));
+                sendToGroupIfOpen(ServerEvent.userMessage(userMessage.message()));
             }
             sendToGroupIfOpen(ServerEvent.assistantState("LLM"));
             LlmContext currentLanguageModel = languageModel;
-            List<LLM.Message> llmMessages = new ArrayList<>(requestMessages.size() + 1);
+            List<Message> llmMessages = new ArrayList<>(requestMessages.size() + 1);
             String currentSystemPrompt = currentLanguageModel.promptTemplates().expandedSystemPrompt();
             if (encounterKnownPerson != null) {
                 String encounterPrompt = currentLanguageModel.promptTemplates().encounterPrompt(encounterKnownPerson);
                 if (!encounterPrompt.isBlank()) currentSystemPrompt = currentSystemPrompt + "\n" + encounterPrompt;
             }
             if (!currentSystemPrompt.isBlank()) {
-                llmMessages.add(new LLM.Message(LLM.Message.Role.System, currentSystemPrompt));
+                llmMessages.add(new Message(Message.Role.System, currentSystemPrompt));
             }
             llmMessages.addAll(requestMessages.stream()
-                    .map(message -> new LLM.Message(message.role().name(), message.text()))
+                    .map(message -> new Message(message.role().name(), message.message()))
                     .toList());
             currentLanguageModel.llm().call(llmMessages, List.of(new PersonTool(assistantTurnId)), delta -> {
                 if (!isAssistantTurnActive(assistantTurnId)) {
@@ -810,8 +810,8 @@ public class ChatClient {
     }
 
     /** 確定済み履歴の末尾に今回のユーザー発話を追加した、LLM リクエスト用の不変リストを返します。 */
-    private List<ChatMessage> requestMessages(ChatMessage userMessage) {
-        List<ChatMessage> messages = new ArrayList<>(conversationHistory.size() + 1);
+    private List<Message> requestMessages(Message userMessage) {
+        List<Message> messages = new ArrayList<>(conversationHistory.size() + 1);
         messages.addAll(conversationHistory);
         messages.add(userMessage);
         return List.copyOf(messages);
@@ -841,7 +841,7 @@ public class ChatClient {
             return;
         }
         PendingUserMessage pendingUserMessage = pendingUserMessages.remove(assistantTurnId);
-        ChatMessage userMessage = pendingUserMessage == null ? chunk.userMessage() : pendingUserMessage.userMessage();
+        Message userMessage = pendingUserMessage == null ? chunk.userMessage() : pendingUserMessage.userMessage();
         conversationHistory.add(userMessage);
         rememberedUserAssistantTurnIds.add(assistantTurnId);
     }
@@ -879,17 +879,17 @@ public class ChatClient {
     private void rememberAssistantChunk(long assistantTurnId, String text) {
         Integer historyIndex = rememberedAssistantMessageIndexes.get(assistantTurnId);
         if (historyIndex == null || historyIndex < 0 || historyIndex >= conversationHistory.size()) {
-            conversationHistory.add(new ChatMessage(Role.Assistant, text));
+            conversationHistory.add(new Message(Role.Assistant, text));
             rememberedAssistantMessageIndexes.put(assistantTurnId, conversationHistory.size() - 1);
             return;
         }
-        ChatMessage currentMessage = conversationHistory.get(historyIndex);
-        if (ChatMessage.Role.Assistant!=currentMessage.role()) {
-            conversationHistory.add(new ChatMessage(Role.Assistant, text));
+        Message currentMessage = conversationHistory.get(historyIndex);
+        if (Message.Role.Assistant!=currentMessage.role()) {
+            conversationHistory.add(new Message(Role.Assistant, text));
             rememberedAssistantMessageIndexes.put(assistantTurnId, conversationHistory.size() - 1);
             return;
         }
-        conversationHistory.set(historyIndex, new ChatMessage(Role.Assistant, currentMessage.text() + text));
+        conversationHistory.set(historyIndex, new Message(Role.Assistant, currentMessage.message() + text));
     }
 
     /**
@@ -903,7 +903,7 @@ public class ChatClient {
             return;
         }
         synchronized (conversationLock) {
-            conversationHistory.add(new ChatMessage(Role.System, notification));
+            conversationHistory.add(new Message(Role.System, notification));
             trimConversationHistory();
         }
     }
@@ -929,7 +929,7 @@ public class ChatClient {
      */
     private void speak(
             long assistantTurnId,
-            ChatMessage userMessage,
+            Message userMessage,
             boolean userMessageAlreadyInHistory,
             Iterable<String> chunks) {
         for (String chunk : chunks) {
@@ -1146,11 +1146,11 @@ public class ChatClient {
     }
 
     /** assistant 音声の再生確認まで会話履歴への追加を保留するユーザー発話です。 */
-    private record PendingUserMessage(ChatMessage userMessage) {
+    private record PendingUserMessage(Message userMessage) {
     }
 
     /** 再生確認まで保留する assistant chunk と、その生成元ユーザー発話です。 */
-    private record PendingAssistantChunk(ChatMessage userMessage, boolean userMessageAlreadyInHistory, String text) {
+    private record PendingAssistantChunk(Message userMessage, boolean userMessageAlreadyInHistory, String text) {
     }
 
     /** LLM が人物名を確定するために呼び出すツールの、このクライアント用実装です。 */

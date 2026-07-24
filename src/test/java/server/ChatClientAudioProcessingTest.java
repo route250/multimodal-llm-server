@@ -22,8 +22,8 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
-import llm.ChatMessage;
-import llm.ChatMessage.Role;
+import llm.Message;
+import llm.Message.Role;
 import llm.LLM;
 import llm.LanguageModelException;
 import org.junit.jupiter.api.Test;
@@ -850,8 +850,8 @@ class ChatClientAudioProcessingTest {
             assertNotNull(pollUntil(listener, event -> "message-done".equals(event.type())));
 
             assertEquals(List.of(
-                    new ChatMessage(Role.User, "開始"),
-                    new ChatMessage(Role.Assistant, "一つ目です。二つ目です。")),
+                    new Message(Role.User, "開始"),
+                    new Message(Role.Assistant, "一つ目です。二つ目です。")),
                     processorClient.conversationHistoryForTest());
         }
     }
@@ -871,7 +871,7 @@ class ChatClientAudioProcessingTest {
             processorClient.handle(ChatRequest.from("text/plain; charset=utf-8", "失敗しても残す".getBytes()));
             assertNotNull(pollUntil(listener, event -> event.message().contains("llm request failed: boom")));
 
-            assertEquals(List.of(new ChatMessage(Role.User, "失敗しても残す")),
+            assertEquals(List.of(new Message(Role.User, "失敗しても残す")),
                     processorClient.conversationHistoryForTest());
         }
     }
@@ -1445,7 +1445,7 @@ class ChatClientAudioProcessingTest {
         @Override
         public List<Message> call(List<Message> messages, List<Tool> tools, Consumer<String> callback) {
             calls++;
-            String output = response.isBlank() ? messages.getLast().message : response;
+            String output = response.isBlank() ? messages.getLast().message() : response;
             callback.accept(output);
             return List.of(new Message("assistant", output));
         }
@@ -1477,7 +1477,7 @@ class ChatClientAudioProcessingTest {
         @Override
         public List<Message> call(List<Message> messages, List<Tool> tools, Consumer<String> callback) {
             calls.add(messages.stream()
-                    .map(message -> message.role + ":" + message.message)
+                    .map(message -> message.role() + ":" + message.message())
                     .toList());
             String response = responses.get(nextResponse++);
             callback.accept(response);
