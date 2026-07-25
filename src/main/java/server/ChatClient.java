@@ -179,13 +179,7 @@ public class ChatClient {
             LLM llm,
             String systemPrompt,
             TextToSpeech textToSpeech) {
-        this(id, chatGroup, audioProcessor, llm,
-                new PromptTemplates(GroupLlmSettings.LFM25_BOT_NAME, systemPrompt,
-                        GroupLlmSettings.LFM25_FIRST_MEETING_PROMPT, GroupLlmSettings.LFM25_KNOWN_PERSON_PROMPT,
-                        GroupLlmSettings.LFM25_UNKNOWN_PERSON_MESSAGE_FORMAT,
-                        GroupLlmSettings.LFM25_KNOWN_PERSON_MESSAGE_FORMAT,
-                        GroupLlmSettings.LFM25_ASSIGNED_PERSON_MESSAGE_FORMAT),
-                textToSpeech);
+        this(id, chatGroup, audioProcessor, llm,GroupLlmSettings.custom(systemPrompt).promptTemplates(), textToSpeech);
     }
 
     /** 依存オブジェクトを直接受け取る内部生成経路です。AudioProcessor の通知先もここで登録します。 */
@@ -741,27 +735,30 @@ public class ChatClient {
             String systemPrompt = templates.expandedSystemPrompt();
             // 
             int faceIdx = -1;
-            AA: for( int idx=requestMessages.size()-1;idx>=0;idx--) {
+            PromptLoop: for( int idx=requestMessages.size()-1;idx>=0;idx--) {
                 String mark = requestMessages.get(idx).meta(FACE_MARKER);
                 if( mark!=null) switch(mark) {
                     case FACE_UNKNOWN:
                         systemPrompt = systemPrompt + "\n" +  templates.expandFirstMeetingPrompt();
                         faceIdx = idx;
-                        break AA;
+                        break PromptLoop;
                     case FACE_ASSIGNED:
+                        if(idx==requestMessages.size()-1) {
+                            systemPrompt = systemPrompt + "\n" + templates.expandAssignedPrompt();
+                        }
                         faceIdx = idx;
-                        break AA;
+                        break PromptLoop;
                     case FACE_KNOWN:
                         if(idx==requestMessages.size()-1) {
                             systemPrompt = systemPrompt + "\n" +  templates.expandKnownPersonPrompt();
                         }
                         faceIdx = idx;
-                        break AA;
+                        break PromptLoop;
                     case FACE_LOST:
                         faceIdx = idx;
-                        break AA;
+                        break PromptLoop;
                     default:
-                        break AA;
+                        break PromptLoop;
                 }
             }
             List<Message> llmMessages = new ArrayList<>(requestMessages.size() + 1);
@@ -771,7 +768,7 @@ public class ChatClient {
             for( int idx=0,n=requestMessages.size(); idx<n; idx++ ) {
                 Message m = requestMessages.get(idx);
                 if( m.meta(FACE_MARKER)==null || idx==faceIdx ) {
-                    llmMessages.add( new Message(m.role(),m.message()) );
+                    llmMessages.add( m.strip() );
                 }
             }
             currentLanguageModel.llm().call(llmMessages, List.of(new PersonTool(assistantTurnId)), delta -> {
@@ -922,7 +919,7 @@ public class ChatClient {
 
     /**
      * 人物名の登録成功を system メッセージとして会話履歴へ確定します。
-     * 入室時の既知人物通知と同じテンプレートを使い、${USER_NAME}、${FACE_ID}、${BOT_NAME}、${DATETIME}
+     * 登録完了通知用テンプレートを使い、${USER_NAME}、${FACE_ID}、${BOT_NAME}、${DATETIME}
      * を Group ごとの設定に従って展開します。
      */
     private void rememberFaceNameAssignment(String faceDbTrackId, String name) {

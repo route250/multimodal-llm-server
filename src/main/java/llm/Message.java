@@ -8,7 +8,7 @@ import json.Json;
 /**
  * LLM に渡す会話履歴の 1 メッセージです。
  */
-public record Message(Role role, String message, String name, Map<String,String> meta) {
+public record Message(Role role, String message, String name, Map<String,String> meta, long tm) {
     public static enum Role {
         User, Assistant, System, Developer;
         public String toString() {
@@ -38,12 +38,18 @@ public record Message(Role role, String message, String name, Map<String,String>
         if( meta==null ) {
             meta = new HashMap<>();
         }
+        if( tm<0 ) {
+            throw new IllegalArgumentException("tm<0");
+        }
     }
     public Message( Role role, String message ) {
-        this(role,message,null,null);
+        this(role,message,null,null, System.currentTimeMillis());
     }
     public Message( Role role, String message, String name ) {
-        this(role,message,name,null);
+        this(role,message,name,null, System.currentTimeMillis());
+    }
+    public Message strip() {
+        return new Message(this.role(),this.message(),this.name(),null,this.tm());
     }
     public String meta( String key ) {
         return this.meta.get(key);

@@ -211,7 +211,7 @@ class FaceEventTest {
             assertEquals("system:" + templates.expandedSystemPrompt()
                     + "\n" + GroupLlmSettings.LFM25_KNOWN_PERSON_PROMPT, messages.get(0));
             assertTrue(messages.get(1).matches(
-                    "system:<!-- 花子 さんとして登録しました。assign_user_name の内部データ: trak-[0-9]{6} -->"));
+                    "system:<!-- 登録済みの相手は 花子 さんです。assign_user_name の内部データ: trak-[0-9]{6} -->"));
         }
     }
 
@@ -273,12 +273,11 @@ class FaceEventTest {
             ServerEvent confirmation = pollUntil(listener, event -> "assistant-audio-chunk".equals(event.type()));
             assertNotNull(confirmation);
             assertTrue(confirmation.message().contains("登録しました。"));
-            assertTrue(client.conversationHistoryForTest().contains(new Message(
-                    Role.System,
-                    GroupLlmSettings.defaults("group-test").promptTemplates()
-                            .assignedPersonMessage("太郎", trackId),
-                    "",
-                    Map.of(ChatClient.FACE_MARKER, ChatClient.FACE_ASSIGNED))));
+            assertTrue(client.conversationHistoryForTest().stream().anyMatch(message ->
+                    message.role() == Role.System
+                            && message.message().equals(GroupLlmSettings.defaults("group-test").promptTemplates()
+                                    .assignedPersonMessage("太郎", trackId))
+                            && ChatClient.FACE_ASSIGNED.equals(message.meta(ChatClient.FACE_MARKER))));
             String trackJson = Files.readString(tempDir.resolve("trak-000000").resolve("trak-000000.json"), StandardCharsets.UTF_8);
             assertEquals("person0000", JsonFields.string(trackJson, "personId"));
             String personsJson = Files.readString(tempDir.resolve("persons.json"), StandardCharsets.UTF_8);

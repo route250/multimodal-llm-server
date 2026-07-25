@@ -849,10 +849,8 @@ class ChatClientAudioProcessingTest {
             processorClient.handlePlayback(new ChatClient.PlaybackEvent(1, 2, "end", true, 0, 0, 0));
             assertNotNull(pollUntil(listener, event -> "message-done".equals(event.type())));
 
-            assertEquals(List.of(
-                    new Message(Role.User, "開始"),
-                    new Message(Role.Assistant, "一つ目です。二つ目です。")),
-                    processorClient.conversationHistoryForTest());
+            assertEquals(List.of("{\"user\":\"開始\"}", "{\"assistant\":\"一つ目です。二つ目です。\"}"),
+                    processorClient.conversationHistoryForTest().stream().map(Message::toString).toList());
         }
     }
 
@@ -871,8 +869,8 @@ class ChatClientAudioProcessingTest {
             processorClient.handle(ChatRequest.from("text/plain; charset=utf-8", "失敗しても残す".getBytes()));
             assertNotNull(pollUntil(listener, event -> event.message().contains("llm request failed: boom")));
 
-            assertEquals(List.of(new Message(Role.User, "失敗しても残す")),
-                    processorClient.conversationHistoryForTest());
+            assertEquals(List.of("{\"user\":\"失敗しても残す\"}"),
+                    processorClient.conversationHistoryForTest().stream().map(Message::toString).toList());
         }
     }
 

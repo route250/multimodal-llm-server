@@ -7,7 +7,7 @@ import java.time.format.DateTimeFormatter;
 
 /** LLM に送るプロンプトテンプレートと変数展開を担当します。 */
 record PromptTemplates(
-        String botName, String systemPrompt, String firstMeetingPrompt, String knownPersonPrompt,
+        String botName, String systemPrompt, String firstMeetingPrompt, String knownPersonPrompt, String assignedPrompt,
         String unknownPersonMessageFormat, String knownPersonMessageFormat, String assignedPersonMessageFormat,
         Clock clock
     ) {
@@ -19,23 +19,24 @@ record PromptTemplates(
         systemPrompt = text(systemPrompt);
         firstMeetingPrompt = text(firstMeetingPrompt);
         knownPersonPrompt = text(knownPersonPrompt);
+        assignedPrompt = text(assignedPrompt);
         unknownPersonMessageFormat = text(unknownPersonMessageFormat);
         knownPersonMessageFormat = text(knownPersonMessageFormat);
         assignedPersonMessageFormat = text(assignedPersonMessageFormat);
     }
 
     PromptTemplates(
-        String botName, String systemPrompt, String firstMeetingPrompt, String knownPersonPrompt,
+        String botName, String systemPrompt, String firstMeetingPrompt, String knownPersonPrompt, String assignedPrompt,
         String unknownPersonMessageFormat, String knownPersonMessageFormat, String assignedPersonMessageFormat
     ) {
-        this(botName,systemPrompt,firstMeetingPrompt,knownPersonPrompt,
-            unknownPersonMessageFormat,assignedPersonMessageFormat,assignedPersonMessageFormat,null);
+        this(botName,systemPrompt,firstMeetingPrompt,knownPersonPrompt,assignedPrompt,
+            unknownPersonMessageFormat,knownPersonMessageFormat,assignedPersonMessageFormat,null);
     }
 
     String expandedSystemPrompt() { return common(systemPrompt); }
     String expandKnownPersonPrompt() { return common(knownPersonPrompt); }
     String expandFirstMeetingPrompt() { return common(firstMeetingPrompt); }
-    String encounterPrompt(boolean known) { return common(known ? knownPersonPrompt : firstMeetingPrompt); }
+    String expandAssignedPrompt() { return common(assignedPrompt); }
     String faceMessage(String faceId) {
         if( faceId==null || faceId.isBlank() ) {
             throw new IllegalArgumentException("invalid username or faceId");
