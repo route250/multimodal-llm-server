@@ -27,7 +27,7 @@ class LlmOpenAITest {
             List<String> deltas = new ArrayList<>();
 
             List<Message> response = model.call(
-                    List.of(new Message("user", "音声認識の結果")), null, deltas::add);
+                    List.of(new Message(Message.Role.User, "音声認識の結果")), null, deltas::add);
 
             assertEquals("gemma_4e2b-it-q4_k_m", model.model());
             assertEquals("こんにちは\nどうぞ", response.get(0).message());
@@ -48,9 +48,9 @@ class LlmOpenAITest {
                     server.baseUri(), "gemma", Duration.ofSeconds(5), "test-key"));
 
             assertEquals("ok", model.call(List.of(
-                    new Message("system", "日本語で答えてください"),
-                    new Message("assistant", "覚えました"),
-                    new Message("user", "続けてください")) ).get(0).message());
+                    new Message(Message.Role.System, "日本語で答えてください"),
+                    new Message(Message.Role.Assistant, "覚えました"),
+                    new Message(Message.Role.User, "続けてください")) ).get(0).message());
             assertEquals("Bearer test-key", authorization.get());
             assertTrue(body.get().contains("\"role\":\"system\""));
             assertTrue(body.get().contains("\"role\":\"assistant\""));
@@ -67,7 +67,7 @@ class LlmOpenAITest {
             LlmOpenAI model = model(server);
 
             List<Message> response = model.call(
-                    List.of(new Message("user", "太郎を登録して")), List.of(tool));
+                    List.of(new Message(Message.Role.User, "太郎を登録して")), List.of(tool));
 
             assertEquals("登録しました", response.get(0).message());
             assertEquals("trak-000001", tool.trackId.get());

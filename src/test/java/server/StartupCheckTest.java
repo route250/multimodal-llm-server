@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.function.Consumer;
 import llm.LLM;
 import llm.Message;
+import llm.Message.Role;
 import llm.LanguageModelException;
 import org.junit.jupiter.api.Test;
 
@@ -92,7 +93,7 @@ class StartupCheckTest {
             if (callback != null) {
                 callback.accept(response);
             }
-            return List.of(new Message("assistant", response));
+            return List.of(new Message(Role.Assistant, response));
         }
     }
 }

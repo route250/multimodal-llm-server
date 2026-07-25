@@ -196,7 +196,7 @@ public class LlmOpenAI extends LLM {
                 } finally {
                     logger.saveResponse();
                     if( output_content.length()>0 ) {
-                        resps.add( new Message("assistant",output_content.toString()));
+                        resps.add( new Message(llm.Message.Role.Assistant,output_content.toString()));
                     }
                 }
             }

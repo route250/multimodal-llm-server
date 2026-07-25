@@ -129,7 +129,7 @@ public abstract class LLM {
         return call(messages, null, callback );
     }
     public String call( String message  ) {
-        List<Message> messages = call(List.of(new Message("user",message)));
+        List<Message> messages = call(List.of(new Message(Message.Role.User,message)));
         StringBuilder sb = new StringBuilder();
         for( Message m : messages ) {
             sb.append(m.message());

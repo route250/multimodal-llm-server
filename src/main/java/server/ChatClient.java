@@ -54,6 +54,12 @@ public class ChatClient {
     public static final String DEFAULT_SYSTEM_PROMPT = GroupLlmSettings.LFM25_PROMPT;
     /** 会話履歴としてメモリに保持する最大メッセージ件数です。 */
     private static final int MAX_HISTORY_MESSAGES = 20;
+    /** face message marker */
+    public static final String FACE_MARKER = "faceEvent";
+    public static final String FACE_UNKNOWN = "unknown";
+    public static final String FACE_ASSIGNED = "assigned";
+    public static final String FACE_KNOWN = "known";
+    public static final String FACE_LOST = "lost";
 
     /** ChatGroup 内でこの接続を識別する sessionId です。 */
     private final String id;
@@ -417,9 +423,21 @@ public class ChatClient {
             finalPersonLeft = "person-left".equals(result.presenceState()) && activeFaceTracks.isEmpty();
         }
         Message faceEventMessage = null;
-        if ("person-entered".equals(result.presenceState()) || finalPersonLeft) {
-            String eventText = facePresenceHistoryText(result, faceDbTrackId, languageModel.promptTemplates());
-            faceEventMessage = new Message(Role.System, eventText);
+        if( finalPersonLeft ) {
+            faceEventMessage = new Message(Role.System, languageModel.promptTemplates().personLeft(result.personName(), faceDbTrackId));
+            faceEventMessage.meta(FACE_MARKER, FACE_LOST);
+        } else if ("person-entered".equals(result.presenceState()) ) {
+            String trackId = faceDbTrackId == null || faceDbTrackId.isBlank() ? "" : faceDbTrackId;
+            boolean known = result.known() && result.personName() != null && !result.personName().isBlank();
+            if( known ) {
+                faceEventMessage = new Message(Role.System, languageModel.promptTemplates().faceMessage(result.personName(), trackId));
+                faceEventMessage.meta(FACE_MARKER,FACE_KNOWN);
+            } else {
+                faceEventMessage = new Message(Role.System, languageModel.promptTemplates().faceMessage(trackId));
+                faceEventMessage.meta(FACE_MARKER,FACE_UNKNOWN);
+            }
+        }
+        if( faceEventMessage != null ) {
             synchronized (conversationLock) {
                 conversationHistory.add(faceEventMessage);
                 trimConversationHistory();
@@ -435,21 +453,6 @@ public class ChatClient {
         synchronized (conversationLock) {
             return List.copyOf(conversationHistory);
         }
-    }
-
-    /** 既定のプロンプトテンプレートを用いて、顔認識イベント用の履歴テキストを生成します。 */
-    public static String facePresenceHistoryText(FaceEventResult result) {
-        return facePresenceHistoryText(result, result.trackId(), GroupLlmSettings.defaults("group-1").promptTemplates());
-    }
-
-    /** FaceDB の trackId と認識結果から、LLM に渡す人物認識通知を生成します。 */
-    private static String facePresenceHistoryText(FaceEventResult result, String faceDbTrackId, PromptTemplates templates) {
-        if ("person-left".equals(result.presenceState())) {
-            return "人物認識通知\n認識結果: 不在\n相手の名前: 不在\ntrackId: 不在";
-        }
-        String trackId = faceDbTrackId == null || faceDbTrackId.isBlank() ? "" : faceDbTrackId;
-        boolean known = result.known() && result.personName() != null && !result.personName().isBlank();
-        return templates.faceMessage(known, result.personName(), trackId);
     }
 
     /** 対象の再生が開始位置以降で終了した場合だけ、再生追跡状態を解除します。 */
@@ -734,18 +737,33 @@ public class ChatClient {
             }
             sendToGroupIfOpen(ServerEvent.assistantState("LLM"));
             LlmContext currentLanguageModel = languageModel;
+            PromptTemplates templates = currentLanguageModel.promptTemplates();
+            String systemPrompt = templates.expandedSystemPrompt();
+            if( requestMessages.size()>0) {
+                String aa = requestMessages.get(requestMessages.size()-1).meta(FACE_MARKER);
+                if( aa != null ) switch(aa) {
+                    case FACE_UNKNOWN:
+                        systemPrompt = systemPrompt + "\n" +  templates.expandFirstMeetingPrompt();
+                        break;
+                    case FACE_ASSIGNED:
+                        break;
+                    case FACE_KNOWN:
+                        systemPrompt = systemPrompt + "\n" +  templates.expandKnownPersonPrompt();
+                        break;
+                    case FACE_LOST:
+                        break;
+                }
+            }
             List<Message> llmMessages = new ArrayList<>(requestMessages.size() + 1);
-            String currentSystemPrompt = currentLanguageModel.promptTemplates().expandedSystemPrompt();
-            if (encounterKnownPerson != null) {
-                String encounterPrompt = currentLanguageModel.promptTemplates().encounterPrompt(encounterKnownPerson);
-                if (!encounterPrompt.isBlank()) currentSystemPrompt = currentSystemPrompt + "\n" + encounterPrompt;
+            if (!systemPrompt.isBlank()) {
+                llmMessages.add(new Message(Message.Role.System, systemPrompt));
             }
-            if (!currentSystemPrompt.isBlank()) {
-                llmMessages.add(new Message(Message.Role.System, currentSystemPrompt));
+            for( int i=0,n=requestMessages.size(); i<n; i++ ) {
+                Message m = requestMessages.get(i);
+                if( m.meta(FACE_MARKER)==null || i+1==n ) {
+                    llmMessages.add( new Message(m.role(),m.message()) );
+                }
             }
-            llmMessages.addAll(requestMessages.stream()
-                    .map(message -> new Message(message.role().name(), message.message()))
-                    .toList());
             currentLanguageModel.llm().call(llmMessages, List.of(new PersonTool(assistantTurnId)), delta -> {
                 if (!isAssistantTurnActive(assistantTurnId)) {
                     return;
@@ -902,8 +920,10 @@ public class ChatClient {
         if (notification.isBlank()) {
             return;
         }
+        Message m = new Message(Role.System, notification);
+        m.meta(FACE_MARKER, FACE_ASSIGNED);
         synchronized (conversationLock) {
-            conversationHistory.add(new Message(Role.System, notification));
+            conversationHistory.add(m);
             trimConversationHistory();
         }
     }

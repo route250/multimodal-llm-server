@@ -13,18 +13,50 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import audio.stt.SpeechToText;
 import audio.stt.TranscriptSegment;
 import audio.stt.Transcription;
 
 class AudioProcessorTest {
+    private static final Path DIAGNOSTICS_TEST_ROOT = Path.of("tmp", "audio-debug-test");
+
+    @BeforeAll
+    static void useTestDiagnosticsDirectory() {
+        AudioDiagnostics.setRootForTest(DIAGNOSTICS_TEST_ROOT);
+    }
+
+    @BeforeEach
+    void clearTestDiagnosticsDirectory() throws Exception {
+        if (!Files.exists(DIAGNOSTICS_TEST_ROOT)) {
+            return;
+        }
+        try (var paths = Files.walk(DIAGNOSTICS_TEST_ROOT)) {
+            paths.sorted(Comparator.reverseOrder()).forEach(path -> {
+                try {
+                    Files.delete(path);
+                } catch (Exception e) {
+                    throw new IllegalStateException("テスト用診断ファイルを削除できません", e);
+                }
+            });
+        }
+    }
+
+    @AfterAll
+    static void restoreDiagnosticsDirectory() {
+        AudioDiagnostics.resetRootForTest();
+    }
+
     @Test
     void appliesThresholdsAsOneValidatedSetting() {
         AudioProcessor processor = new AudioProcessor(

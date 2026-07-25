@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -148,22 +149,15 @@ class FaceEventTest {
             PromptTemplates templates = GroupLlmSettings.defaults("group-1").promptTemplates();
             assertEquals(List.of(
                     "system:" + templates.expandedSystemPrompt() + "\n" + GroupLlmSettings.LFM25_FIRST_MEETING_PROMPT,
-                    "system:" + templates.faceMessage(false, "", "trak-000000")),
+                    "system:" + templates.faceMessage("trak-000000")),
                     languageModel.calls().get(0));
             var history = client.conversationHistoryForTest();
             assertEquals(2, history.size());
             assertEquals(Role.System, history.get(0).role());
-            assertEquals(templates.faceMessage(false, "", "trak-000000"), history.get(0).message());
+            assertEquals(templates.faceMessage("trak-000000"), history.get(0).message());
             assertEquals(Role.System, history.get(1).role());
             assertEquals("人物認識通知\n認識結果: 不在\n相手の名前: 不在\ntrackId: 不在", history.get(1).message());
         }
-    }
-
-    @Test
-    void facePresenceHistoryTextUsesUnknownPersonGreeting() {
-            assertEquals(GroupLlmSettings.defaults("group-1").promptTemplates()
-                            .faceMessage(false, "", "legacy"),
-                    ChatClient.facePresenceHistoryText(FaceEventResult.unknownFace("sample-000000")));
     }
 
     @Test
@@ -190,7 +184,7 @@ class FaceEventTest {
             PromptTemplates templates = GroupLlmSettings.defaults("group-1").promptTemplates();
             assertEquals(List.of(
                     "system:" + templates.expandedSystemPrompt() + "\n" + GroupLlmSettings.LFM25_FIRST_MEETING_PROMPT,
-                    "system:" + templates.faceMessage(false, "", "trak-000000")),
+                    "system:" + templates.faceMessage("trak-000000")),
                     languageModel.calls().get(0));
         }
     }
@@ -282,7 +276,9 @@ class FaceEventTest {
             assertTrue(client.conversationHistoryForTest().contains(new Message(
                     Role.System,
                     GroupLlmSettings.defaults("group-test").promptTemplates()
-                            .assignedPersonMessage("太郎", trackId))));
+                            .assignedPersonMessage("太郎", trackId),
+                    "",
+                    Map.of(ChatClient.FACE_MARKER, ChatClient.FACE_ASSIGNED))));
             String trackJson = Files.readString(tempDir.resolve("trak-000000").resolve("trak-000000.json"), StandardCharsets.UTF_8);
             assertEquals("person0000", JsonFields.string(trackJson, "personId"));
             String personsJson = Files.readString(tempDir.resolve("persons.json"), StandardCharsets.UTF_8);
@@ -427,7 +423,7 @@ class FaceEventTest {
             }
             callsLatch.countDown();
             callback.accept(response);
-            return List.of(new Message("assistant", response));
+            return List.of(new Message(Role.Assistant, response));
         }
 
         boolean awaitCalls(int count) throws InterruptedException {
@@ -488,7 +484,7 @@ class FaceEventTest {
             tool.exec(toolCall);
             callback.accept("登録しました。");
             callsLatch.countDown();
-            return List.of(new Message("assistant", "登録しました。"));
+            return List.of(new Message(Role.Assistant, "登録しました。"));
         }
 
         boolean awaitCalls(int count) throws InterruptedException {

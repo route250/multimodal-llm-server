@@ -22,9 +22,9 @@ public final class AudioDiagnostics {
     private static final int CHANNELS = 1;
     private static final int BITS_PER_SAMPLE = 16;
     private static final int VAD_FRAME_SAMPLES = 256;
-    private static final Path ROOT = Path.of("tmp", "audio-debug");
-    private static final Path LOG_FILE = ROOT.resolve("audio-debug.log");
-    private static final Path WAV_DIR = ROOT.resolve("wav");
+    private static final Path DEFAULT_ROOT = Path.of("tmp", "audio-debug");
+    /** 診断出力先。テストではプロセス実行用の出力と分離する。 */
+    private static Path root = DEFAULT_ROOT;
     private static final DateTimeFormatter LOG_TIMESTAMP =
             DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSXXX");
     private static final DateTimeFormatter FILE_TIMESTAMP =
@@ -33,16 +33,30 @@ public final class AudioDiagnostics {
     private AudioDiagnostics() {
     }
 
-    public static Path root() {
-        return ROOT;
+    public static synchronized Path root() {
+        return root;
     }
 
-    public static Path logFile() {
-        return LOG_FILE;
+    public static synchronized Path logFile() {
+        return root.resolve("audio-debug.log");
     }
 
-    public static Path wavDir() {
-        return WAV_DIR;
+    public static synchronized Path wavDir() {
+        return root.resolve("wav");
+    }
+
+    /**
+     * テスト用の診断出力先を設定する。
+     *
+     * <p>パッケージ内テストだけが使用し、実行中サーバーの出力先は変更しない。</p>
+     */
+    static synchronized void setRootForTest(Path testRoot) {
+        root = testRoot;
+    }
+
+    /** テスト終了後に診断出力先を標準設定へ戻す。 */
+    static synchronized void resetRootForTest() {
+        root = DEFAULT_ROOT;
     }
 
     public static Context context(String groupId, String sessionId) {
@@ -54,13 +68,13 @@ public final class AudioDiagnostics {
      */
     public static synchronized void clearOnStartup() {
         try {
-            Files.createDirectories(ROOT);
-            Files.createDirectories(WAV_DIR);
-            try (var paths = Files.list(WAV_DIR)) {
+            Files.createDirectories(root());
+            Files.createDirectories(wavDir());
+            try (var paths = Files.list(wavDir())) {
                 paths.filter(Files::isRegularFile).forEach(AudioDiagnostics::deleteQuietly);
             }
             Files.writeString(
-                    LOG_FILE,
+                    logFile(),
                     "",
                     StandardCharsets.UTF_8,
                     StandardOpenOption.CREATE,
@@ -96,8 +110,8 @@ public final class AudioDiagnostics {
             long endSampleIndexExclusive,
             AudioBuffer audioBuffer) {
         try {
-            Files.createDirectories(WAV_DIR);
-            Path wavPath = WAV_DIR.resolve(wavFileName(
+            Files.createDirectories(wavDir());
+            Path wavPath = wavDir().resolve(wavFileName(
                     context,
                     speechSequenceId,
                     kind,
@@ -153,9 +167,9 @@ public final class AudioDiagnostics {
     }
 
     private static synchronized void appendJsonLine(Map<String, Object> line) throws IOException {
-        Files.createDirectories(ROOT);
+        Files.createDirectories(root());
         Files.writeString(
-                LOG_FILE,
+                logFile(),
                 Json.object(line) + System.lineSeparator(),
                 StandardCharsets.UTF_8,
                 StandardOpenOption.CREATE,

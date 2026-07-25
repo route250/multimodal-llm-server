@@ -1,11 +1,14 @@
 package llm;
 
+import java.util.HashMap;
+import java.util.Map;
+
 import json.Json;
 
 /**
  * LLM に渡す会話履歴の 1 メッセージです。
  */
-public record Message(Role role, String message) {
+public record Message(Role role, String message, String name, Map<String,String> meta) {
     public static enum Role {
         User, Assistant, System, Developer;
         public String toString() {
@@ -29,9 +32,27 @@ public record Message(Role role, String message) {
             //throw new IllegalArgumentException("text must not be blank");
             message = "";
         }
+        if( name==null || name.isBlank() ) {
+            name = "";
+        }
+        if( meta==null ) {
+            meta = new HashMap<>();
+        }
     }
-    public Message( String role, String message ) {
-        this(Role.of(role),message);
+    public Message( Role role, String message ) {
+        this(role,message,null,null);
+    }
+    public Message( Role role, String message, String name ) {
+        this(role,message,name,null);
+    }
+    public String meta( String key ) {
+        return this.meta.get(key);
+    }
+    public String meta( String key, String value ) {
+        return this.meta.put(key,value);
+    }
+    public boolean contains(String key) {
+        return this.meta.containsKey(key);
     }
     public String toString() {
         return "{\""+this.role+"\":\""+this.message+"\"}";

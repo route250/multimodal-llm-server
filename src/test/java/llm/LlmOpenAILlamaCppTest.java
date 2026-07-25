@@ -29,8 +29,8 @@ class LlmOpenAILlamaCppTest {
         LlmOpenAI model = new LlmOpenAI(new LLM.Config(
                 baseUri, "LFM2\\.5", Duration.ofSeconds(120), ""));
         List<Message> response = model.call(List.of(
-                new Message("system", "名前を名乗ったら"+PersonToolABC.NAME+"ツールを呼び出してください。"),
-                new Message("user", "trackIdはtrak-000001です。私の名前は太郎です。")),
+                new Message(Message.Role.System, "名前を名乗ったら"+PersonToolABC.NAME+"ツールを呼び出してください。"),
+                new Message(Message.Role.User, "trackIdはtrak-000001です。私の名前は太郎です。")),
                 List.of(new LlmOpenAITest.RecordingTool()));
 
         assertFalse(response.isEmpty());

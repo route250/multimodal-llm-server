@@ -33,10 +33,23 @@ record PromptTemplates(
     }
 
     String expandedSystemPrompt() { return common(systemPrompt); }
+    String expandKnownPersonPrompt() { return common(knownPersonPrompt); }
+    String expandFirstMeetingPrompt() { return common(firstMeetingPrompt); }
     String encounterPrompt(boolean known) { return common(known ? knownPersonPrompt : firstMeetingPrompt); }
-    String faceMessage(boolean known, String userName, String faceId) {
-        return common(known ? knownPersonMessageFormat : unknownPersonMessageFormat)
-                .replace("${USER_NAME}", text(userName).isEmpty() ? "不明" : text(userName))
+    String faceMessage(String faceId) {
+        if( faceId==null || faceId.isBlank() ) {
+            throw new IllegalArgumentException("invalid username or faceId");
+        }
+        return common(unknownPersonMessageFormat)
+                .replace("${USER_NAME}", "不明")
+                .replace("${FACE_ID}", text(faceId));
+    }
+    String faceMessage(String userName, String faceId) {
+        if( userName==null || userName.isBlank() || faceId==null || faceId.isBlank() ) {
+            throw new IllegalArgumentException("invalid username or faceId");
+        }
+        return common(knownPersonMessageFormat)
+                .replace("${USER_NAME}", text(userName))
                 .replace("${FACE_ID}", text(faceId));
     }
     /** 人物名の登録成功を LLM へ通知するメッセージを生成します。 */
@@ -44,6 +57,9 @@ record PromptTemplates(
         return common(assignedPersonMessageFormat)
                 .replace("${USER_NAME}", text(userName).isEmpty() ? "不明" : text(userName))
                 .replace("${FACE_ID}", text(faceId));
+    }
+    String personLeft(String userName, String faceId ) {
+        return "人物認識通知\n認識結果: 不在\n相手の名前: 不在\ntrackId: 不在";
     }
 
     /** 本日の日付と時刻 */

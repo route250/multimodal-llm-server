@@ -1447,7 +1447,7 @@ class ChatClientAudioProcessingTest {
             calls++;
             String output = response.isBlank() ? messages.getLast().message() : response;
             callback.accept(output);
-            return List.of(new Message("assistant", output));
+            return List.of(new Message(Role.Assistant, output));
         }
     }
 
@@ -1461,7 +1461,7 @@ class ChatClientAudioProcessingTest {
         @Override
         public List<Message> call(List<Message> messages, List<Tool> tools, Consumer<String> callback) {
             deltas.forEach(callback);
-            return List.of(new Message("assistant", String.join("", deltas)));
+            return List.of(new Message(Role.Assistant, String.join("", deltas)));
         }
     }
 
@@ -1481,7 +1481,7 @@ class ChatClientAudioProcessingTest {
                     .toList());
             String response = responses.get(nextResponse++);
             callback.accept(response);
-            return List.of(new Message("assistant", response));
+            return List.of(new Message(Role.Assistant, response));
         }
     }
 

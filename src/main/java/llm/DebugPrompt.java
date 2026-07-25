@@ -43,11 +43,11 @@ public class DebugPrompt {
         List<LLM.Tool> tools = List.of( new WeatherTool(), new PersonTool() );
         LLM.Config baseConfig = LlmOpenAI.fromEnvironment();
 
-        String inputRole = "system";
+        Message.Role inputRole = Message.Role.System;
         List<List<Message>> test_case_list = List.of(
                 List.of(
                     new Message(inputRole, "だれか他の人が居ます(trackId:track-00001)。挨拶をしてお名前を聞いてみましょう。名前がわかったらツールをコール"),
-                    new Message("user", "はい、わたしの名前はかおりです。")
+                    new Message(Message.Role.User, "はい、わたしの名前はかおりです。")
                 ),
                 List.of(new Message(inputRole, "ユーザ かおり(trackId:track-00001)に友人として挨拶しよう"))
         );
@@ -57,7 +57,7 @@ public class DebugPrompt {
 
             LLM llm = new LlmOpenAI( baseConfig.baseUri().toString(), "p", baseConfig.model(), false );
             List<Message> messages = new ArrayList<>();
-            messages.add( new Message("system",SYSTEM_PROMPT2));
+            messages.add( new Message(Message.Role.System,SYSTEM_PROMPT2));
 
             for( Message input_message : test_case ) {
                 System.out.println("[CALL]"+input_message);
