@@ -739,28 +739,38 @@ public class ChatClient {
             LlmContext currentLanguageModel = languageModel;
             PromptTemplates templates = currentLanguageModel.promptTemplates();
             String systemPrompt = templates.expandedSystemPrompt();
-            if( requestMessages.size()>0) {
-                String aa = requestMessages.get(requestMessages.size()-1).meta(FACE_MARKER);
-                if( aa != null ) switch(aa) {
+            // 
+            int faceIdx = -1;
+            AA: for( int idx=requestMessages.size()-1;idx>=0;idx--) {
+                String mark = requestMessages.get(idx).meta(FACE_MARKER);
+                if( mark!=null) switch(mark) {
                     case FACE_UNKNOWN:
                         systemPrompt = systemPrompt + "\n" +  templates.expandFirstMeetingPrompt();
-                        break;
+                        faceIdx = idx;
+                        break AA;
                     case FACE_ASSIGNED:
-                        break;
+                        faceIdx = idx;
+                        break AA;
                     case FACE_KNOWN:
-                        systemPrompt = systemPrompt + "\n" +  templates.expandKnownPersonPrompt();
-                        break;
+                        if(idx==requestMessages.size()-1) {
+                            systemPrompt = systemPrompt + "\n" +  templates.expandKnownPersonPrompt();
+                        }
+                        faceIdx = idx;
+                        break AA;
                     case FACE_LOST:
-                        break;
+                        faceIdx = idx;
+                        break AA;
+                    default:
+                        break AA;
                 }
             }
             List<Message> llmMessages = new ArrayList<>(requestMessages.size() + 1);
             if (!systemPrompt.isBlank()) {
                 llmMessages.add(new Message(Message.Role.System, systemPrompt));
             }
-            for( int i=0,n=requestMessages.size(); i<n; i++ ) {
-                Message m = requestMessages.get(i);
-                if( m.meta(FACE_MARKER)==null || i+1==n ) {
+            for( int idx=0,n=requestMessages.size(); idx<n; idx++ ) {
+                Message m = requestMessages.get(idx);
+                if( m.meta(FACE_MARKER)==null || idx==faceIdx ) {
                     llmMessages.add( new Message(m.role(),m.message()) );
                 }
             }

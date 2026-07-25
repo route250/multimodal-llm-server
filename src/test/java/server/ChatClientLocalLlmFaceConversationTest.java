@@ -4,7 +4,9 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.PrintStream;
 import java.net.ConnectException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -44,7 +46,28 @@ class ChatClientLocalLlmFaceConversationTest {
     public static boolean contains( String text, String key1, String key2 ) {
         return text!=null && (text.contains(key1) || text.contains(key2));
     }
-
+    public static boolean contains( String text, String key1, String key2, String key3 ) {
+        return text!=null && (text.contains(key1) || text.contains(key2) || text.contains(key3));
+    }
+    private static class Logger {
+        private StringBuilder sb = new StringBuilder();
+        private boolean hasError;
+        public void println(String text) {
+            sb.append(text).append('\n');
+            System.err.println(text);
+        }
+        public void error(String error ) {
+            hasError = true;
+            sb.append("ERROR:").append(error).append('\n');
+            System.err.println("ERROR:"+error);
+        }
+        public boolean hasError() {
+            return hasError;
+        }
+        public String toString() {
+            return sb.toString();
+        }
+    }
     @Test
     void unknownUserIsAskedNameThenRegisteredByToolAndConversationContinues(@TempDir Path tempDir)
             throws Exception {
@@ -52,7 +75,7 @@ class ChatClientLocalLlmFaceConversationTest {
         assumeLocalLlmAvailable(baseUri);
         repeatTenTimes(tempDir, attempt -> {
             FaceDB faceDB = new FaceDB(tempDir);
-
+            Logger logger = new Logger();
             try (MlServer server = new MlServer(0, faceDB)) {
                 ChatGroup group = new ChatGroup("group-local-llm-test", server);
                 ChatClient listener = group.join("listener");
@@ -65,25 +88,40 @@ class ChatClientLocalLlmFaceConversationTest {
                 assertFalse(result.known());
 
                 String greeting = awaitAssistantTurn(client, listener);
-                System.out.println("Greeting:"+greeting);
-                assertTrue(containsGreeting(greeting), () -> "挨拶がありません: " + greeting);
-                assertTrue(greeting.contains("名前"), () -> "名前を尋ねていません: " + greeting);
-                assertFalse(greeting.contains("trackId"), () -> "trackIdを出力しています:" + greeting );
-                assertFalse(greeting.contains("track-0"), () -> "trackIdを出力しています:" + greeting );
-                assertFalse(greeting.contains("trak-0"), () -> "trackIdを出力しています:" + greeting );
-
-                client.handle(textRequest("私の名前は太郎です。"));
+                logger.println( "AI:"+greeting);
+                if(contains(greeting,"trackId","track-0","trak-0")) {
+                    logger.error("trackIdを出力しています");
+                }
+                if( !containsGreeting(greeting) ) {
+                    logger.error("挨拶がありません" );
+                }
+                if( !greeting.contains("なまえ") && !greeting.contains("名前") ) {
+                    logger.error("名前を聞いていません");
+                }
+                String inp = "私の名前は太郎です。";
+                logger.println("User:"+inp);
+                client.handle(textRequest(inp));
                 String reply = awaitAssistantTurn(client, listener);
-                System.out.println("Reply:"+reply);
-                Path x = tempDir.resolve("persons.json" );
-                assertTrue( Files.isRegularFile(x), "名前が登録されてません。" );
-                String personsJson = Files.readString(tempDir.resolve("persons.json"), StandardCharsets.UTF_8);
-                assertTrue(contains(personsJson,"\"name\":\"太郎\"","\"name\":\"たろう\""), "名前が登録されてません。"+personsJson);
-                assertFalse(reply.isBlank(), "名前登録後の会話応答がありません");
-                assertFalse(reply.contains("trackId"), () -> "trackIdを出力しています:" + reply );
-                assertFalse(reply.contains("track-0"), () -> "trackIdを出力しています:" + reply );
-                assertFalse(reply.contains("trak-0"), () -> "trackIdを出力しています:" + reply );
-                assertTrue(contains(reply,"太郎","たろう"), () -> "登録名を使って会話を継続していません: " + reply);
+                logger.println("AI:"+reply);
+                if( reply.isBlank() ) {
+                    logger.error("名前登録後の会話応答がありません");
+                } else {
+                    Path x = tempDir.resolve("persons.json" );
+                    if( !Files.isRegularFile(x) ) {
+                        logger.error("名前が登録されていません");
+                    }
+                    String personsJson = Files.readString(tempDir.resolve("persons.json"), StandardCharsets.UTF_8);
+                    if(!contains(personsJson,"\"name\":\"太郎\"","\"name\":\"たろう\"") ) {
+                        logger.error("名前が登録されてません");
+                    }
+                    if(contains(reply,"trackId","track-0","trak-0")) {
+                        logger.error("trackIdを出力しています");
+                    }
+                    if(!contains(reply,"太郎","たろう") ) {
+                        logger.error("登録名を使って会話を継続していません");
+                    }
+                }
+                assertFalse(logger.hasError(),logger.toString());
             }
         });
     }
@@ -95,7 +133,7 @@ class ChatClientLocalLlmFaceConversationTest {
         assumeLocalLlmAvailable(baseUri);
         repeatTenTimes(tempDir, attempt -> {
             FaceDB faceDB = new FaceDB(tempDir);
-
+            Logger logger = new Logger();
             try (MlServer server = new MlServer(0, faceDB)) {
                 String registeredTrackId = faceDB.createTrackId();
                 faceDB.register(registeredTrackId, descriptor(0.2), jpegDataUrl());
@@ -112,22 +150,41 @@ class ChatClientLocalLlmFaceConversationTest {
                 assertTrue(result.known());
 
                 String greeting = awaitAssistantTurn(client, listener);
-                assertTrue(containsGreeting(greeting), () -> "挨拶がありません: " + greeting);
-                assertTrue(greeting.contains("花子"), () -> "登録名を使っていません: " + greeting);
-                assertFalse(greeting.contains("名前"), () -> "登録済みユーザーへ名前を尋ねています: " + greeting);
-                assertFalse(greeting.contains("trackId"), () -> "trackIdを出力しています:" + greeting );
-                assertFalse(greeting.contains("track-0"), () -> "trackIdを出力しています:" + greeting );
-                assertFalse(greeting.contains("trak-0"), () -> "trackIdを出力しています:" + greeting );
+                logger.println("AI:"+greeting);
+                if( greeting==null||greeting.isBlank() ) {
+                    logger.error("挨拶がありません" );
+                } else {
+                    if( !containsGreeting(greeting)) {
+                        logger.error("挨拶がありません");
+                    }
+                    if(!greeting.contains("花子")) {
+                        logger.error("登録名を使っていません");
+                    }
+                    if(greeting.contains("名前")) {
+                        logger.error("登録済みユーザーへ名前を尋ねています");
+                    }
+                    if(contains(greeting,"trackId","track-0","trak-0")) {
+                        logger.error("trackIdを出力しています");
+                    }
+                }
 
-                client.handle(textRequest("今日は元気です。りりは元気ですか？"));
+                String inp = "今日は元気です。りりは元気ですか？";
+                logger.println("User:"+inp);
+                client.handle(textRequest(inp));
                 String reply = awaitAssistantTurn(client, listener);
-
-                assertFalse(reply.isBlank(), "ユーザー回答後の会話応答がありません");
-                assertFalse(Files.exists(tempDir.resolve("trak-000001").resolve("trak-000001.json")),
-                        "登録済みユーザーに対して名前登録ツールを呼び出しています");
-                assertFalse(reply.contains("trackId"), () -> "trackIdを出力しています:" + reply );
-                assertFalse(reply.contains("track-0"), () -> "trackIdを出力しています:" + reply );
-                assertFalse(reply.contains("trak-0"), () -> "trackIdを出力しています:" + reply );
+                logger.println("AI:"+reply);
+                if( reply==null||reply.isBlank() ) {
+                    logger.error("ユーザー回答後の会話応答がありません");
+                } else {
+                    Path x = tempDir.resolve("trak-000001").resolve("trak-000001.json");
+                    if(Files.exists(x)) {
+                        logger.error("登録済みユーザーに対して名前登録ツールを呼び出しています");
+                    }
+                    if(contains(reply,"trackId","track-0","trak-0")) {
+                        logger.error("trackIdを出力しています");
+                    }
+                }
+                assertFalse(logger.hasError(),logger.toString());
             }
         });
     }
