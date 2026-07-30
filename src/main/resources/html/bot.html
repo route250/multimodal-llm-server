@@ -95,6 +95,10 @@
             width: 19px;
         }
 
+        .fullscreen-button {
+            display: none;
+        }
+
         .stage {
             align-items: center;
             display: grid;
@@ -454,6 +458,14 @@
             width: 3ch;
         }
 
+        @media (hover: none) and (pointer: coarse) {
+            .fullscreen-button {
+                align-items: center;
+                display: inline-flex;
+                justify-content: center;
+            }
+        }
+
         @media (max-width: 720px) {
             main {
                 padding: 12px;
@@ -473,6 +485,7 @@
                 height: 54vw;
                 width: 88vw;
             }
+
         }
     </style>
 </head>
@@ -506,12 +519,12 @@
                         <input id="end-vad" type="range" min="0" max="100" step="1" value="35">
                     </label>
                     <label class="threshold-control">
-                        <span class="threshold-label">RMS START <output id="start-rms-value" class="threshold-value">6</output></span>
-                        <input id="start-rms" type="range" min="0" max="100" step="1" value="6">
+                        <span class="threshold-label">RMS START <output id="start-rms-value" class="threshold-value">1</output></span>
+                        <input id="start-rms" type="range" min="0" max="100" step="1" value="1">
                     </label>
                     <label class="threshold-control">
-                        <span class="threshold-label">RMS END <output id="end-rms-value" class="threshold-value">3</output></span>
-                        <input id="end-rms" type="range" min="0" max="100" step="1" value="3">
+                        <span class="threshold-label">RMS END <output id="end-rms-value" class="threshold-value">0</output></span>
+                        <input id="end-rms" type="range" min="0" max="100" step="1" value="0">
                     </label>
                     <div class="audio-settings-actions">
                         <button id="default-audio-settings"
@@ -530,6 +543,8 @@
         </div>
         <div class="status-group">
             <span id="presence" class="presence">no person</span>
+            <button id="fullscreen-toggle" class="settings-button fullscreen-button" type="button"
+                    aria-label="全画面表示" title="全画面表示">⛶</button>
             <button id="open-settings" class="settings-button" type="button" aria-label="設定" title="設定">
                 <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06-2.3 2.3-.06-.06A1.65 1.65 0 0 0 15.6 18a1.65 1.65 0 0 0-1 1.51V20h-3.2v-.09A1.65 1.65 0 0 0 10.4 18a1.65 1.65 0 0 0-1.82.33l-.06.06-2.3-2.3.06-.06A1.65 1.65 0 0 0 6 14.2a1.65 1.65 0 0 0-1.51-1H4.4V10h.09A1.65 1.65 0 0 0 6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06 2.3-2.3.06.06A1.65 1.65 0 0 0 9.8 5.2h.01A1.65 1.65 0 0 0 10.8 3.7V3.6H14v.1A1.65 1.65 0 0 0 15 5.2a1.65 1.65 0 0 0 1.82-.33l.06-.06 2.3 2.3-.06.06A1.65 1.65 0 0 0 18.8 9v.01a1.65 1.65 0 0 0 1.51 1H20.4v3.2h-.09A1.65 1.65 0 0 0 19.4 15z"></path></svg>
             </button>
@@ -563,6 +578,7 @@
     const groupInput = document.getElementById("group");
     const openSettings = document.getElementById("open-settings");
     const startBot = document.getElementById("start-bot");
+    const fullscreenToggle = document.getElementById("fullscreen-toggle");
     const vadValue = document.getElementById("vad-value");
     const rmsValue = document.getElementById("rms-value");
     const audioMetrics = document.getElementById("audio-metrics");
@@ -636,6 +652,9 @@
     openSettings.addEventListener("click", () => {
         location.href = `/settings.html?group=${encodeURIComponent(groupInput.value)}`;
     });
+    fullscreenToggle.addEventListener("click", toggleFullscreen);
+    document.addEventListener("fullscreenchange", updateFullscreenButton);
+    updateFullscreenButton();
     audioMetrics.addEventListener("click", toggleAudioSettings);
     defaultAudioSettings.addEventListener("click", () => {
         if (defaultAudioThresholds) {
@@ -698,6 +717,29 @@
     });
     document.addEventListener("pointerdown", () => audio.preparePlayback(), { once: true });
     document.addEventListener("keydown", () => audio.preparePlayback(), { once: true });
+
+    /** スマートフォン向け全画面表示を開始または解除する。 */
+    async function toggleFullscreen() {
+        try {
+            if (document.fullscreenElement) {
+                await document.exitFullscreen();
+            } else if (document.documentElement.requestFullscreen) {
+                await document.documentElement.requestFullscreen();
+            } else {
+                updateDebugText("fullscreen: unsupported");
+            }
+        } catch (error) {
+            updateDebugText(`fullscreen: ${error.message}`);
+        }
+    }
+
+    /** 全画面状態に応じて操作ボタンの表示内容を更新する。 */
+    function updateFullscreenButton() {
+        const active = Boolean(document.fullscreenElement);
+        fullscreenToggle.textContent = active ? "×" : "⛶";
+        fullscreenToggle.setAttribute("aria-label", active ? "全画面解除" : "全画面表示");
+        fullscreenToggle.title = active ? "全画面解除" : "全画面表示";
+    }
 
     function connectEvents() {
         events = new ChatEvents({
