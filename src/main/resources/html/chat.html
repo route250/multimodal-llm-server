@@ -175,6 +175,18 @@
             opacity: 0.5;
         }
 
+        .fullscreen-button {
+            display: none;
+        }
+
+        @media (hover: none) and (pointer: coarse) {
+            .fullscreen-button {
+                align-items: center;
+                display: inline-flex;
+                justify-content: center;
+            }
+        }
+
         @media (max-width: 640px) {
             main {
                 padding: 14px 12px 14px;
@@ -231,6 +243,8 @@
             <option value="group-2">group-2</option>
             <option value="group-3">group-3</option>
         </select>
+        <button id="fullscreen-toggle" class="fullscreen-button" type="button"
+                aria-label="全画面表示" title="全画面表示">全画面</button>
     </header>
     <section id="response" class="chat-log" aria-live="polite"></section>
     <section class="composer">
@@ -266,11 +280,16 @@
     const messageInput = document.getElementById("message");
     const session = document.getElementById("session");
     const micToggle = document.getElementById("mic-toggle");
+    const fullscreenToggle = document.getElementById("fullscreen-toggle");
     const micStatus = document.getElementById("mic-status");
     const speechState = document.getElementById("speech-state");
     const speechStateText = document.getElementById("speech-state-text");
     const partialTranscriptBubbles = new Map();
     let activeAssistantMessage = null;
+
+    fullscreenToggle.addEventListener("click", toggleFullscreen);
+    document.addEventListener("fullscreenchange", updateFullscreenButton);
+    updateFullscreenButton();
 
     const audio = new ChatAudio({
         group: () => groupInput.value,
@@ -433,6 +452,29 @@
         micToggle.classList.toggle("recording", recording);
         micToggle.setAttribute("aria-label", recording ? "マイク停止" : "マイク開始");
         micToggle.title = recording ? "マイク停止" : "マイク開始";
+    }
+
+    /** スマートフォン向け全画面表示を開始または解除する。 */
+    async function toggleFullscreen() {
+        try {
+            if (document.fullscreenElement) {
+                await document.exitFullscreen();
+            } else if (document.documentElement.requestFullscreen) {
+                await document.documentElement.requestFullscreen();
+            } else {
+                appendSystem("このブラウザは全画面表示に対応していません");
+            }
+        } catch (error) {
+            appendSystem(`全画面表示を開始できませんでした: ${error.message}`);
+        }
+    }
+
+    /** 全画面状態に応じて操作ボタンの表示内容を更新する。 */
+    function updateFullscreenButton() {
+        const active = Boolean(document.fullscreenElement);
+        fullscreenToggle.textContent = active ? "解除" : "⛶";
+        fullscreenToggle.setAttribute("aria-label", active ? "全画面解除" : "全画面表示");
+        fullscreenToggle.title = active ? "全画面解除" : "全画面表示";
     }
 
     function updateStatusDisplay(status) {
