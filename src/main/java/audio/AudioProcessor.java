@@ -519,7 +519,7 @@ public class AudioProcessor {
     }
 
     /**
-     * 発話継続中に 2.4 秒単位の中間 STT を投入する。
+     * 発話継続中に 4.8 秒単位の中間 STT を投入する。
      */
     private void maybeTranscribePartialSpeech(long frameEndSampleIndex) {
         while (frameEndSampleIndex >= nextPartialTranscriptionEndSampleIndex) {

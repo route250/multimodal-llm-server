@@ -246,7 +246,7 @@ X-Client-Mic-End-Sample: 3200
 ```
 
 ブラウザクライアントは 16 kHz へ変換したマイクPCMの累積サンプル番号を上記ヘッダに入れます。
-サーバはこのサンプル範囲と AI 音声再生区間を照合し、該当PCMを VAD/STT へ渡す前に 0 で埋めます。
+AI 音声再生中もマイクPCMは VAD/STT へ渡します。PCMを一律に 0 で埋める方式は、ユーザーの割り込み発話を認識できなくなるため使用しません。
 
 `audio/pcm-vad` の body は、32 byte header、PCM16LE、VAD byte array、RMS byte array の順です。
 header は little-endian で、`magic=MVAD`、`version=2`、`flags=0`、`sampleRate=16000`、`channels=1`、
@@ -308,8 +308,7 @@ cancel  PARTIAL または FINAL の結合後テキストが非空だったため
 VAD による短時間の再生停止と再開はブラウザだけで完結させ、サーバは VAD 検出を理由に `audio-control`
 を配信しません。
 ブラウザは AI 音声の再生開始、停止、再開、終了、キャンセルを `/chat/playback` へ通知します。
-サーバは通知された再生区間と停止後 12,000 サンプルを EchoMask として保持します。
-再生中の開いた区間も、音声チャンク受信時点で EchoMask と同じ扱いで無音化します。
+再生状態とマイクのサンプル位置は、再生制御および診断ログの対応付けに使用します。サーバは再生区間を理由にマイクPCMを無音化しません。
 
 ```http
 POST /chat/playback?group=group-1&sessionId=user-a
@@ -324,6 +323,29 @@ Content-Type: application/json; charset=utf-8
 一時停止中は TEN VAD 値が 35 未満の状態が 8 フレーム、つまり 128 ms 続いたらローカルで再開します。
 ブラウザは `localVadPlaybackPaused` と `serverSttPlaybackPaused` の 2 つの停止フラグを保持し、
 両方が `false` になった時だけ再生を再開します。
+
+#### 割り込み会話のタイミングと調査事項
+
+現在の再生制御は次の順序で動作します。
+
+```text
+AI 音声再生中にブラウザ VAD が 48 ms 継続して発話を検出
+  -> ブラウザが localVadPlaybackPaused を true にして再生を pause
+  -> サーバが STT を開始すると serverSttPlaybackPaused を true にして再生を pause
+  -> FINAL STT の結合結果が空文字ならサーバが resume を送信
+  -> PARTIAL または FINAL STT の結合結果が非空ならサーバが cancel を送信し、新しい assistant turn を開始
+```
+
+2026-07-28 夜間に、割り込み中に数秒 pause した後、AI 音声が短時間だけ再生され、直後に cancel と次の assistant turn が続く事象を観測した。
+この時点の診断ログは保存されていないため、原因は未確定である。
+
+再現時は、同じ `assistantTurnId` について以下を時刻順に確認する。
+
+- `audio-control-send` と `audio-control-received` の `action`、`reason`、`speechSequenceId`
+- `stt-result` と `stt-empty-result` の `speechSequenceId`
+- `browser-local-vad-pause-set`、`browser-local-vad-resume-set`、`browser-server-stt-pause-set`、`browser-cancel-playback-received`
+
+`resume` の `reason=empty-stt` の後に、別の `speechSequenceId` の非空STT結果による `cancel` が続く場合は、空STT時の再開判断を修正する。
 `assistant-audio-chunk` の `message` は JSON 文字列です。`audioDeltas[].data` は base64、`audioDeltas[].format`
 は `pcm`、`audioDeltas[].sampleRate` は通常 `24000` です。
 LLM 応答と TTS 処理が終了したら `message-done` イベントを配信します。
@@ -388,7 +410,7 @@ Content-Type: application/json
 ```json
 {
   "baseUrl": "http://localhost:8767/v1",
-  "model": "LFM2\\.5",
+  "model": "LFM2-2\\.6B-Q4_0",
   "apiKey": "",
   "botName": "りり",
   "systemPrompt": "あなたは会話AIの「${BOT_NAME}」です。",
@@ -411,7 +433,7 @@ Content-Type: application/json
 - 保存前に `GET /v1/models` を実行して `model` に一致するモデル ID を 1 件特定し、そのモデルで `POST /v1/responses` を実行して空でない応答を確認します。
 - 検証失敗時は HTTP 400 を返し、設定ファイルと接続中クライアントの設定は変更しません。
 - 検証成功時だけ `.local/group-1/llm.json` の形式で保存し、同じ Group に接続中のクライアントは次の assistant turn から新設定を使用します。
-- 設定画面のリセット値は Group ごとに異なります。`group-1` は `baseUrl=http://localhost:8767/v1`、`model=LFM2\\.5`、group-2 は `baseUrl=http://localhost:8767/v1`、`model=gemma[-_]?4[-]?e2b`、group-3 は `baseUrl=https://api.openai.com/v1`、`model=gpt-4.1-nano` です。いずれも空の `apiKey` と既定メインプロンプトを使用します。
+- 設定画面のリセット値は Group ごとに異なります。`group-1` は `baseUrl=http://localhost:8767/v1`、`model=LFM2-2\\.6B-Q4_0`、group-2 は `baseUrl=http://localhost:8767/v1`、`model=gemma[-_]?4[-]?e2b`、group-3 は `baseUrl=https://api.openai.com/v1`、`model=gpt-4.1-nano` です。いずれも空の `apiKey` と既定メインプロンプトを使用します。
 
 LFM2.5 Audio の STT/TTS は、デフォルトで `llama-liquid-audio-server` の OpenAI Chat Completions 互換エンドポイントを使います。
 
